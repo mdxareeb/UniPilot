@@ -1,0 +1,4 @@
+# Placeholder so the benchmark fixture location exists (Task 24.14).
+# Add real <name>.pdf|.docx + <name>.expected.txt pairs here; until then
+# `npm run benchmark -w backend` reports "No fixtures found" and exits 1 —
+# 24.14 stays [~] because no human-checked accuracy set exists yet.

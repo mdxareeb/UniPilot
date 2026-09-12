@@ -1,0 +1,1711 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>UniPilot - The AI pilot for your universe</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-on-surface": "#f0f1f1",
+                        "surface-container-highest": "#e2e2e2",
+                        "secondary-container": "#e3e2e2",
+                        "tertiary": "#000000",
+                        "surface-variant": "#e2e2e2",
+                        "on-tertiary-fixed": "#1a1c1c",
+                        "on-error": "#ffffff",
+                        "primary-fixed": "#e2e2e2",
+                        "inverse-primary": "#c6c6c6",
+                        "on-primary-fixed-variant": "#474747",
+                        "tertiary-fixed": "#e3e2e2",
+                        "surface-dim": "#dadada",
+                        "surface-tint": "#5e5e5e",
+                        "inverse-surface": "#2f3131",
+                        "tertiary-fixed-dim": "#c7c6c6",
+                        "surface-container-high": "#e8e8e8",
+                        "on-secondary-fixed-variant": "#464747",
+                        "secondary": "#5e5e5e",
+                        "primary": "#000000",
+                        "secondary-fixed-dim": "#c7c6c6",
+                        "on-error-container": "#93000a",
+                        "on-primary": "#ffffff",
+                        "tertiary-container": "#1a1c1c",
+                        "on-primary-fixed": "#1b1b1b",
+                        "on-tertiary-fixed-variant": "#464747",
+                        "secondary-fixed": "#e3e2e2",
+                        "error-container": "#ffdad6",
+                        "surface-container": "#eeeeee",
+                        "outline": "#7e7576",
+                        "on-tertiary-container": "#838484",
+                        "primary-fixed-dim": "#c6c6c6",
+                        "outline-variant": "#cfc4c5",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "on-primary-container": "#848484",
+                        "on-surface": "#1a1c1c",
+                        "background": "#f9f9f9",
+                        "surface-container-lowest": "#ffffff",
+                        "on-secondary": "#ffffff",
+                        "surface": "#f9f9f9",
+                        "primary-container": "#1b1b1b",
+                        "surface-container-low": "#f3f3f4",
+                        "error": "#ba1a1a",
+                        "on-background": "#1a1c1c",
+                        "on-secondary-container": "#646464",
+                        "on-surface-variant": "#4c4546",
+                        "surface-bright": "#f9f9f9"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-mobile": "20px",
+                        "container-max": "1200px",
+                        "unit": "4px",
+                        "section-padding": "120px",
+                        "gutter": "24px",
+                        "grid-size": "32px"
+                    },
+                    "fontFamily": {
+                        "display": ["Geist", "sans-serif"],
+                        "headline-md": ["Geist", "sans-serif"],
+                        "body-lg": ["Geist", "sans-serif"],
+                        "body-md": ["Geist", "sans-serif"],
+                        "label-sm": ["Geist", "sans-serif"],
+                        "label-caps": ["Geist", "sans-serif"],
+                        "headline-lg-mobile": ["Geist", "sans-serif"],
+                        "headline-lg": ["Geist", "sans-serif"]
+                    },
+                    "fontSize": {
+                        "display": ["72px", { "lineHeight": "1.1", "letterSpacing": "-0.04em", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "1.6", "letterSpacing": "0em", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "1.6", "letterSpacing": "0em", "fontWeight": "400" }],
+                        "label-sm": ["13px", { "lineHeight": "1.4", "letterSpacing": "0em", "fontWeight": "500" }],
+                        "label-caps": ["12px", { "lineHeight": "1.0", "letterSpacing": "0.1em", "fontWeight": "600" }],
+                        "headline-lg-mobile": ["32px", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-lg": ["48px", { "lineHeight": "1.2", "letterSpacing": "-0.03em", "fontWeight": "700" }]
+                    },
+                    "backgroundImage": {
+                        'dotted-grid': 'radial-gradient(#D4D4D4 1px, transparent 1px)',
+                    },
+                    "backgroundSize": {
+                        'grid': '32px 32px',
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: #FFFFFF;
+            background-image: radial-gradient(#D4D4D4 1px, transparent 1px);
+            background-size: 32px 32px;
+            font-family: 'Geist', sans-serif;
+            color: #1a1c1c;
+        }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex flex-col relative overflow-x-hidden pt-32">
+<!-- TopNavBar -->
+<nav class="fixed top-4 left-1/2 -translate-x-1/2 w-[calc(100%-40px)] max-w-container-max rounded-full border border-outline-variant dark:border-outline bg-surface-container-lowest/80 dark:bg-surface-container/80 backdrop-blur-md shadow-[0px_4px_20px_rgba(0,0,0,0.05)] z-50">
+<div class="flex justify-between items-center py-3 px-6 h-[72px]">
+<div class="flex items-center gap-2 text-body-lg font-display font-bold text-on-surface dark:text-inverse-on-surface">
+<span class="material-symbols-outlined bg-primary text-on-primary rounded p-1 text-sm">rocket_launch</span>
+<span class="">UniPilot</span>
+</div>
+<div class="hidden md:flex items-center gap-6">
+<a class="text-primary dark:text-on-primary-fixed font-semibold font-label-sm text-label-sm" href="#">Features</a>
+<a class="text-on-surface-variant dark:text-surface-variant hover:text-primary dark:hover:text-primary-fixed transition-colors duration-200 font-label-sm text-label-sm" href="#">How it works</a>
+<a class="text-on-surface-variant dark:text-surface-variant hover:text-primary dark:hover:text-primary-fixed transition-colors duration-200 font-label-sm text-label-sm" href="#">Pricing</a>
+<a class="text-on-surface-variant dark:text-surface-variant hover:text-primary dark:hover:text-primary-fixed transition-colors duration-200 font-label-sm text-label-sm" href="#">Benchmarks</a>
+<a class="text-on-surface-variant dark:text-surface-variant hover:text-primary dark:hover:text-primary-fixed transition-colors duration-200 font-label-sm text-label-sm" href="#">FAQ</a>
+<a class="text-on-surface-variant dark:text-surface-variant hover:text-primary dark:hover:text-primary-fixed transition-colors duration-200 font-label-sm text-label-sm" href="#">Dev's note</a>
+</div>
+<div class="flex items-center gap-3">
+<button class="w-10 h-10 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors bg-surface-container-lowest">
+<span class="material-symbols-outlined text-[20px]">dark_mode</span>
+</button>
+<button class="w-10 h-10 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors bg-surface-container-lowest">
+<span class="material-symbols-outlined text-[20px]">login</span>
+</button>
+<button class="bg-primary text-on-primary px-6 py-2.5 rounded-full font-label-sm text-label-sm hover:scale-95 duration-150 transition-transform flex items-center gap-2">
+                    Open App
+                    <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+</div>
+</div>
+</nav>
+<main class="flex-grow">
+<!-- Hero Section -->
+<section class="max-w-container-max mx-auto px-margin-mobile pt-section-padding pb-section-padding text-center">
+<div class="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-surface-container-low border border-outline-variant mb-8">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">YOUR COLLEGE. FINALLY ORGANIZED.</span>
+</div>
+<h1 class="font-display text-headline-lg-mobile md:text-display text-primary max-w-4xl mx-auto mb-6 tracking-tight">
+                Your entire college life. <br class="hidden md:block"/>
+                Finally <span class="italic font-mono text-secondary relative inline-block tracking-widest border-b-8 border-primary">organized</span>.
+</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto mb-10">
+                UniPilot brings your assignments, deadlines, timetable, notices, documents and academic plans together — then turns them into clear actions.
+            </p>
+<div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+<button class="w-full sm:w-auto bg-primary text-on-primary px-8 py-4 rounded-full font-label-sm text-label-sm hover:scale-105 duration-200 transition-transform flex items-center justify-center gap-2">
+                    Start free — build my dashboard
+                    <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+</button>
+<button class="w-full sm:w-auto bg-surface-container-lowest text-primary border border-outline-variant px-8 py-4 rounded-full font-label-sm text-label-sm hover:bg-surface-container-low duration-200 transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]">play_circle</span>
+                    See how it works
+                </button>
+</div>
+<div class="mt-16 flex flex-wrap items-center justify-center gap-4 md:gap-8 opacity-60 text-sm font-medium">
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">check</span> Free to start</span>
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">check</span> Upload PDFs</span>
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">check</span> AI deadline extraction</span>
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">check</span> Smart search</span>
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">check</span> No credit card</span>
+</div><div class="mt-16 max-w-5xl mx-auto border border-outline-variant/30 rounded-[16px] shadow-[0px_20px_50px_rgba(0,0,0,0.05)] bg-surface-container-lowest overflow-hidden flex h-[500px] text-left">
+<!-- Sidebar -->
+<aside class="w-64 border-r border-outline-variant/30 p-6 flex flex-col gap-8 bg-surface-container-low/30">
+<div class="flex items-center gap-2 mb-4">
+<div class="w-3 h-3 rounded-full bg-primary"></div>
+<div class="w-3 h-3 rounded-full bg-outline-variant"></div>
+<div class="w-3 h-3 rounded-full bg-outline-variant"></div>
+</div>
+<nav class="flex flex-col gap-4">
+<div class="flex items-center gap-3 text-primary font-medium">
+<span class="material-symbols-outlined text-[20px]">dashboard</span>
+<span class="text-label-sm">Dashboard</span>
+</div>
+<div class="flex items-center gap-3 text-secondary">
+<span class="material-symbols-outlined text-[20px]">task_alt</span>
+<span class="text-label-sm">Tasks</span>
+</div>
+<div class="flex items-center gap-3 text-secondary">
+<span class="material-symbols-outlined text-[20px]">calendar_today</span>
+<span class="text-label-sm">Calendar</span>
+</div>
+<div class="flex items-center gap-3 text-secondary">
+<span class="material-symbols-outlined text-[20px]">description</span>
+<span class="text-label-sm">Documents</span>
+</div>
+<div class="flex items-center gap-3 text-secondary">
+<span class="material-symbols-outlined text-[20px]">smart_toy</span>
+<span class="text-label-sm">AI Assistant</span>
+</div>
+</nav>
+</aside>
+<!-- Main Content -->
+<main class="flex-grow p-10 overflow-y-auto">
+<header class="mb-10">
+<span class="font-label-caps text-label-caps text-secondary uppercase tracking-widest">Good Morning</span>
+<h2 class="font-headline-md text-headline-md text-primary mt-1">You have 4 things that need your attention.</h2>
+</header>
+<section class="mb-10">
+<h3 class="font-label-caps text-label-caps text-primary mb-4 border-b border-outline-variant/30 pb-2">Today</h3>
+<div class="flex flex-col gap-4">
+<div class="flex items-center justify-between p-4 rounded border border-outline-variant/20 bg-surface-container-low/20">
+<div class="flex items-center gap-4">
+<div class="w-1 h-8 bg-primary rounded-full"></div>
+<div>
+<p class="font-medium text-on-surface">DBMS Assignment</p>
+<p class="text-label-sm text-secondary">Due tomorrow • 2.5h</p>
+</div>
+</div>
+<span class="text-label-caps text-secondary uppercase">Not Started</span>
+</div>
+<div class="flex items-center justify-between p-4 rounded border border-outline-variant/20">
+<div class="flex items-center gap-4">
+<div class="w-1 h-8 bg-outline-variant rounded-full"></div>
+<div>
+<p class="font-medium text-on-surface">OS Lab</p>
+<p class="text-label-sm text-secondary">Tomorrow • 10:00 AM</p>
+</div>
+</div>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter items-center">
+<div class="flex flex-col">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-widest">THE ACTION ENGINE</span>
+<h2 class="font-display text-headline-lg text-primary mt-4 leading-tight">UniPilot doesn't just find information. It tells you what to do next.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant mt-6 max-w-lg">
+        Your college information is scattered everywhere. UniPilot reads it, connects it, identifies what matters, and turns it into tasks, deadlines, priorities and recommendations.
+      </p>
+</div>
+<div class="bg-surface-container-low/30 border border-outline-variant rounded-[24px] p-8">
+<ul class="flex flex-col">
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Detect assignments from notices</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Extract deadlines automatically</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Estimate workload</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Prioritize urgent work</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Detect schedule conflicts</span>
+</li>
+<li class="flex items-center gap-3 py-3">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Recommend what to do next</span>
+</li>
+</ul>
+</div>
+</div>
+</section>
+<section>
+<h3 class="font-label-caps text-label-caps text-primary mb-4 border-b border-outline-variant/30 pb-2">This Week</h3>
+<div class="grid grid-cols-3 gap-4">
+<div class="p-4 rounded bg-surface-container-low/40">
+<p class="text-label-caps text-secondary mb-1">Monday</p>
+<p class="text-label-sm font-medium">DBMS Assignment</p>
+</div>
+<div class="p-4 rounded bg-surface-container-low/40">
+<p class="text-label-caps text-secondary mb-1">Wednesday</p>
+<p class="text-label-sm font-medium">IEEE Report</p>
+</div>
+<div class="p-4 rounded bg-surface-container-low/40">
+<p class="text-label-caps text-secondary mb-1">Friday</p>
+<p class="text-label-sm font-medium">Internal Assessment</p>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">THE DIFFERENCE</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Stop managing information. Start managing your time.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">Most productivity tools make you manually enter what you already know. UniPilot starts with the information you already have and turns it into an actionable academic plan.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+<!-- Before Card -->
+<div class="border border-outline-variant/30 rounded-[24px] p-12 bg-surface-container-low flex flex-col items-center text-center">
+<span class="font-label-sm font-bold mb-8">BEFORE UNIPILOT</span>
+<div class="relative h-48 w-full flex items-center justify-center">
+<div class="absolute transform -rotate-12 -translate-x-16 -translate-y-8 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">WhatsApp</div>
+<div class="absolute transform rotate-6 translate-x-12 -translate-y-12 px-6 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">PDFs</div>
+<div class="absolute transform -rotate-3 -translate-x-4 translate-y-4 px-5 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Email</div>
+<div class="absolute transform rotate-12 translate-x-20 translate-y-8 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">College Portal</div>
+<div class="absolute transform -rotate-6 -translate-x-24 translate-y-12 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Google Drive</div>
+<div class="absolute transform rotate-3 translate-x-0 -translate-y-20 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Timetable</div>
+<div class="absolute transform -rotate-12 translate-x-8 translate-y-16 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Notices</div>
+</div>
+<p class="text-label-sm text-secondary mt-8">Information everywhere.</p>
+</div>
+<!-- With Card -->
+<div class="border border-outline-variant/30 rounded-[24px] p-12 bg-surface-container-lowest shadow-[0px_4px_20px_rgba(0,0,0,0.05)] flex flex-col items-center text-center">
+<span class="font-label-sm font-bold text-primary mb-8">WITH UNIPILOT</span>
+<div class="flex items-center justify-between w-full max-w-md h-48">
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">description</span>
+<span class="text-[10px] uppercase tracking-tighter">Docs</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">psychology</span>
+<span class="text-[10px] uppercase tracking-tighter">AI Brain</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">task_alt</span>
+<span class="text-[10px] uppercase tracking-tighter">Tasks</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">calendar_today</span>
+<span class="text-[10px] uppercase tracking-tighter">Calendar</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">rocket_launch</span>
+<span class="text-[10px] uppercase tracking-tighter">Action</span>
+</div>
+</div>
+<p class="text-label-sm text-secondary mt-8">One clear plan.</p>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">MORE THAN CHAT</span>
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-4xl mx-auto">An AI workspace that understands your academic life.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">Ask questions about your college information, then turn the answers into tasks, schedules, reminders and actions.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-5 border-t border-l border-outline-variant/30">
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">chat_bubble</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Ask UniPilot</h4>
+<p class="text-label-sm text-secondary">Direct queries to your academic data.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">bolt</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Task Engine</h4>
+<p class="text-label-sm text-secondary">Automatically turning info into actions.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">calendar_today</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Smart Calendar</h4>
+<p class="text-label-sm text-secondary">Context-aware scheduling.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">psychology</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Document Brain</h4>
+<p class="text-label-sm text-secondary">Deep insights from all your files.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">radar</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Deadline Radar</h4>
+<p class="text-label-sm text-secondary">Tracking dates before they slip.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">insights</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Workload Intelligence</h4>
+<p class="text-label-sm text-secondary">Predicting stress before it happens.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">auto_stories</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Study Planner</h4>
+<p class="text-label-sm text-secondary">AI-optimized learning paths.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">report_problem</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Risk Detection</h4>
+<p class="text-label-sm text-secondary">Identifying conflicts and gaps early.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">hub</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Subject Hub</h4>
+<p class="text-label-sm text-secondary">Unified view for every course.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">touch_app</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Quick Actions</h4>
+<p class="text-label-sm text-secondary">One-click resolution for common tasks.</p>
+</div>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-24">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">WHY UNIPILOT</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Built around how college actually works.</h2>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-x-16 gap-y-24 max-w-5xl mx-auto">
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">ONE PLACE</h3>
+<p class="font-body-lg text-secondary leading-relaxed">Your college information shouldn't live across ten different tabs.</p>
+</div>
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">CONTEXT, NOT JUST CONTENT</h3>
+<p class="font-body-lg text-secondary leading-relaxed">UniPilot understands how documents, deadlines, subjects and tasks relate.</p>
+</div>
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">ACTION, NOT NOISE</h3>
+<p class="font-body-lg text-secondary leading-relaxed">The goal isn't to give you more information. It's to tell you what matters.</p>
+</div>
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">YOUR WORKSPACE</h3>
+<p class="font-body-lg text-secondary leading-relaxed">Your academic information stays organized around your account and can be managed by you.</p>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">WHY UNIPILOT</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">More than a to-do list. More useful than a chatbot.</h2>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full border-collapse text-left">
+<thead>
+<tr class="border-b border-[#E5E5E5]">
+<th class="py-6 px-4 font-label-sm text-secondary uppercase tracking-wider">Feature</th>
+<th class="py-6 px-4">
+<div class="bg-primary text-on-primary px-4 py-2 rounded-full text-center font-label-sm inline-block w-full">UniPilot</div>
+</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">To-do App</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">Calendar</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">AI Chatbot</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">Notes App</th>
+</tr>
+</thead>
+<tbody class="font-body-md">
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Understands college documents</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Extracts deadlines</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Connects tasks to subjects</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Understands academic context</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Creates workload plans</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Detects workload risks</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Smart document search</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Calendar integration</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Turns information into actions</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">WORKLOAD INTELLIGENCE</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Know when you're overloaded before the deadline does.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">UniPilot compares deadlines, estimated effort and available time to identify workload risks.</p>
+</div>
+<div class="max-w-4xl mx-auto bg-surface-container-low border border-outline-variant rounded-[16px] overflow-hidden shadow-[0px_4px_20px_rgba(0,0,0,0.05)]">
+<div class="grid grid-cols-1 md:grid-cols-2">
+<!-- Left Column: Workload Stats -->
+<div class="p-10 border-b md:border-b-0 md:border-r border-outline-variant">
+<div class="mb-8">
+<span class="font-label-caps text-label-caps text-primary font-bold">THIS WEEK</span>
+<p class="text-label-sm text-secondary mt-1">Academic workload</p>
+</div>
+<div class="flex flex-col items-center justify-center py-8">
+<div class="relative w-48 h-48 flex items-center justify-center">
+<!-- Minimal Progress Ring (SVG) -->
+<svg class="w-full h-full transform -rotate-90">
+<circle class="text-outline-variant/20" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-width="8"></circle>
+<circle class="text-primary" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-dasharray="552.92" stroke-dashoffset="121.64" stroke-width="8"></circle>
+</svg>
+<div class="absolute inset-0 flex flex-col items-center justify-center">
+<span class="text-headline-lg font-display font-bold">78%</span>
+<span class="text-label-caps text-secondary">WORKLOAD</span>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-4 mt-8 border-t border-outline-variant/30 pt-6">
+<div>
+<p class="text-headline-md font-bold">7.5h</p>
+<p class="text-[10px] uppercase text-secondary tracking-widest">Remaining</p>
+</div>
+<div>
+<p class="text-headline-md font-bold">4h</p>
+<p class="text-[10px] uppercase text-secondary tracking-widest">Available</p>
+</div>
+</div>
+<div class="mt-8 p-4 bg-error-container/10 border border-error/20 rounded flex items-center gap-3">
+<span class="material-symbols-outlined text-error text-[20px]">warning</span>
+<p class="text-label-sm text-on-error-container">Workload is higher than your available time.</p>
+</div>
+</div>
+<!-- Right Column: Recommendations -->
+<div class="p-10 bg-surface-container-lowest">
+<div class="mb-8">
+<span class="font-label-caps text-label-caps text-primary font-bold">RECOMMENDED:</span>
+</div>
+<div class="flex flex-col gap-4">
+<div class="p-4 border border-outline-variant rounded flex items-center justify-between hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-4">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-body-md">Start DBMS Assignment today</span>
+</div>
+<span class="material-symbols-outlined text-secondary text-[18px]">chevron_right</span>
+</div>
+<div class="p-4 border border-outline-variant rounded flex items-center justify-between hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-4">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-body-md">Complete OS Lab tomorrow</span>
+</div>
+<span class="material-symbols-outlined text-secondary text-[18px]">chevron_right</span>
+</div>
+<div class="p-4 border border-outline-variant rounded flex items-center justify-between hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-4">
+<span class="w-2 h-2 rounded-full bg-outline-variant"></span>
+<span class="font-body-md">Move IEEE Report to Wednesday</span>
+</div>
+<span class="material-symbols-outlined text-secondary text-[18px]">chevron_right</span>
+</div>
+</div>
+<div class="mt-12">
+<button class="w-full py-3 border border-primary text-primary font-label-sm text-label-sm rounded-full hover:bg-primary hover:text-on-primary transition-all">
+            Optimize Schedule
+          </button>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">One Account, Every Deadline</span>
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-4xl mx-auto">Not just a planner — your whole college life.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">UniPilot connects the information you already use and turns it into one continuously updated academic workspace.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-5 border-t border-l border-outline-variant/30">
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">smart_toy</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">AI Assistant</h4>
+<p class="text-label-sm text-secondary">Your academic guide</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">task_alt</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Tasks</h4>
+<p class="text-label-sm text-secondary">Automatically extracted actions</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">calendar_month</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Calendar</h4>
+<p class="text-label-sm text-secondary">Classes and deadlines together</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">folder_open</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Documents</h4>
+<p class="text-label-sm text-secondary">All your academic files</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">search</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Smart Search</h4>
+<p class="text-label-sm text-secondary">Find anything instantly</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">radar</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Deadline Radar</h4>
+<p class="text-label-sm text-secondary">Never lose a due date</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">bar_chart</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Workload Analyzer</h4>
+<p class="text-label-sm text-secondary">Know what's on your plate</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">event_note</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Study Planner</h4>
+<p class="text-label-sm text-secondary">Plan around your time</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">hub</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Subject Hub</h4>
+<p class="text-label-sm text-secondary">Organize every course</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">warning</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Risk Alerts</h4>
+<p class="text-label-sm text-secondary">Know what you might miss</p>
+</div>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter items-center">
+<div class="flex flex-col">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-widest">THE ACTION ENGINE</span>
+<h2 class="font-display text-headline-lg text-primary mt-4 leading-tight">UniPilot doesn't just find information. It tells you what to do next.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant mt-6 max-w-lg">
+        Your college information is scattered everywhere. UniPilot reads it, connects it, identifies what matters, and turns it into tasks, deadlines, priorities and recommendations.
+      </p>
+</div>
+<div class="bg-surface-container-low/30 border border-outline-variant rounded-[24px] p-8">
+<ul class="flex flex-col">
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Detect assignments from notices</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Extract deadlines automatically</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Estimate workload</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Prioritize urgent work</span>
+</li>
+<li class="flex items-center gap-3 py-3 border-b border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Detect schedule conflicts</span>
+</li>
+<li class="flex items-center gap-3 py-3">
+<span class="material-symbols-outlined text-primary text-[20px]">check_circle</span>
+<span class="font-body-md text-on-surface">Recommend what to do next</span>
+</li>
+</ul>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">MORE THAN CHAT</span>
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-4xl mx-auto">An AI workspace that understands your academic life.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">Ask questions about your college information, then turn the answers into tasks, schedules, reminders and actions.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-5 border-t border-l border-outline-variant/30">
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">chat_bubble</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Ask UniPilot</h4>
+<p class="text-label-sm text-secondary">Direct queries to your academic data.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">bolt</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Task Engine</h4>
+<p class="text-label-sm text-secondary">Automatically turning info into actions.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">calendar_today</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Smart Calendar</h4>
+<p class="text-label-sm text-secondary">Context-aware scheduling.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">psychology</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Document Brain</h4>
+<p class="text-label-sm text-secondary">Deep insights from all your files.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">radar</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Deadline Radar</h4>
+<p class="text-label-sm text-secondary">Tracking dates before they slip.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">insights</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Workload Intelligence</h4>
+<p class="text-label-sm text-secondary">Predicting stress before it happens.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">auto_stories</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Study Planner</h4>
+<p class="text-label-sm text-secondary">AI-optimized learning paths.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">report_problem</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Risk Detection</h4>
+<p class="text-label-sm text-secondary">Identifying conflicts and gaps early.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">hub</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Subject Hub</h4>
+<p class="text-label-sm text-secondary">Unified view for every course.</p>
+</div>
+</div>
+<div class="p-8 border-r border-b border-outline-variant/30 flex flex-col gap-4">
+<span class="material-symbols-outlined text-primary">touch_app</span>
+<div>
+<h4 class="font-bold text-on-surface mb-1">Quick Actions</h4>
+<p class="text-label-sm text-secondary">One-click resolution for common tasks.</p>
+</div>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">THE DIFFERENCE</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Stop managing information. Start managing your time.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">Most productivity tools make you manually enter what you already know. UniPilot starts with the information you already have and turns it into an actionable academic plan.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+<!-- Before Card -->
+<div class="border border-outline-variant/30 rounded-[24px] p-12 bg-surface-container-low flex flex-col items-center text-center">
+<span class="font-label-sm font-bold mb-8">BEFORE UNIPILOT</span>
+<div class="relative h-48 w-full flex items-center justify-center">
+<div class="absolute transform -rotate-12 -translate-x-16 -translate-y-8 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">WhatsApp</div>
+<div class="absolute transform rotate-6 translate-x-12 -translate-y-12 px-6 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">PDFs</div>
+<div class="absolute transform -rotate-3 -translate-x-4 translate-y-4 px-5 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Email</div>
+<div class="absolute transform rotate-12 translate-x-20 translate-y-8 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">College Portal</div>
+<div class="absolute transform -rotate-6 -translate-x-24 translate-y-12 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Google Drive</div>
+<div class="absolute transform rotate-3 translate-x-0 -translate-y-20 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Timetable</div>
+<div class="absolute transform -rotate-12 translate-x-8 translate-y-16 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-full text-label-sm">Notices</div>
+</div>
+<p class="text-label-sm text-secondary mt-8">Information everywhere.</p>
+</div>
+<!-- With Card -->
+<div class="border border-outline-variant/30 rounded-[24px] p-12 bg-surface-container-lowest shadow-[0px_4px_20px_rgba(0,0,0,0.05)] flex flex-col items-center text-center">
+<span class="font-label-sm font-bold text-primary mb-8">WITH UNIPILOT</span>
+<div class="flex items-center justify-between w-full max-w-md h-48">
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">description</span>
+<span class="text-[10px] uppercase tracking-tighter">Docs</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">psychology</span>
+<span class="text-[10px] uppercase tracking-tighter">AI Brain</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">task_alt</span>
+<span class="text-[10px] uppercase tracking-tighter">Tasks</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">calendar_today</span>
+<span class="text-[10px] uppercase tracking-tighter">Calendar</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant">arrow_forward</span>
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-primary">rocket_launch</span>
+<span class="text-[10px] uppercase tracking-tighter">Action</span>
+</div>
+</div>
+<p class="text-label-sm text-secondary mt-8">One clear plan.</p>
+</div>
+</div>
+</section>
+<!-- Feature Grid Section -->
+<section class="max-w-container-max mx-auto px-margin-mobile pb-section-padding">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<!-- Card 1 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-[24px] p-10 flex flex-col gap-6 hover:-translate-y-1 transition-transform duration-300">
+<div class="w-12 h-12 rounded-full bg-surface-container-low flex items-center justify-center border border-outline-variant">
+<span class="material-symbols-outlined text-primary" style='font-variation-settings: "wght" 200;'>precision_manufacturing</span>
+</div>
+<div>
+<h3 class="font-headline-md text-headline-md text-primary mb-2">Automated Precision</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">Deploy perfectly tuned models that handle repetitive tasks without hallucinations or drift over time.</p>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-[24px] p-10 flex flex-col gap-6 hover:-translate-y-1 transition-transform duration-300 md:col-span-2 relative overflow-hidden">
+<div class="absolute right-0 top-0 w-1/2 h-full opacity-10 pointer-events-none" style="background-image: radial-gradient(#000000 2px, transparent 2px); background-size: 16px 16px;"></div>
+<div class="w-12 h-12 rounded-full bg-surface-container-low flex items-center justify-center border border-outline-variant relative z-10">
+<span class="material-symbols-outlined text-primary" style='font-variation-settings: "wght" 200;'>speed</span>
+</div>
+<div class="relative z-10 w-full md:w-2/3">
+<h3 class="font-headline-md text-headline-md text-primary mb-2">Milliseconds Matter</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">Global edge network ensures sub-50ms latency for all API calls. Built on pure Rust for maximum throughput.</p>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-[24px] p-10 flex flex-col gap-6 hover:-translate-y-1 transition-transform duration-300 md:col-span-2">
+<div class="w-12 h-12 rounded-full bg-surface-container-low flex items-center justify-center border border-outline-variant">
+<span class="material-symbols-outlined text-primary" style='font-variation-settings: "wght" 200;'>integration_instructions</span>
+</div>
+<div>
+<h3 class="font-headline-md text-headline-md text-primary mb-2">Universal Integration</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">One line of code to connect to Slack, GitHub, Jira, and 50+ other platforms. No complex OAuth setups.</p>
+<div class="mt-6 bg-surface-container-low border border-outline-variant rounded p-4 font-mono text-sm text-secondary overflow-x-auto">
+<code>import { Pilot } from '@unipilot/sdk';<br/>const pilot = new Pilot({ key: 'sk_live_...' });</code>
+</div>
+</div>
+</div>
+<!-- Card 4 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-[24px] p-10 flex flex-col gap-6 hover:-translate-y-1 transition-transform duration-300">
+<div class="w-12 h-12 rounded-full bg-surface-container-low flex items-center justify-center border border-outline-variant">
+<span class="material-symbols-outlined text-primary" style='font-variation-settings: "wght" 200;'>security</span>
+</div>
+<div>
+<h3 class="font-headline-md text-headline-md text-primary mb-2">SOC2 Type II</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">Enterprise-grade security by default. End-to-end encryption and strict data isolation per tenant.</p>
+</div>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-24">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">WHY UNIPILOT</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Built around how college actually works.</h2>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-x-16 gap-y-24 max-w-5xl mx-auto">
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">ONE PLACE</h3>
+<p class="font-body-lg text-secondary leading-relaxed">Your college information shouldn't live across ten different tabs.</p>
+</div>
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">CONTEXT, NOT JUST CONTENT</h3>
+<p class="font-body-lg text-secondary leading-relaxed">UniPilot understands how documents, deadlines, subjects and tasks relate.</p>
+</div>
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">ACTION, NOT NOISE</h3>
+<p class="font-body-lg text-secondary leading-relaxed">The goal isn't to give you more information. It's to tell you what matters.</p>
+</div>
+<div class="flex flex-col gap-4">
+<h3 class="font-label-caps text-label-caps text-primary font-bold uppercase tracking-wider">YOUR WORKSPACE</h3>
+<p class="font-body-lg text-secondary leading-relaxed">Your academic information stays organized around your account and can be managed by you.</p>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">WHY UNIPILOT</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">More than a to-do list. More useful than a chatbot.</h2>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full border-collapse text-left">
+<thead>
+<tr class="border-b border-[#E5E5E5]">
+<th class="py-6 px-4 font-label-sm text-secondary uppercase tracking-wider">Feature</th>
+<th class="py-6 px-4">
+<div class="bg-primary text-on-primary px-4 py-2 rounded-full text-center font-label-sm inline-block w-full">UniPilot</div>
+</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">To-do App</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">Calendar</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">AI Chatbot</th>
+<th class="py-6 px-4 font-label-sm text-secondary text-center">Notes App</th>
+</tr>
+</thead>
+<tbody class="font-body-md">
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Understands college documents</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Extracts deadlines</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Connects tasks to subjects</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Understands academic context</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Creates workload plans</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+<td class="py-5 px-4 text-center text-secondary">—</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Detects workload risks</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Smart document search</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Calendar integration</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+<tr class="border-b border-[#E5E5E5]">
+<td class="py-5 px-4 font-medium">Turns information into actions</td>
+<td class="py-5 px-4 text-center text-primary font-bold">✓</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+<td class="py-5 px-4 text-center text-secondary">×</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">WORKLOAD INTELLIGENCE</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Know when you're overloaded before the deadline does.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">UniPilot compares deadlines, estimated effort and available time to identify workload risks.</p>
+</div>
+<div class="max-w-4xl mx-auto bg-surface-container-low border border-outline-variant rounded-[16px] overflow-hidden shadow-[0px_4px_20px_rgba(0,0,0,0.05)]">
+<div class="grid grid-cols-1 md:grid-cols-2">
+<!-- Left Column: Workload Stats -->
+<div class="p-10 border-b md:border-b-0 md:border-r border-outline-variant">
+<div class="mb-8">
+<span class="font-label-caps text-label-caps text-primary font-bold">THIS WEEK</span>
+<p class="text-label-sm text-secondary mt-1">Academic workload</p>
+</div>
+<div class="flex flex-col items-center justify-center py-8">
+<div class="relative w-48 h-48 flex items-center justify-center">
+<!-- Minimal Progress Ring (SVG) -->
+<svg class="w-full h-full transform -rotate-90">
+<circle class="text-outline-variant/20" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-width="8"></circle>
+<circle class="text-primary" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-dasharray="552.92" stroke-dashoffset="121.64" stroke-width="8"></circle>
+</svg>
+<div class="absolute inset-0 flex flex-col items-center justify-center">
+<span class="text-headline-lg font-display font-bold">78%</span>
+<span class="text-label-caps text-secondary">WORKLOAD</span>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-4 mt-8 border-t border-outline-variant/30 pt-6">
+<div>
+<p class="text-headline-md font-bold">7.5h</p>
+<p class="text-[10px] uppercase text-secondary tracking-widest">Remaining</p>
+</div>
+<div>
+<p class="text-headline-md font-bold">4h</p>
+<p class="text-[10px] uppercase text-secondary tracking-widest">Available</p>
+</div>
+</div>
+<div class="mt-8 p-4 bg-error-container/10 border border-error/20 rounded flex items-center gap-3">
+<span class="material-symbols-outlined text-error text-[20px]">warning</span>
+<p class="text-label-sm text-on-error-container">Workload is higher than your available time.</p>
+</div>
+</div>
+<!-- Right Column: Recommendations -->
+<div class="p-10 bg-surface-container-lowest">
+<div class="mb-8">
+<span class="font-label-caps text-label-caps text-primary font-bold">RECOMMENDED:</span>
+</div>
+<div class="flex flex-col gap-4">
+<div class="p-4 border border-outline-variant rounded flex items-center justify-between hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-4">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-body-md">Start DBMS Assignment today</span>
+</div>
+<span class="material-symbols-outlined text-secondary text-[18px]">chevron_right</span>
+</div>
+<div class="p-4 border border-outline-variant rounded flex items-center justify-between hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-4">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-body-md">Complete OS Lab tomorrow</span>
+</div>
+<span class="material-symbols-outlined text-secondary text-[18px]">chevron_right</span>
+</div>
+<div class="p-4 border border-outline-variant rounded flex items-center justify-between hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-4">
+<span class="w-2 h-2 rounded-full bg-outline-variant"></span>
+<span class="font-body-md">Move IEEE Report to Wednesday</span>
+</div>
+<span class="material-symbols-outlined text-secondary text-[18px]">chevron_right</span>
+</div>
+</div>
+<div class="mt-12">
+<button class="w-full py-3 border border-primary text-primary font-label-sm text-label-sm rounded-full hover:bg-primary hover:text-on-primary transition-all">
+            Optimize Schedule
+          </button>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- How It Works Section -->
+<section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-24">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">HOW IT WORKS</span>
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-4xl mx-auto">Five steps from scattered information to a clear plan.</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">Upload what you already have. UniPilot does the organizing.</p>
+</div>
+<div class="relative pl-16 md:pl-24 max-w-5xl mx-auto">
+<!-- Vertical Line -->
+<div class="absolute left-[31px] md:left-[47px] top-4 bottom-4 w-[1px] bg-outline-variant/30"></div>
+<!-- Step 01 -->
+<div class="relative mb-24 last:mb-0 flex flex-col md:flex-row gap-8 md:gap-16 items-start">
+<div class="absolute -left-16 md:-left-24 w-12 h-12 bg-surface-container-lowest border border-outline-variant rounded-full flex items-center justify-center font-display font-bold text-primary z-10 shadow-sm mt-[-8px]">
+                01
+            </div>
+<div class="w-full md:w-1/3 pt-1">
+<h3 class="font-headline-md text-headline-md text-primary mb-3 uppercase tracking-wider text-sm font-bold">ADD</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">Upload PDFs, notes, screenshots, timetables and notices.</p>
+</div>
+<div class="w-full md:w-2/3 bg-surface-container-lowest border border-outline-variant rounded-[16px] p-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="border border-dashed border-outline-variant/60 rounded-lg p-6 flex flex-col items-center justify-center gap-2 mb-4 bg-surface-container-low/30">
+<span class="material-symbols-outlined text-secondary">cloud_upload</span>
+<div class="w-24 h-2 bg-outline-variant/30 rounded-full"></div>
+</div>
+<div class="flex gap-2">
+<div class="flex-1 h-8 border border-outline-variant/30 rounded flex items-center px-3 gap-2">
+<span class="material-symbols-outlined text-[14px] text-secondary">picture_as_pdf</span>
+<div class="w-16 h-1.5 bg-outline-variant/40 rounded-full"></div>
+</div>
+<div class="flex-1 h-8 border border-outline-variant/30 rounded flex items-center px-3 gap-2">
+<span class="material-symbols-outlined text-[14px] text-secondary">image</span>
+<div class="w-12 h-1.5 bg-outline-variant/40 rounded-full"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Step 02 -->
+<div class="relative mb-24 last:mb-0 flex flex-col md:flex-row gap-8 md:gap-16 items-start">
+<div class="absolute -left-16 md:-left-24 w-12 h-12 bg-surface-container-lowest border border-outline-variant rounded-full flex items-center justify-center font-display font-bold text-primary z-10 shadow-sm mt-[-8px]">
+                02
+            </div>
+<div class="w-full md:w-1/3 pt-1">
+<h3 class="font-headline-md text-headline-md text-primary mb-3 uppercase tracking-wider text-sm font-bold">READ</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">UniPilot extracts assignments, deadlines, exams and requirements.</p>
+</div>
+<div class="w-full md:w-2/3 bg-surface-container-lowest border border-outline-variant rounded-[16px] p-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex gap-4 h-32">
+<div class="w-1/2 border border-outline-variant/30 rounded p-3 flex flex-col gap-2">
+<div class="w-full h-2 bg-outline-variant/20 rounded-full"></div>
+<div class="w-3/4 h-2 bg-outline-variant/20 rounded-full"></div>
+<div class="w-5/6 h-2 bg-outline-variant/20 rounded-full"></div>
+<div class="w-full h-2 bg-primary/20 rounded-full mt-2 relative">
+<div class="absolute inset-0 border border-primary/30 rounded-full"></div>
+</div>
+<div class="w-1/2 h-2 bg-outline-variant/20 rounded-full mt-2"></div>
+</div>
+<div class="w-1/2 flex flex-col gap-2 justify-center">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary">arrow_forward</span>
+<div class="border border-outline-variant/40 rounded px-2 py-1 text-[10px] text-primary bg-surface-container-low font-medium">Assignment Detected</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary">arrow_forward</span>
+<div class="border border-outline-variant/40 rounded px-2 py-1 text-[10px] text-primary bg-surface-container-low font-medium">Deadline: Oct 12</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Step 03 -->
+<div class="relative mb-24 last:mb-0 flex flex-col md:flex-row gap-8 md:gap-16 items-start">
+<div class="absolute -left-16 md:-left-24 w-12 h-12 bg-surface-container-lowest border border-outline-variant rounded-full flex items-center justify-center font-display font-bold text-primary z-10 shadow-sm mt-[-8px]">
+                03
+            </div>
+<div class="w-full md:w-1/3 pt-1">
+<h3 class="font-headline-md text-headline-md text-primary mb-3 uppercase tracking-wider text-sm font-bold">CONNECT</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">Subjects, tasks, documents, deadlines and events become connected.</p>
+</div>
+<div class="w-full md:w-2/3 bg-surface-container-lowest border border-outline-variant rounded-[16px] p-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="h-32 relative flex items-center justify-center">
+<div class="absolute w-full h-[1px] bg-outline-variant/30 top-1/2 transform -translate-y-1/2"></div>
+<div class="absolute h-full w-[1px] bg-outline-variant/30 left-1/2 transform -translate-x-1/2"></div>
+<div class="absolute top-4 left-4 w-10 h-10 rounded-full border border-outline-variant bg-surface-container-lowest flex items-center justify-center z-10"><span class="material-symbols-outlined text-[16px]">description</span></div>
+<div class="absolute bottom-4 left-1/4 w-8 h-8 rounded-full border border-outline-variant bg-surface-container-lowest flex items-center justify-center z-10"><span class="material-symbols-outlined text-[14px]">task_alt</span></div>
+<div class="absolute top-1/4 right-8 w-12 h-12 rounded-full border-2 border-primary bg-surface-container-lowest flex items-center justify-center z-10"><span class="material-symbols-outlined text-[20px] text-primary">hub</span></div>
+<div class="absolute bottom-6 right-1/4 w-10 h-10 rounded-full border border-outline-variant bg-surface-container-lowest flex items-center justify-center z-10"><span class="material-symbols-outlined text-[16px]">calendar_today</span></div>
+<svg class="absolute inset-0 w-full h-full pointer-events-none" style="z-index: 0;">
+<path class="text-outline-variant/40" d="M 50 30 Q 150 70 250 50" fill="transparent" stroke="currentColor" stroke-dasharray="4 4" stroke-width="1.5"></path>
+<path class="text-outline-variant/40" d="M 100 100 Q 180 80 250 50" fill="transparent" stroke="currentColor" stroke-dasharray="4 4" stroke-width="1.5"></path>
+<path class="text-outline-variant/40" d="M 230 100 Q 240 70 250 50" fill="transparent" stroke="currentColor" stroke-dasharray="4 4" stroke-width="1.5"></path>
+</svg>
+</div>
+</div>
+</div>
+<!-- Step 04 -->
+<div class="relative mb-24 last:mb-0 flex flex-col md:flex-row gap-8 md:gap-16 items-start">
+<div class="absolute -left-16 md:-left-24 w-12 h-12 bg-surface-container-lowest border border-outline-variant rounded-full flex items-center justify-center font-display font-bold text-primary z-10 shadow-sm mt-[-8px]">
+                04
+            </div>
+<div class="w-full md:w-1/3 pt-1">
+<h3 class="font-headline-md text-headline-md text-primary mb-3 uppercase tracking-wider text-sm font-bold">PLAN</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">AI calculates priorities, workload, available time and risks.</p>
+</div>
+<div class="w-full md:w-2/3 bg-surface-container-lowest border border-outline-variant rounded-[16px] p-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="h-32 flex flex-col gap-2">
+<div class="flex justify-between border-b border-outline-variant/30 pb-2">
+<div class="w-8 h-3 bg-outline-variant/20 rounded"></div>
+<div class="w-8 h-3 bg-outline-variant/20 rounded"></div>
+<div class="w-8 h-3 bg-outline-variant/20 rounded"></div>
+<div class="w-8 h-3 bg-outline-variant/20 rounded"></div>
+<div class="w-8 h-3 bg-outline-variant/20 rounded"></div>
+</div>
+<div class="relative flex-1 mt-2">
+<div class="absolute left-0 top-0 bottom-0 w-[1px] bg-outline-variant/20"></div>
+<div class="absolute left-1/4 top-0 bottom-0 w-[1px] bg-outline-variant/20"></div>
+<div class="absolute left-2/4 top-0 bottom-0 w-[1px] bg-outline-variant/20"></div>
+<div class="absolute left-3/4 top-0 bottom-0 w-[1px] bg-outline-variant/20"></div>
+<div class="absolute right-0 top-0 bottom-0 w-[1px] bg-outline-variant/20"></div>
+<div class="absolute top-2 left-[5%] right-[60%] h-6 bg-surface-container-low border border-outline-variant/50 rounded flex items-center px-2"><div class="w-12 h-1.5 bg-secondary/40 rounded-full"></div></div>
+<div class="absolute top-10 left-[40%] right-[10%] h-6 bg-primary/10 border border-primary/30 rounded flex items-center px-2"><div class="w-16 h-1.5 bg-primary/60 rounded-full"></div></div>
+<div class="absolute top-18 left-[20%] right-[80%] h-6 bg-surface-container-low border border-outline-variant/50 rounded flex items-center px-2"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Step 05 -->
+<div class="relative mb-24 last:mb-0 flex flex-col md:flex-row gap-8 md:gap-16 items-start">
+<div class="absolute -left-16 md:-left-24 w-12 h-12 bg-surface-container-lowest border border-outline-variant rounded-full flex items-center justify-center font-display font-bold text-primary z-10 shadow-sm mt-[-8px]">
+                05
+            </div>
+<div class="w-full md:w-1/3 pt-1">
+<h3 class="font-headline-md text-headline-md text-primary mb-3 uppercase tracking-wider text-sm font-bold">ACT</h3>
+<p class="font-body-md text-body-md text-on-surface-variant">Get daily actions, weekly plans, reminders and recommendations.</p>
+</div>
+<div class="w-full md:w-2/3 bg-surface-container-lowest border border-outline-variant rounded-[16px] p-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex flex-col gap-3">
+<div class="flex items-center gap-3 p-3 border border-outline-variant/40 rounded bg-surface-container-lowest">
+<div class="w-4 h-4 rounded-sm border border-outline-variant flex items-center justify-center"><span class="material-symbols-outlined text-[12px] opacity-0">check</span></div>
+<div class="flex-1"><div class="w-1/2 h-2 bg-on-surface rounded-full"></div></div>
+<div class="px-2 py-1 rounded bg-primary text-on-primary text-[8px] uppercase tracking-wider font-bold">Today</div>
+</div>
+<div class="flex items-center gap-3 p-3 border border-outline-variant/40 rounded bg-surface-container-lowest">
+<div class="w-4 h-4 rounded-sm border border-outline-variant flex items-center justify-center"><span class="material-symbols-outlined text-[12px] opacity-0">check</span></div>
+<div class="flex-1"><div class="w-2/3 h-2 bg-on-surface rounded-full"></div></div>
+<div class="px-2 py-1 rounded bg-surface-container-high border border-outline-variant/50 text-[8px] uppercase tracking-wider font-bold text-secondary">Tomorrow</div>
+</div>
+<div class="flex items-center gap-3 p-3 border border-outline-variant/40 rounded bg-surface-container-lowest opacity-60">
+<div class="w-4 h-4 rounded-sm border border-outline-variant bg-surface-container-high flex items-center justify-center"><span class="material-symbols-outlined text-[12px] text-secondary">check</span></div>
+<div class="flex-1"><div class="w-1/3 h-2 bg-on-surface rounded-full line-through opacity-50"></div></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Examples Section -->
+<section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">EXAMPLES</span>
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-4xl mx-auto">Real college problems. One place to solve them.</h2>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<!-- Card 1 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col gap-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<h3 class="font-headline-md text-headline-md text-primary">"What do I have due this week?"</h3>
+<div class="bg-surface-container-low border border-outline-variant/40 rounded p-4 flex flex-col gap-3 mt-auto">
+<div class="flex items-center gap-3">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-body-md text-on-surface">DBMS Assignment</span>
+</div>
+<div class="flex items-center gap-3">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-body-md text-on-surface">IEEE Report</span>
+</div>
+<div class="flex items-center gap-3">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="font-body-md text-on-surface">Internal Assessment</span>
+</div>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col gap-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<h3 class="font-headline-md text-headline-md text-primary">"What should I do first?"</h3>
+<div class="bg-surface-container-low border border-outline-variant/40 rounded p-4 flex flex-col gap-2 mt-auto">
+<p class="font-body-md text-on-surface font-medium">Start DBMS Assignment</p>
+<div class="flex flex-wrap gap-2 mt-2">
+<span class="px-2 py-1 bg-surface-container-lowest border border-outline-variant/40 rounded text-[10px] text-secondary uppercase tracking-wider">Due tomorrow</span>
+<span class="px-2 py-1 bg-surface-container-lowest border border-outline-variant/40 rounded text-[10px] text-secondary uppercase tracking-wider">Not started</span>
+<span class="px-2 py-1 bg-surface-container-lowest border border-outline-variant/40 rounded text-[10px] text-secondary uppercase tracking-wider">2.5h estimated</span>
+</div>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col gap-6 shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<h3 class="font-headline-md text-headline-md text-primary">"Am I overloaded?"</h3>
+<div class="flex flex-col gap-4 mt-auto">
+<div class="p-4 bg-error-container/10 border border-error/20 rounded flex items-start gap-3">
+<span class="material-symbols-outlined text-error text-[20px] mt-0.5">warning</span>
+<p class="text-label-sm text-on-error-container">Workload (78%) is higher than available time (4h).</p>
+</div>
+<button class="w-full py-2 border border-outline-variant text-primary font-label-sm text-label-sm rounded hover:bg-surface-container-low transition-colors">
+                    View Schedule
+                </button>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer -->
+<section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<div class="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-surface-container-low border border-outline-variant mb-8">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">BUILT FOR STUDENTS</span>
+</div>
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">What students say.</h2>
+<div class="flex items-center justify-center gap-1 text-primary mb-12">
+<span class="material-symbols-outlined text-[20px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[20px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[20px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[20px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[20px]" style='font-variation-settings: "FILL" 0.5;'>star_half</span>
+<span class="ml-2 font-label-sm text-secondary">4.8/5 average</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<!-- Card 1 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col text-left shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex gap-0.5 text-primary mb-6">
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+</div>
+<p class="font-body-md text-on-surface mb-8 flex-grow">"I stopped checking five WhatsApp groups just to figure out what was due. UniPilot just knows."</p>
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low border border-outline-variant flex items-center justify-center font-bold text-secondary text-sm">AC</div>
+<div>
+<p class="font-bold text-on-surface text-sm">Alex Chen</p>
+<p class="text-[12px] text-secondary">Computer Science</p>
+</div>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col text-left shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex gap-0.5 text-primary mb-6">
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+</div>
+<p class="font-body-md text-on-surface mb-8 flex-grow">"The best part isn't the AI chat. It's opening the dashboard and immediately knowing what I need to do."</p>
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low border border-outline-variant flex items-center justify-center font-bold text-secondary text-sm">SM</div>
+<div>
+<p class="font-bold text-on-surface text-sm">Sarah Miller</p>
+<p class="text-[12px] text-secondary">Biology Student</p>
+</div>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col text-left shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex gap-0.5 text-primary mb-6">
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+</div>
+<p class="font-body-md text-on-surface mb-8 flex-grow">"UniPilot turned a semester's worth of PDFs and notices into an actual plan. No more panic."</p>
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low border border-outline-variant flex items-center justify-center font-bold text-secondary text-sm">JP</div>
+<div>
+<p class="font-bold text-on-surface text-sm">Jordan Park</p>
+<p class="text-[12px] text-secondary">Engineering Major</p>
+</div>
+</div>
+</div>
+<!-- Card 4 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col text-left shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex gap-0.5 text-primary mb-6">
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+</div>
+<p class="font-body-md text-on-surface mb-8 flex-grow">"Finally, a tool that actually understands how messy college life is. The deadline radar is a lifesaver."</p>
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low border border-outline-variant flex items-center justify-center font-bold text-secondary text-sm">LW</div>
+<div>
+<p class="font-bold text-on-surface text-sm">Liam Wong</p>
+<p class="text-[12px] text-secondary">Business Administration</p>
+</div>
+</div>
+</div>
+<!-- Card 5 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col text-left shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex gap-0.5 text-primary mb-6">
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+</div>
+<p class="font-body-md text-on-surface mb-8 flex-grow">"The integration with my college portal was seamless. It found assignments I didn't even know were posted."</p>
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low border border-outline-variant flex items-center justify-center font-bold text-secondary text-sm">EK</div>
+<div>
+<p class="font-bold text-on-surface text-sm">Elena Kozlov</p>
+<p class="text-[12px] text-secondary">Psychology Student</p>
+</div>
+</div>
+</div>
+<!-- Card 6 -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-[16px] p-8 flex flex-col text-left shadow-[0px_4px_20px_rgba(0,0,0,0.02)]">
+<div class="flex gap-0.5 text-primary mb-6">
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+<span class="material-symbols-outlined text-[18px]" style='font-variation-settings: "FILL" 1;'>star</span>
+</div>
+<p class="font-body-md text-on-surface mb-8 flex-grow">"I used to spend hours organizing my week. Now UniPilot does it in seconds. Best investment for my grades."</p>
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-low border border-outline-variant flex items-center justify-center font-bold text-secondary text-sm">DR</div>
+<div>
+<p class="font-bold text-on-surface text-sm">David Rivera</p>
+<p class="text-[12px] text-secondary">Pre-Med</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">PRICING</span>
+<h2 class="font-display text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Start free. Upgrade when you need more.</h2>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<!-- Free Plan -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-lg p-8 flex flex-col gap-8">
+<div>
+<h3 class="font-label-caps text-label-caps text-secondary uppercase tracking-widest mb-2">FREE</h3>
+<div class="flex items-baseline gap-1">
+<span class="text-headline-lg font-display font-bold">$0</span>
+<span class="text-secondary">/month</span>
+</div>
+</div>
+<ul class="flex flex-col gap-4 flex-grow">
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Basic dashboard
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Limited document uploads
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Task extraction
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Basic AI assistant
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Weekly overview
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Basic search
+        </li>
+</ul>
+<button class="w-full py-3 border border-primary text-primary font-label-sm text-label-sm rounded-full hover:bg-surface-container-low transition-colors flex items-center justify-center gap-2">
+        Start free
+        <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+</div>
+<!-- Pro Plan -->
+<div class="bg-surface-container-lowest border border-primary rounded-lg p-8 flex flex-col gap-8 relative shadow-sm">
+<div class="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-primary text-on-primary px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">
+        Most popular
+      </div>
+<div>
+<h3 class="font-label-caps text-label-caps text-primary uppercase tracking-widest mb-2 font-bold">PRO</h3>
+<div class="flex items-baseline gap-1">
+<span class="text-headline-lg font-display font-bold">$4.99</span>
+<span class="text-secondary">/month</span>
+</div>
+</div>
+<ul class="flex flex-col gap-4 flex-grow">
+<li class="flex items-center gap-3 text-body-md text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Unlimited documents
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Unlimited AI assistant
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Smart workload planning
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Risk alerts
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Advanced search
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Calendar sync
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Priority insights
+        </li>
+</ul>
+<button class="w-full py-3 bg-primary text-on-primary font-label-sm text-label-sm rounded-full hover:scale-[0.98] transition-transform flex items-center justify-center gap-2">
+        Start Pro
+        <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+</div>
+<!-- Student Groups Plan -->
+<div class="bg-surface-container-lowest border border-[#E5E5E5] rounded-lg p-8 flex flex-col gap-8">
+<div>
+<h3 class="font-label-caps text-label-caps text-secondary uppercase tracking-widest mb-2">STUDENT GROUPS</h3>
+<div class="flex items-baseline gap-1">
+<span class="text-headline-lg font-display font-bold">Custom</span>
+</div>
+</div>
+<ul class="flex flex-col gap-4 flex-grow">
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Shared workspaces
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Shared documents
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Group tasks
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Shared planning
+        </li>
+<li class="flex items-center gap-3 text-body-md text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px] text-primary">check</span>
+          Member management
+        </li>
+</ul>
+<button class="w-full py-3 border border-primary text-primary font-label-sm text-label-sm rounded-full hover:bg-surface-container-low transition-colors flex items-center justify-center gap-2">
+        Contact us
+        <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding border-t border-outline-variant/30">
+<div class="text-center mb-16">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 inline-block">FAQ</span>
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-4xl mx-auto font-bold">Questions about your academic OS.</h2>
+</div>
+<div class="max-w-3xl mx-auto">
+<div class="flex flex-col">
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">What is UniPilot?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">How does UniPilot understand my college information?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">What files can I upload?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">Can UniPilot extract deadlines from PDFs?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">Can I connect Google Calendar?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">Does UniPilot replace my college portal?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">Can I edit AI-generated tasks?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">Can I see where an AI-generated task came from?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">Is my academic information private?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+<div class="py-6 border-t border-b border-outline-variant/30 flex items-center justify-between group cursor-pointer">
+<span class="font-headline-md text-on-surface">Is there a free plan?</span>
+<span class="material-symbols-outlined text-secondary group-hover:text-primary transition-colors">add</span>
+</div>
+</div>
+</div>
+</section><section class="max-w-container-max mx-auto px-margin-mobile py-section-padding">
+<div class="bg-surface-bright border border-[#E5E5E5] rounded-lg p-12 md:py-24 flex flex-col items-center text-center shadow-sm">
+<h2 class="font-display text-headline-lg-mobile md:text-headline-lg text-primary mb-6 max-w-3xl font-bold">
+            Stop searching through your college life. Know what to do next.
+        </h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mb-10">
+            Upload your first document and let UniPilot organize the rest.
+        </p>
+<div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+<button class="w-full sm:w-auto bg-primary text-on-primary px-8 py-4 rounded-full font-label-sm text-label-sm hover:scale-105 duration-200 transition-transform flex items-center justify-center gap-2">
+                Start free — build my dashboard
+                <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+</button>
+<button class="w-full sm:w-auto bg-transparent text-primary border border-outline-variant px-8 py-4 rounded-full font-label-sm text-label-sm hover:bg-surface-container-low duration-200 transition-colors flex items-center justify-center gap-2">
+                Explore UniPilot
+                <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+</button>
+</div>
+</div>
+</section><footer class="w-full mt-section-padding border-t border-[#E5E5E5] bg-surface relative">
+<div class="max-w-container-max mx-auto px-margin-mobile py-24">
+<div class="grid grid-cols-2 md:grid-cols-6 gap-gutter mb-24">
+<div class="col-span-2 flex flex-col gap-6">
+<div class="flex items-center gap-2 text-body-lg font-display font-bold text-primary">
+<span class="material-symbols-outlined bg-primary text-on-primary rounded p-1 text-sm">rocket_launch</span>
+<span>UniPilot</span>
+</div>
+<p class="font-body-md text-secondary max-w-xs leading-relaxed">
+                    Your AI-powered college operating system. Turn scattered academic information into a clear plan.
+                </p>
+</div>
+<div class="flex flex-col gap-6">
+<h4 class="font-label-caps text-label-caps text-primary uppercase tracking-widest">Product</h4>
+<nav class="flex flex-col gap-4">
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Features</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Dashboard</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">AI Assistant</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Tasks</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Calendar</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Documents</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Pricing</a>
+</nav>
+</div>
+<div class="flex flex-col gap-6">
+<h4 class="font-label-caps text-label-caps text-primary uppercase tracking-widest">Company</h4>
+<nav class="flex flex-col gap-4">
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">About</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Dev's note</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Contact</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Changelog</a>
+</nav>
+</div>
+<div class="flex flex-col gap-6">
+<h4 class="font-label-caps text-label-caps text-primary uppercase tracking-widest">Resources</h4>
+<nav class="flex flex-col gap-4">
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">FAQ</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Guides</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Examples</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Privacy</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Terms</a>
+</nav>
+</div>
+<div class="flex flex-col gap-6">
+<h4 class="font-label-caps text-label-caps text-primary uppercase tracking-widest">Tools</h4>
+<nav class="flex flex-col gap-4">
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">AI Planner</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Deadline Tracker</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Document Search</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Workload Analyzer</a>
+</nav>
+</div>
+</div>
+<div class="pt-8 border-t border-[#E5E5E5] flex flex-col md:flex-row justify-between items-center gap-4">
+<p class="font-label-sm text-label-sm text-secondary">
+                © 2026 UniPilot — All rights reserved.
+            </p>
+<div class="flex gap-6">
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">Twitter</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">LinkedIn</a>
+<a class="font-label-sm text-label-sm text-secondary hover:text-primary transition-colors" href="#">GitHub</a>
+</div>
+</div>
+</div>
+</footer>
+</body></html>

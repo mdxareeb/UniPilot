@@ -1,0 +1,7 @@
+-- Intentionally empty.
+--
+-- `supabase/config.toml` runs this file after migrations on `supabase db reset`
+-- ([db.seed] enabled = true). No application data is ever seeded: the schema is
+-- the deliverable, and the only sanctioned identity is the QA user created by
+-- `supabase/qa/seed-qa-identity.mjs` through the Admin API (Task 20.10), which
+-- this file must not duplicate or replace.

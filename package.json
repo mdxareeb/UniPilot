@@ -1,26 +1,22 @@
 {
   "name": "unipilot",
-  "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "next": "16.3.1",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.3.1",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "dev": "npm run dev -w frontend",
+    "build": "npm run build -w frontend",
+    "start": "npm run start -w frontend",
+    "lint": "npm run lint -w frontend",
+    "typecheck": "npm run typecheck -w frontend",
+    "test": "npm run test -w frontend",
+    "db:reset": "npm run db:reset -w backend",
+    "db:lint": "npm run db:lint -w backend",
+    "db:types": "npm run db:types -w backend",
+    "seed:qa": "npm run seed:qa -w backend",
+    "worker": "npm run worker -w backend",
+    "worker:once": "npm run worker:once -w backend"
   }
 }

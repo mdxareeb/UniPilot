@@ -1,0 +1,353 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "https://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" dir="ltr">
+  <head>
+    <!--
+      NOT A SUPABASE AUTH TEMPLATE.
+
+      Supabase Auth has no welcome-email template or trigger — its supported
+      names are invite, confirmation, recovery, magic_link, email_change and
+      reauthentication. Do NOT add this file to [auth.email.template.*] in
+      supabase/config.toml; it will not be recognised.
+
+      This is a reusable template for a future application-level send through
+      the transactional provider's own API, once a provider and a verified
+      sending domain exist. The href uses Supabase's SiteURL variable name so
+      all three templates share one placeholder language — whoever sends this
+      must substitute the site origin themselves. See ./README.md.
+    -->
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="x-apple-disable-message-reformatting" />
+    <title>Welcome to UniPilot</title>
+    <!--[if mso]>
+      <xml>
+        <o:OfficeDocumentSettings xmlns:o="urn:schemas-microsoft-com:office:office">
+          <o:PixelsPerInch>96</o:PixelsPerInch>
+        </o:OfficeDocumentSettings>
+      </xml>
+    <![endif]-->
+    <style type="text/css">
+      /* Shared UniPilot email styles. Kept inline-first: everything that
+         matters is also set as an inline style attribute, because Gmail and
+         Outlook.com strip or rewrite <style> blocks. This block only carries
+         resets and the media query, which cannot be expressed inline. */
+      body,
+      table,
+      td,
+      a {
+        -webkit-text-size-adjust: 100%;
+        -ms-text-size-adjust: 100%;
+      }
+      table,
+      td {
+        mso-table-lspace: 0pt;
+        mso-table-rspace: 0pt;
+      }
+      body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      @media only screen and (max-width: 600px) {
+        .card {
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+        .pad {
+          padding-left: 24px !important;
+          padding-right: 24px !important;
+        }
+        .pad-y {
+          padding-top: 28px !important;
+          padding-bottom: 28px !important;
+        }
+        .h1 {
+          font-size: 20px !important;
+          line-height: 1.3 !important;
+        }
+      }
+    </style>
+  </head>
+  <body
+    style="margin: 0; padding: 0; background-color: #f9f9f9; color: #1a1c1c"
+  >
+    <!-- Preview text. Hidden in the body, shown in the inbox list. The filler
+         characters stop the client from pulling the heading in after it. -->
+    <div
+      style="
+        display: none;
+        font-size: 1px;
+        line-height: 1px;
+        max-height: 0;
+        max-width: 0;
+        opacity: 0;
+        overflow: hidden;
+        mso-hide: all;
+      "
+    >
+      Documents, tasks, deadlines and your assistant, together in one
+      workspace. &#8199;&#65279;&#847; &#8199;&#65279;&#847;
+      &#8199;&#65279;&#847; &#8199;&#65279;&#847; &#8199;&#65279;&#847;
+      &#8199;&#65279;&#847;
+    </div>
+
+    <table
+      role="presentation"
+      border="0"
+      cellpadding="0"
+      cellspacing="0"
+      width="100%"
+      style="background-color: #f9f9f9"
+    >
+      <tr>
+        <td align="center" style="padding: 32px 12px">
+          <!-- Content card: 600px on desktop, full width on small screens. -->
+          <table
+            role="presentation"
+            border="0"
+            cellpadding="0"
+            cellspacing="0"
+            width="600"
+            class="card"
+            style="
+              width: 600px;
+              max-width: 600px;
+              background-color: #ffffff;
+              border: 1px solid #e5e5e5;
+              border-radius: 12px;
+            "
+          >
+            <!-- Wordmark. The site mark is an icon rendered in React and there
+                 is no static logo asset, so this is a text wordmark rather
+                 than an unreliable remote image. -->
+            <tr>
+              <td
+                class="pad"
+                style="padding: 28px 40px 24px 40px"
+              >
+                <span
+                  style="
+                    font-family: 'Bricolage Grotesque', -apple-system,
+                      BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+                      Arial, sans-serif;
+                    font-size: 17px;
+                    font-weight: 700;
+                    letter-spacing: -0.01em;
+                    color: #1a1c1c;
+                  "
+                  >UniPilot</span
+                >
+              </td>
+            </tr>
+            <tr>
+              <td class="pad" style="padding: 0 40px">
+                <div
+                  style="
+                    height: 1px;
+                    line-height: 1px;
+                    font-size: 0;
+                    background-color: #e5e5e5;
+                  "
+                >
+                  &nbsp;
+                </div>
+              </td>
+            </tr>
+
+            <!-- Message -->
+            <tr>
+              <td
+                class="pad pad-y"
+                style="padding: 32px 40px 36px 40px"
+              >
+                <p
+                  style="
+                    margin: 0 0 12px 0;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                      Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 0.1em;
+                    text-transform: uppercase;
+                    color: #4c4546;
+                  "
+                >
+                  Welcome to UniPilot
+                </p>
+                <h1
+                  class="h1"
+                  style="
+                    margin: 0 0 14px 0;
+                    font-family: 'Bricolage Grotesque', -apple-system,
+                      BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+                      Arial, sans-serif;
+                    font-size: 24px;
+                    line-height: 1.25;
+                    font-weight: 600;
+                    letter-spacing: -0.015em;
+                    color: #1a1c1c;
+                    mso-line-height-rule: exactly;
+                  "
+                >
+                  Your academic workspace starts here.
+                </h1>
+                <p
+                  style="
+                    margin: 0 0 28px 0;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                      Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    font-size: 15px;
+                    line-height: 1.6;
+                    color: #4c4546;
+                    mso-line-height-rule: exactly;
+                  "
+                >
+                  UniPilot brings your documents, tasks, deadlines and your AI
+                  assistant together in one workspace, so everything for the
+                  term lives in one place.
+                </p>
+
+                <!-- Primary action. See the note at the top of this file: the
+                     site origin must be substituted by whoever sends this. -->
+                <table
+                  role="presentation"
+                  border="0"
+                  cellpadding="0"
+                  cellspacing="0"
+                >
+                  <tr>
+                    <td
+                      align="center"
+                      bgcolor="#000000"
+                      style="border-radius: 999px"
+                    >
+                      <a
+                        href="{{ .SiteURL }}/dashboard"
+                        style="
+                          display: inline-block;
+                          padding: 13px 26px;
+                          font-family: -apple-system, BlinkMacSystemFont,
+                            'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+                            sans-serif;
+                          font-size: 15px;
+                          line-height: 20px;
+                          font-weight: 600;
+                          color: #ffffff;
+                          text-decoration: none;
+                          border-radius: 999px;
+                        "
+                        >Open UniPilot &rarr;</a
+                      >
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- Plain-text fallback for clients that strip the button. -->
+                <p
+                  style="
+                    margin: 28px 0 0 0;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                      Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    font-size: 12px;
+                    line-height: 1.6;
+                    color: #4c4546;
+                  "
+                >
+                  If the button doesn&rsquo;t work, copy and paste this link
+                  into your browser:
+                </p>
+                <p
+                  style="
+                    margin: 6px 0 0 0;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                      Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    font-size: 12px;
+                    line-height: 1.6;
+                    color: #4c4546;
+                    word-break: break-all;
+                    overflow-wrap: break-word;
+                  "
+                >
+                  <a
+                    href="{{ .SiteURL }}/dashboard"
+                    style="color: #4c4546; text-decoration: underline"
+                    >{{ .SiteURL }}/dashboard</a
+                  >
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td class="pad" style="padding: 0 40px">
+                <div
+                  style="
+                    height: 1px;
+                    line-height: 1px;
+                    font-size: 0;
+                    background-color: #e5e5e5;
+                  "
+                >
+                  &nbsp;
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td class="pad" style="padding: 20px 40px 28px 40px">
+                <p
+                  style="
+                    margin: 0;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                      Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    font-size: 13px;
+                    line-height: 1.6;
+                    color: #4c4546;
+                  "
+                >
+                  You can sign in any time with the email address you used to
+                  create your account.
+                </p>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Footer -->
+          <table
+            role="presentation"
+            border="0"
+            cellpadding="0"
+            cellspacing="0"
+            width="600"
+            class="card"
+            style="width: 600px; max-width: 600px"
+          >
+            <tr>
+              <td class="pad" style="padding: 20px 40px 8px 40px">
+                <p
+                  style="
+                    margin: 0;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                      Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    font-size: 12px;
+                    line-height: 1.7;
+                    color: #4c4546;
+                  "
+                >
+                  &copy; UniPilot &middot; Built to keep college work in one
+                  place.<br />
+                  Questions?
+                  <a
+                    href="mailto:support@unipilot.app"
+                    style="color: #4c4546; text-decoration: underline"
+                    >support@unipilot.app</a
+                  >
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

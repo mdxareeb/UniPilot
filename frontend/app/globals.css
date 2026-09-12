@@ -1,0 +1,924 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+
+  /* Task 3.13 backdrop system. The page floor is no longer pure white: the
+     fixed canvas beneath every surface is a three-layer stack (base flat
+     neutral + ambient field + motif — see the bg-dotted-grid utility below),
+     and the base is the light end of the gray scale so solid white cards read
+     as raised. All other content colors are unchanged and remain monochrome. */
+  --background: #f4f4f5;
+  --foreground: #1a1c1c;
+
+  --primary: #000000;
+  --primary-foreground: #ffffff;
+
+  --secondary: #5e5e5e;
+  --secondary-foreground: #ffffff;
+
+  --card: #ffffff;
+  --card-foreground: #1a1c1c;
+
+  --muted: #f3f3f4;
+  --muted-foreground: #4c4546;
+
+  --accent: #eeeeee;
+  --accent-foreground: #1a1c1c;
+
+  --surface: #f9f9f9;
+
+  /* Translucent surfaces. The dotted grid is painted on a canvas fixed to the
+     viewport (see `bg-dotted-grid`), so a panel's own transparency is what lets
+     the dots read through it while the panel scrolls past them. Three levels,
+     and the only place in the project where transparency is defined:
+
+       glass         a panel sitting directly on the canvas
+       glass-strong  the same panel when selected — one step more opaque
+       glass-subtle  a shell nested inside a glass panel
+
+     Anything a reader has to aim at — inputs, buttons, list rows, chips — stays
+     on solid `--card`. Each level is mixed from `--muted` rather than written as
+     its own rgba, so the palette stays monochrome by construction and the whole
+     system retunes from these three lines. */
+  --surface-glass: color-mix(in srgb, var(--muted) 60%, transparent);
+  --surface-glass-strong: color-mix(in srgb, var(--muted) 80%, transparent);
+  --surface-glass-subtle: color-mix(in srgb, var(--muted) 30%, transparent);
+
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #000000;
+
+  /* Task 3.13 — the inverted-context family. An inverted surface is opaque
+     near-black; the light values the light theme already uses (foreground for
+     the fill, the old inverse-on-surface for its text) are aliased under
+     role-named tokens so primitives can express "inverted" without forking.
+     The inverted border and ring exist because a border/ring tuned for white
+     cards is invisible on near-black — an accessibility failure, not a
+     cosmetic one (DESIGN.md §Inverted). */
+  --surface-inverted: var(--foreground);
+  --surface-inverted-foreground: #f0f1f1;
+  --border-inverted: #3a3a3a;
+  --ring-inverted: #f0f1f1;
+  --surface-inverted-nested: #2e2e2f;
+
+  /* The closing CTA band. Deliberately theme-stable: one charcoal fill in both
+     themes, so the band never follows `--primary` (white in dark, black in
+     light) and never flips. The light foreground and light motif mark are
+     tuned against this one fill; nothing else may consume these tokens. */
+  --surface-cta: #1d1d21;
+  --surface-cta-foreground: #f0f1f1;
+
+  /* Task 3.13 — motif tokens. The backdrop motif's colour, mark size and
+     pitch are tokens so the motif is swappable in one place; the utility
+     below reads them, nothing else. `--motif` selects the pattern recipe
+     (dots | grid | diagonal) for the specimen's three candidates; the
+     founder's choice lands here. */
+  --motif: dots;
+  --motif-color: #d4d4d4;
+  --motif-scale: 1px;
+  --motif-spacing: 32px;
+
+  /* The motif's counterpart for the opaque CTA band. The page motif is tuned
+     to sit on the page floor, so it vanishes on the charcoal fill. This is the
+     same geometry with a low-alpha light mark tuned to the band — identical in
+     both themes because the band is — and stays strictly neutral so the band
+     still reads as one flat surface and never competes with the headline. */
+  --motif-color-cta: rgba(255, 255, 255, 0.14);
+
+  --destructive: #ba1a1a;
+  --destructive-foreground: #ffffff;
+
+  --container-max: 1200px;
+  --gutter: 20px;
+  --section-padding: 64px;
+
+  /* Motion — the only place CSS timing and easing are defined. Components
+     reference behaviour (`press-feedback`, `data-enter`) instead of
+     restating numbers, so the CSS-driven behaviours can be retimed from
+     here. The Motion layer mirrors these values in
+     `components/motion/presets.ts`. See MOTION.md. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --duration-press: 140ms;
+  --duration-hover: 160ms;
+  --duration-popover: 180ms;
+  --duration-panel: 220ms;
+  --duration-panel-exit: 150ms;
+  --duration-entrance: 400ms;
+  --duration-reveal: 380ms;
+  --duration-reveal-exit: 260ms;
+  --duration-morph: 380ms;
+  --duration-morph-content-out: 90ms;
+  --duration-morph-content-in: 140ms;
+  --duration-bar: 720ms;
+
+  --stagger-sm: 40ms;
+  --stagger-md: 60ms;
+  --stagger-lg: 80ms;
+
+  /* Elevation recipes live here rather than in `@theme` so the dark theme can
+     retune the alphas in one place; the theme block below only maps them. */
+  --elevation-subtle: 0 2px 8px rgba(0, 0, 0, 0.03);
+  --elevation-raised: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --elevation-floating: 0 8px 32px rgba(0, 0, 0, 0.08);
+  --elevation-overlay: 0 12px 40px rgba(0, 0, 0, 0.12);
+
+  /* The ambient field's two tints (see `bg-dotted-grid` below). Named by role,
+     not by value, so dark mode retunes them without touching the geometry. */
+  --field-glow: rgba(255, 255, 255, 0.55);
+  --field-wash-a: rgba(228, 228, 230, 0.35);
+  --field-wash-b: rgba(228, 228, 230, 0.28);
+}
+
+/* Dark theme. The default on first visit (the boot script in `app/layout.tsx`
+   only ever removes the class when the stored choice says "light"), and the
+   stored choice wins on return visits. The ramp mirrors the light one
+   inverted, strictly monochrome: the page floor is darkest, a card on it is a
+   step up, muted/accent/surface fill their same roles one step off. */
+.dark {
+  color-scheme: dark;
+
+  --background: #131316;
+  --foreground: #f0f1f1;
+
+  --primary: #ffffff;
+  --primary-foreground: #131315;
+
+  --secondary: #5e5e5e;
+  --secondary-foreground: #ffffff;
+
+  --card: #1d1d21;
+  --card-foreground: #f0f1f1;
+
+  --muted: #1b1b1f;
+  --muted-foreground: #9e9899;
+
+  --accent: #2a2a2e;
+  --accent-foreground: #f0f1f1;
+
+  --surface: #1a1a1e;
+
+  /* Same three levels, same construction — but the mixes lift a little more
+     off the dark floor than their light counterparts: on a dark canvas a
+     translucent panel needs the extra opacity to read as frosted rather than
+     as a flat tint, while the dots and the blur still show through. */
+  --surface-glass: color-mix(in srgb, var(--muted) 70%, transparent);
+  --surface-glass-strong: color-mix(in srgb, var(--muted) 88%, transparent);
+  --surface-glass-subtle: color-mix(in srgb, var(--muted) 40%, transparent);
+
+  --border: #2e2e33;
+  --input: #2e2e33;
+  --ring: #ffffff;
+
+  /* The inverted device flips with the theme: on a dark page the "inverted"
+     emphasis surface is the near-white, so the rationed device stays a
+     reversal of the ordinary surface in both directions. */
+  --surface-inverted: #f0f1f1;
+  --surface-inverted-foreground: #131315;
+  --border-inverted: #d0d1d1;
+  --ring-inverted: #131315;
+  --surface-inverted-nested: #dcdedf;
+
+  /* Same charcoal as the light theme — the CTA band is theme-stable, so these
+     tokens are repeated here rather than inherited, and a future retune can
+     still adjust one theme if the band ever needs it. */
+  --surface-cta: #1d1d21;
+  --surface-cta-foreground: #f0f1f1;
+
+  /* Slightly lighter dots: the motif must read through the dark floor the way
+     the #d4d4d4 dots read through the light one. */
+  --motif-color: #3c3c41;
+
+  /* The CTA band's motif mark is the same light low-alpha value as the light
+     theme's: the charcoal fill does not change, so the mark cannot either. */
+  --motif-color-cta: rgba(255, 255, 255, 0.14);
+
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+
+  /* Dark needs more alpha than light for the same perceived elevation — a
+     shadow is a darkening, and there is little room left to darken. */
+  --elevation-subtle: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --elevation-raised: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --elevation-floating: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --elevation-overlay: 0 12px 40px rgba(0, 0, 0, 0.6);
+
+  --field-glow: rgba(255, 255, 255, 0.045);
+  --field-wash-a: rgba(255, 255, 255, 0.045);
+  --field-wash-b: rgba(255, 255, 255, 0.035);
+}
+
+@media (min-width: 768px) {
+  :root {
+    --gutter: 24px;
+    --section-padding: 120px;
+  }
+}
+
+/* Task 3.13 — responsive radius step. A 32px frame radius consumes a fifth
+   of a 320px panel's width, so the frame and card steps reduce on the
+   narrowest widths. This is a token-level step, not a per-component
+   override; components keep reading the same utilities. */
+@media (max-width: 479px) {
+  :root {
+    --radius-frame: 1.5rem;
+    --radius-card: 1rem;
+  }
+}
+
+.marketing {
+  --section-padding: 48px;
+}
+
+@media (min-width: 768px) {
+  .marketing {
+    --section-padding: 80px;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-surface: var(--surface);
+
+  --color-glass: var(--surface-glass);
+  --color-glass-strong: var(--surface-glass-strong);
+  --color-glass-subtle: var(--surface-glass-subtle);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border-inverted: var(--border-inverted);
+  --color-surface-inverted: var(--surface-inverted);
+  --color-surface-inverted-foreground: var(--surface-inverted-foreground);
+  --color-surface-inverted-nested: var(--surface-inverted-nested);
+  --color-ring-inverted: var(--ring-inverted);
+
+  --color-surface-cta: var(--surface-cta);
+  --color-surface-cta-foreground: var(--surface-cta-foreground);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: "Bricolage Grotesque";
+
+  --spacing-gutter: var(--gutter);
+  --spacing-section: var(--section-padding);
+  --spacing-card: 32px;
+  --spacing-card-lg: 40px;
+
+  /* Task 3.13 — the five-step radius scale. Radius encodes hierarchy: a
+     nested surface never equals or exceeds its parent's radius, and each
+     step down reads as intentional. `base` is the Control step (8px) and
+     keeps its existing name because 90 call sites read it; `card` moves
+     16px → 20px per the amended DESIGN.md; `nested` and `frame` are new
+     (frame for shell panels/major regions, nested for surfaces inside a
+     card). Below 480px the frame and card steps reduce via the responsive
+     override after this block — a token step, not a per-component one. */
+  --radius-base: 0.5rem;
+  --radius-nested: 0.75rem;
+  --radius-card: 1.25rem;
+  --radius-frame: 2rem;
+  --radius-pill: 9999px;
+
+  /* Task 3.13 — the four-level elevation scale. Shadows are neutral and
+     low-opacity; one level per surface. The recipes live in `:root` /
+     `.dark` as `--elevation-*` so the dark theme retunes the alphas; this
+     block only maps the names the utilities use. */
+  --shadow-subtle: var(--elevation-subtle);
+  --shadow-raised: var(--elevation-raised);
+  --shadow-floating: var(--elevation-floating);
+  --shadow-overlay: var(--elevation-overlay);
+
+  /* Replaces Tailwind's stock curves with the project's own, so `ease-out`
+     and every bare `transition-*` utility already carry the right easing and
+     no component has to name a curve. */
+  --ease-out: var(--ease-out);
+  --ease-in-out: var(--ease-in-out);
+  --ease-drawer: var(--ease-drawer);
+  --default-transition-timing-function: var(--ease-out);
+  --default-transition-duration: var(--duration-hover);
+
+  /* Task 3.13 — named blur token for the glass recipe. `backdrop-blur-md`
+     (12px) was used directly at 9 call sites; the value is unchanged, only
+     named, so the glass recipe retunes from one place (DESIGN.md §Glass). */
+  --blur-glass: 12px;
+
+  --text-display: 72px;
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.045em;
+  --text-display--font-weight: 800;
+
+  /* Task 3.13 — the display-xl step and the marketing hero offset shadow.
+     The offset is em-scaled and unblurred so it holds across breakpoints;
+     it is permitted on marketing hero headings only (DESIGN.md §Display
+     Type Treatment). The inverted variant flips to the near-white for
+     hero text on an inverted surface. */
+  --text-display-xl: 96px;
+  --text-display-xl--line-height: 1.0;
+  --text-display-xl--letter-spacing: -0.05em;
+  --text-display-xl--font-weight: 800;
+
+  --text-headline-lg: 48px;
+  --text-headline-lg--line-height: 1.2;
+  --text-headline-lg--letter-spacing: -0.03em;
+  --text-headline-lg--font-weight: 700;
+
+  --text-headline-lg-mobile: 32px;
+  --text-headline-lg-mobile--line-height: 1.2;
+  --text-headline-lg-mobile--letter-spacing: -0.02em;
+  --text-headline-lg-mobile--font-weight: 700;
+
+  --text-headline-md: 24px;
+  --text-headline-md--line-height: 1.3;
+  --text-headline-md--letter-spacing: -0.01em;
+  --text-headline-md--font-weight: 600;
+
+  --text-body-lg: 18px;
+  --text-body-lg--line-height: 1.6;
+  --text-body-lg--font-weight: 400;
+
+  --text-body-md: 16px;
+  --text-body-md--line-height: 1.6;
+  --text-body-md--font-weight: 400;
+
+  --text-label-sm: 13px;
+  --text-label-sm--line-height: 1.4;
+  --text-label-sm--font-weight: 500;
+
+  --text-label-caps: 12px;
+  --text-label-caps--line-height: 1;
+  --text-label-caps--letter-spacing: 0.1em;
+  --text-label-caps--font-weight: 600;
+}
+
+@utility container-page {
+  width: 100%;
+  margin-inline: auto;
+  max-width: var(--container-max);
+  padding-inline: var(--gutter);
+}
+
+/* Task 3.13 — the composed backdrop: base + ambient field + motif.
+    A fixed, non-scrolling stack of exactly three layers, painted on the
+    `::before` that `bg-dotted-grid` has always mounted, so the whole system
+    still has one mounting point and one definition site.
+
+    1. Base — the flat neutral floor. `--background` (#f4f4f5) is the body's
+       own background; the layer below starts from it.
+    2. Ambient field — one very low-contrast, monochrome luminance variation
+       across the viewport (a radial soft-light top-left + a faint linear
+       wash). It is the sole permitted beneficiary of DESIGN.md's narrow
+       gradient amendment: neutral, monochrome, low-contrast, fixed page
+       backdrop ONLY. If you can point at where it starts and stops, it is
+       too strong — the values are tuned to stay below that threshold, and
+       the motif sits on top of the same layer.
+    3. Motif — the repeating geometric texture, swappable via `--motif`
+       (dots | grid | diagonal), its colour/scale/spacing all tokens. The
+       incumbent dot recipe is the default candidate; the specimen page
+       renders all three for the founder's choice.
+
+    Why a fixed pseudo-element and not `background-attachment: fixed`: that
+    property is unreliable on mobile Safari and Chrome Android, where it is
+    commonly ignored or repainted per frame. A fixed layer behaves identically
+    everywhere and never repaints on scroll.
+
+    `isolation: isolate` makes the element a stacking context, which is what
+    lets `z-index: -1` sit above the page's body background and below every
+    descendant — without it the layer would paint behind `body` and vanish.
+    It is deliberately not `position: relative`: that would re-parent
+    absolutely positioned descendants. Nothing between here and the viewport
+    may carry a `transform`, `filter` or `backdrop-filter`, which would make
+    this element the containing block and turn the canvas back into a
+    scrolling one.
+
+    `pointer-events: none` keeps the layer out of hit testing entirely, and
+    the canvas never animates — no scroll listener, no repaint on scroll. */
+@utility bg-dotted-grid {
+  isolation: isolate;
+
+  &::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-color: var(--background);
+    background-image:
+      radial-gradient(
+        115% 90% at 8% 0%,
+        var(--field-glow) 0%,
+        transparent 46%
+      ),
+      linear-gradient(
+        168deg,
+        var(--field-wash-a) 0%,
+        transparent 38%,
+        transparent 64%,
+        var(--field-wash-b) 100%
+      );
+  }
+
+  /* The motif layer is the `::after` of the same fixed stack — same
+     geometry rules as the field, one element later in paint order so the
+     texture composites over the field and under every surface. Recipe per
+     `--motif` token; each is a pure CSS pattern (no asset, no SVG, no
+     repaint) so swapping is one token change in :root. The `--motif`
+     selector is attribute-driven so the specimen (and, after the founder's
+     choice, any mounting root) can flip candidates live. */
+  &::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-repeat: repeat;
+    background-image: radial-gradient(
+      var(--motif-color) var(--motif-scale),
+      transparent var(--motif-scale)
+    );
+    background-size: var(--motif-spacing) var(--motif-spacing);
+  }
+
+  &[data-motif="grid"]::after {
+    background-image:
+      linear-gradient(to right, var(--motif-color) var(--motif-scale), transparent var(--motif-scale)),
+      linear-gradient(to bottom, var(--motif-color) var(--motif-scale), transparent var(--motif-scale));
+    background-size: var(--motif-spacing) var(--motif-spacing);
+  }
+
+  /* Third candidate: a very fine diagonal hairline. Sparser than the grid —
+     the eye crosses it less often — and it interacts with rounded panels by
+     giving them a directional shear at the corners. Presented neutrally on
+     the specimen; the founder chooses. */
+  &[data-motif="diagonal"]::after {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent 0,
+      transparent calc(var(--motif-spacing) - var(--motif-scale)),
+      var(--motif-color) calc(var(--motif-spacing) - var(--motif-scale)),
+      var(--motif-color) var(--motif-spacing)
+    );
+    background-size: auto;
+  }
+}
+
+/* The same motif, painted on the opaque closing CTA band instead of the fixed
+   page canvas. The band is a theme-stable charcoal (`--surface-cta`), so the
+   global `bg-dotted-grid::after` cannot show through it — and mounting the grid
+   utility on the band would stack a second fixed field+motif on top of the
+   first. Instead this paints the motif as the band's own `background-image`
+   over its own `--surface-cta` fill: no second canvas, no extra DOM node, no
+   z-index work, and nothing for the motif to block.
+
+   It mirrors `bg-dotted-grid`'s `::after` recipes exactly — the dots are the
+   default, and grid/diagonal are the same `data-motif`-keyed alternatives —
+   but reads `--motif-color-cta` for its mark colour and the same
+   `--motif-scale`/`--motif-spacing` for its geometry, so density and scale
+   match the page motif. The band and its mark are the same in both themes.
+   Static: no animation, so reduced motion needs no special case. */
+@utility bg-dotted-cta {
+  background-color: var(--surface-cta);
+  background-repeat: repeat;
+  background-image: radial-gradient(
+    var(--motif-color-cta) var(--motif-scale),
+    transparent var(--motif-scale)
+  );
+  background-size: var(--motif-spacing) var(--motif-spacing);
+
+  &[data-motif="grid"] {
+    background-image:
+      linear-gradient(to right, var(--motif-color-cta) var(--motif-scale), transparent var(--motif-scale)),
+      linear-gradient(to bottom, var(--motif-color-cta) var(--motif-scale), transparent var(--motif-scale));
+    background-size: var(--motif-spacing) var(--motif-spacing);
+  }
+
+  &[data-motif="diagonal"] {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent 0,
+      transparent calc(var(--motif-spacing) - var(--motif-scale)),
+      var(--motif-color-cta) calc(var(--motif-spacing) - var(--motif-scale)),
+      var(--motif-color-cta) var(--motif-spacing)
+    );
+    background-size: auto;
+  }
+}
+
+/* Task 3.12: the "Bitcount Single" @font-face and `font-bitcount` utility were
+   a fourth family outside DESIGN.md's closed three-font set (INTRUDER). The
+   hero span that used them now renders Bricolage Grotesque — the authorized
+   family for major-heading text, which the span is part of. The face, its
+   utility and the ttf asset are all removed; DESIGN.md now enumerates this
+   vector as prohibited. */
+
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/fonts/BricolageGrotesque-VariableFont_opsz,wdth,wght.ttf")
+    format("truetype");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-heading), var(--font-geist-sans), sans-serif;
+  }
+
+  footer h1,
+  footer h2,
+  footer h3 {
+    font-family: var(--font-geist-sans), sans-serif;
+  }
+}
+
+/* Scrolling is native. No scroll engine intercepts wheel, touch or keyboard
+   input — the page moves exactly as the browser moves it. The only easing is
+   `scroll-behavior: smooth`, which the browser applies to *programmatic*
+   scroll alone (anchor jumps, `scrollTo`), never to manual input, so following
+   a `#fragment` link glides while the wheel stays immediate. Under `reduce`
+   even that glide is dropped. `scroll-margin-top` keeps anchored headings
+   clear of sticky headers. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+[id] {
+  scroll-margin-top: 6rem;
+}
+
+#top {
+  scroll-margin-top: 0;
+}
+
+/* Task 3.12: the `.marketing` wrapper previously set Bricolage as the default
+   family for the entire marketing subtree, which rendered body copy, control
+   labels and preview text in the heading font — a WRONG_ROLE violation of the
+   three-font split (body is Geist's role). Headings still get Bricolage from
+   the h1–h3 rule above, which is the only place DESIGN.md assigns it. The
+   `.marketing` class itself is kept for its section-padding override (above)
+   and as a scope marker; it sets no font-family. The footer h1–h3 Geist
+   exception is kept: footer headings are subordinate, not major. */
+
+/* Task 3.12: removed with Bitcount Single — see the note above. */
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* ========================================================================
+   MOTION
+   ------------------------------------------------------------------------
+   Motion.dev (`motion/react`) is the primary animation library. Everything
+   that needs JS — scroll reveals, popups, drawers, the modal, route
+   transitions, onboarding steps — lives in `components/motion/` as shared
+   primitives (MotionReveal, MotionBar, MotionPopover, MotionMenu,
+   RouteTransition) driven by the shared vocabulary in
+   `components/motion/presets.ts`. See MOTION.md.
+
+   What stays CSS-only here, and why:
+
+     press-feedback      pressable controls (Button, IconButton) — pure
+                         :active state, no JS needed
+     hover-lift          cards that already respond to hover — pure :hover
+     action-arrow        inline "read more" links with a trailing arrow
+     icon-turn           disclosure chevrons/pluses
+     [data-enter]        above-the-fold entrance, no JS involved — a keyframe
+                         that runs before hydration, so nothing above the
+                         fold ever depends on a script to become visible
+     [data-collapsible]  disclosure panels (FAQ answers, auth email panel) —
+                         grid-template-rows height animation, interruptible
+
+   Stagger position for the CSS behaviours comes from `--motion-index`, set
+   inline via `motionIndex()` in components/motion/stagger.ts.
+
+   Reduced motion: every rule that translates, scales or clips lives inside
+   `prefers-reduced-motion: no-preference`. Under `reduce` there is no
+   hidden state to recover from — content renders in its final position,
+   panels open and close instantly, and colour/opacity feedback is kept.
+   The Motion layer mirrors this via `MotionConfig reducedMotion="user"`.
+   ======================================================================== */
+
+/* --- Pressable controls (§ button press feedback) --------------------- */
+@utility press-feedback {
+  transition-property: transform, color, background-color, border-color,
+    opacity, box-shadow;
+  transition-duration: var(--duration-hover);
+  transition-timing-function: var(--ease-out);
+
+  @media (prefers-reduced-motion: no-preference) {
+    &:active:not(:disabled) {
+      transform: scale(0.97);
+      transition-duration: var(--duration-press);
+    }
+  }
+}
+
+/* --- Cards that respond to hover ------------------------------------- */
+@utility hover-lift {
+  transition-property: transform, border-color, background-color, box-shadow;
+  transition-duration: var(--duration-hover);
+  transition-timing-function: var(--ease-out);
+
+  /* Gated on a real pointer: on touch, `:hover` sticks after a tap and the
+     card would stay lifted until something else is touched. */
+  @media (hover: hover) and (pointer: fine) {
+    @media (prefers-reduced-motion: no-preference) {
+      &:hover {
+        transform: translateY(-2px);
+      }
+    }
+  }
+}
+
+/* --- Inline navigation actions ---------------------------------------- */
+@utility action-arrow {
+  /* Owns both halves of the interaction so no caller needs `transition-colors`
+     next to it: the label changes colour, the arrow nudges forward.
+     `text-decoration-color` is listed because some of these links show their
+     hover on the underline rather than the text (LearnMoreLink). */
+  transition-property: color, text-decoration-color;
+  transition-duration: var(--duration-hover);
+  transition-timing-function: var(--ease-out);
+
+  & > svg {
+    transition-property: transform;
+    transition-duration: var(--duration-hover);
+    transition-timing-function: var(--ease-out);
+  }
+
+  /* Same pointer gate as `hover-lift`, for the same reason. */
+  @media (hover: hover) and (pointer: fine) {
+    @media (prefers-reduced-motion: no-preference) {
+      &:hover > svg {
+        transform: translateX(3px);
+      }
+    }
+  }
+}
+
+/* --- Disclosure icons ------------------------------------------------- */
+@utility icon-turn {
+  /* `rotate` first, deliberately: Tailwind v4's `rotate-*` utilities compile to
+     the standalone `rotate` property, not `transform`. Transitioning only
+     `transform` here would leave the chevron snapping. `transform` is kept for
+     a caller that rotates the long way round. */
+  transition-property: rotate, transform;
+  transition-duration: var(--duration-popover);
+  transition-timing-function: var(--ease-out);
+
+  /* The rotation itself is the state — under `reduce` it lands immediately
+     rather than being animated away. */
+  @media (prefers-reduced-motion: reduce) {
+    transition-duration: 0ms;
+  }
+}
+
+/* --- The assistant launcher's shared sparkle ink ---------------------- */
+@utility sparkle-ink {
+  /* The mark swaps its ink with the surface arriving beneath it: the colour
+     change waits out the outgoing content leg and then lands on the
+     content-in duration, so the glyph is never invisible against either
+     surface mid-morph. The values resolve live from the tokens, which is also
+     what lets a theme switch re-colour the sparkle without a re-measure. */
+  transition-property: color;
+  transition-duration: var(--duration-morph-content-in);
+  transition-timing-function: var(--ease-out);
+  transition-delay: var(--duration-morph-content-out);
+
+  @media (prefers-reduced-motion: reduce) {
+    transition-duration: 0ms;
+    transition-delay: 0ms;
+  }
+}
+
+/* --- Entrance: first paint, above the fold ---------------------------- */
+/* A keyframe rather than a transition because a page entrance is never
+   interrupted, and because it must run without waiting for hydration —
+   nothing above the fold should depend on a script to become visible.
+
+   Four directions so a page entry is not one repeated fade: the default
+   (no value) rises 8px; `scale` adds depth for the card that anchors a
+   page; `left`/`right` slide 10px in from the side for compact rows that
+   read as a pair. All four share the duration and the `--motion-index`
+   stagger ladder below. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes motion-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes motion-enter-scale {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes motion-enter-left {
+    from {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes motion-enter-right {
+    from {
+      opacity: 0;
+      transform: translateX(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  [data-enter] {
+    animation: motion-enter var(--duration-entrance) var(--ease-out) both;
+    animation-delay: calc(var(--motion-index, 0) * var(--stagger-md));
+  }
+
+  [data-enter="scale"] {
+    animation-name: motion-enter-scale;
+  }
+
+  [data-enter="left"] {
+    animation-name: motion-enter-left;
+  }
+
+  [data-enter="right"] {
+    animation-name: motion-enter-right;
+  }
+}
+
+/* --- Disclosure panels ------------------------------------------------ */
+/* `grid-template-rows: 0fr → 1fr` is the one place this system animates a
+   layout property. A disclosure has to reserve its own height or the content
+   below it jumps, and clip-path cannot do that. It is one grid row on one
+   element, it is interruptible, and it is never scroll-driven.
+
+   `visibility` keeps the closed panel out of the tab order and the
+   accessibility tree. It is deliberately in the transition list: CSS holds
+   `visible` for the whole collapse and only applies `hidden` at the end, so
+   the content does not vanish before it has finished closing. */
+[data-collapsible] {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+}
+
+[data-collapsible] > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+[data-collapsible][data-open="true"] {
+  grid-template-rows: 1fr;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-collapsible] {
+    transition:
+      grid-template-rows var(--duration-panel-exit) var(--ease-out),
+      visibility var(--duration-panel-exit);
+  }
+
+  [data-collapsible] > * {
+    opacity: 0;
+    transition: opacity var(--duration-panel-exit) var(--ease-out);
+  }
+
+  /* Opt-in scale for panels that read as a surface appearing rather than an
+     answer unfolding. Text-only panels stay unscaled — scaling type mid
+     transition just makes it look soft. */
+  [data-collapsible="scale"] > * {
+    transform: scale(0.97);
+    transition:
+      opacity var(--duration-panel-exit) var(--ease-out),
+      transform var(--duration-panel-exit) var(--ease-out);
+  }
+
+  /* Opening is the slower half; closing gets out of the way. */
+  [data-collapsible][data-open="true"],
+  [data-collapsible][data-open="true"] > * {
+    transition-duration: var(--duration-panel);
+  }
+
+  [data-collapsible][data-open="true"] > * {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --- Marquee ---------------------------------------------------------- */
+/* The "What's inside" tool rows. A constant-speed horizontal loop built
+   purely in CSS: a track that is wider than its viewport, translating by
+   exactly one copy of its set (`-50%` of a track that holds the set twice)
+   and starting over — which is what makes the wrap seamless, gapless and
+   free of any JS clock. The duplicated set is `inert` decoration: it is
+   painted so the loop has something to reveal, but it is out of the tab
+   order, the accessibility tree and pointer targeting.
+
+   Pausing: hovering the row pauses it (gated behind a fine pointer, the
+   same gate as `hover-lift` — on touch, `:hover` sticks after a tap and the
+   row would stay paused), and so does focus-within, which is the keyboard
+   half of the same contract: a link in the row under focus must not scroll
+   away from the user.
+
+   Reduced motion: the animation property lives inside
+   `prefers-reduced-motion: no-preference`, so under `reduce` the rows are
+   simply their own static content — the duplicated set drops out and the
+   viewport turns into an ordinary horizontally scrollable list. Nothing
+   depends on an observer or a script to be readable. */
+@utility marquee-viewport {
+  overflow: hidden;
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 4rem,
+    black calc(100% - 4rem),
+    transparent
+  );
+
+  &:hover .marquee-track,
+  &:focus-within .marquee-track {
+    animation-play-state: paused;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    overflow-x: auto;
+
+    /* The duplicated set is only there so the loop has something to reveal;
+       a static scrollable list has no loop to feed, so it drops out and the
+       row is exactly its own content. */
+    & .marquee-ghost {
+      display: none;
+    }
+  }
+}
+
+@utility marquee-track {
+  display: flex;
+  width: max-content;
+
+  @media (prefers-reduced-motion: no-preference) {
+    animation: marquee-scroll var(--marquee-duration, 80s) linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes marquee-scroll {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+}

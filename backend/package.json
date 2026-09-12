@@ -1,0 +1,23 @@
+{
+  "name": "@unipilot/backend",
+  "private": true,
+  "scripts": {
+    "db:reset": "wsl -d kali-linux -u root -e supabase db reset",
+    "db:lint": "wsl -d kali-linux -u root -e supabase db lint",
+    "db:types": "wsl -d kali-linux -u root -e sh supabase/ops/generate-types.sh",
+    "db:check-types": "wsl -d kali-linux -u root -e sh supabase/ops/check-types.sh",
+    "seed:qa": "node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs",
+    "worker": "node --env-file=../frontend/.env.development.local worker/run.mjs",
+    "worker:once": "node --env-file=../frontend/.env.development.local worker/run.mjs --once",
+    "benchmark": "node worker/benchmark.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "mammoth": "^1.12.2",
+    "pdfjs-dist": "^6.3.289"
+  },
+  "devDependencies": {
+    "fflate": "^0.8.3",
+    "pdf-lib": "^1.17.1"
+  }
+}
