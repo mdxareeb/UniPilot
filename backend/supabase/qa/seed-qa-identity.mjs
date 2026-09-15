@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Task 20.10 / 20.9 — Seeds the LOCAL Supabase QA identities.
+ * Task 20.10 / 20.9 â€” Seeds the LOCAL Supabase QA identities.
  *
  * Two identities, both created the same sanctioned way:
  *
@@ -13,7 +13,7 @@
  * `complete_onboarding` RPC with the answers the onboarding spec asserts. When
  * QA1 is already complete the seed writes nothing. QA2 exists only so
  * `frontend/tests/qa/rls-isolation.spec.ts` can prove two real users cannot see
- * each other's rows; QA2 stays without application data at rest — the
+ * each other's rows; QA2 stays without application data at rest â€” the
  * isolation spec creates the rows it needs and deletes them again. The
  * onboarding spec (`frontend/tests/qa/onboarding.spec.ts`) still resets QA1
  * itself before proving the flow end to end, so seed pre-onboarding is
@@ -22,7 +22,7 @@
  * This script is the only sanctioned way to create either identity. It is
  * versioned, re-runnable and idempotent: running it twice must not error and
  * must not create duplicates. It replaces the founder account as the
- * authenticated session for QA — the founder account is never used, read
+ * authenticated session for QA â€” the founder account is never used, read
  * or modified by this script.
  *
  * Usage (run from backend/, with the local stack running):
@@ -38,7 +38,7 @@
  * Full environment reset (destroys the identities along with everything else):
  *
  *   wsl -d kali-linux -u root -e sh -c \
- *     "cd /mnt/c/Users/moham/OneDrive/Desktop/Projects/unipilot/unipilot/backend && supabase stop --no-backup && supabase start"
+ *     "cd /mnt/c/<checkout>/backend && supabase stop --no-backup && supabase start"
  *   ...then re-run this seed.
  *
  * Credentials: each password is read from its environment variable
@@ -77,7 +77,7 @@ const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 // ---------------------------------------------------------------------------
-// Guard 1 — refuse anything that is not the local stack. This seed must never
+// Guard 1 â€” refuse anything that is not the local stack. This seed must never
 // run against the hosted (production) project. The check is on the resolved
 // URL, so "which environment" is proven per run and never assumed.
 // ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ if (!isLocal) {
 }
 
 // ---------------------------------------------------------------------------
-// Guard 2 — every required secret must be present in the environment.
+// Guard 2 â€” every required secret must be present in the environment.
 // ---------------------------------------------------------------------------
 if (!serviceRoleKey) {
   console.error(
@@ -243,7 +243,7 @@ for (const identity of IDENTITIES) {
   if (existing) {
     const ensured = await ensureConfirmed(existing);
     console.log(
-      `${identity.email}: already present — no duplicate created (${describe(ensured)})`,
+      `${identity.email}: already present â€” no duplicate created (${describe(ensured)})`,
     );
   } else {
     const created = await createUser(identity);
@@ -252,7 +252,7 @@ for (const identity of IDENTITIES) {
 }
 
 // ---------------------------------------------------------------------------
-// QA1 onboarding fixture — leave QA1 in the standard onboarded state the
+// QA1 onboarding fixture â€” leave QA1 in the standard onboarded state the
 // workspace specs and manual QA expect. QA2 is deliberately never onboarded:
 // the onboarding spec needs an incomplete second user for skip and isolation.
 // When QA1 is already complete the seed must make no writes, so re-running it
@@ -261,7 +261,7 @@ for (const identity of IDENTITIES) {
 
 const QA1 = IDENTITIES[0];
 
-/** Real password grant — the same path the browser login uses. */
+/** Real password grant â€” the same path the browser login uses. */
 async function signInWithPassword(identity) {
   const response = await fetch(
     `${target.origin}/auth/v1/token?grant_type=password`,
@@ -342,8 +342,8 @@ await ensureQa1Onboarded(qa1Session.user.id, qa1Session.access_token);
 console.log("");
 console.log("QA identities ready:");
 console.log(
-  `  ${IDENTITIES[0].email}  "${IDENTITIES[0].displayName}" — onboarded (standard fixture)`,
+  `  ${IDENTITIES[0].email}  "${IDENTITIES[0].displayName}" â€” onboarded (standard fixture)`,
 );
 console.log(
-  `  ${IDENTITIES[1].email}  "${IDENTITIES[1].displayName}" — no application data`,
+  `  ${IDENTITIES[1].email}  "${IDENTITIES[1].displayName}" â€” no application data`,
 );

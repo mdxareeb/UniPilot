@@ -1,10 +1,10 @@
-# Presenton fork + re-theme — Implementation Plan
+# Presenton fork + re-theme â€” Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fork Presenton's Next.js frontend into a git-ignored `presenton-ui/`, wire it to the existing Presenton engine, re-theme it to UniPilot's design system + Motion, and surface it from UniPilot — without touching UniPilot's app behaviour or committing anything to UniPilot's git.
+**Goal:** Fork Presenton's Next.js frontend into a git-ignored `presenton-ui/`, wire it to the existing Presenton engine, re-theme it to UniPilot's design system + Motion, and surface it from UniPilot â€” without touching UniPilot's app behaviour or committing anything to UniPilot's git.
 
-**Architecture:** The fork is a copy of `presenton-main/servers/nextjs` with its own git repo at `presenton-ui/`. It runs on `:5002` (env `PORT`, default 5002); all engine traffic goes through its existing Next middleware (`proxy.ts`) using `FAST_API_INTERNAL_URL` (fed from `PRESENTON_ENGINE_URL`, default `http://localhost:5001`) — no next.config rewrites, no hardcoded URLs. Theming is token-first (HSL CSS vars in `app/globals.css` + `tailwind.config.ts`), then a chrome-only class sweep; Motion is ported as a pinned copy. UniPilot gains one env-driven edit-deck URL with an honest engine fallback.
+**Architecture:** The fork is a copy of `presenton-main/servers/nextjs` with its own git repo at `presenton-ui/`. It runs on `:5002` (env `PORT`, default 5002); all engine traffic goes through its existing Next middleware (`proxy.ts`) using `FAST_API_INTERNAL_URL` (fed from `PRESENTON_ENGINE_URL`, default `http://localhost:5001`) â€” no next.config rewrites, no hardcoded URLs. Theming is token-first (HSL CSS vars in `app/globals.css` + `tailwind.config.ts`), then a chrome-only class sweep; Motion is ported as a pinned copy. UniPilot gains one env-driven edit-deck URL with an honest engine fallback.
 
 **Tech Stack:** Next 16.2.6 / React 19.2.6 / Tailwind v3.4 / Radix / shadcn-style HSL tokens (fork); Motion (motion.dev) for the ported primitives; Playwright MCP (browser-qa skill) for evidence; PowerShell on Windows.
 
@@ -15,11 +15,11 @@
 - **UniPilot repo: never commit.** Only the fork's own repo gets commits (approved for divergence tracking). Nothing in the fork is ever added to UniPilot's git: `.gitignore` gains `/presenton-ui/`.
 - **Env-driven runtime:** `PRESENTON_ENGINE_URL` (default `http://localhost:5001`) is the single engine knob; `PORT` (default `5002`) is the fork port. Never hardcode either in `next.config.mjs` (it stays untouched).
 - **Chrome-vs-slide-content rule:** never restyle deck/slide content or its fonts/colors. Slide/template rendering components keep their deck-driven styles. Scope every sweep edit to app chrome.
-- **No new fonts/colors:** only Bricolage Grotesque, Geist, Geist Mono; only UniPilot's monochrome tokens (spec §5.1).
+- **No new fonts/colors:** only Bricolage Grotesque, Geist, Geist Mono; only UniPilot's monochrome tokens (spec Â§5.1).
 - **Evidence per phase:** real Chromium via Playwright MCP (or a real-Chromium probe if MCP is down); screenshots to `frontend/screenshots/<phase>-<surface>-<theme>-<width>.png`; console errors/warnings and failed requests inspected; responsive pass at 375/768/1280.
 - **STOP rules:** if a task needs the founder (password, a manual service start, a provider/rate-limit decision, or a blocking ambiguity), stop and state exactly what to do. Never guess.
 - **OneDrive contingency (pre-authorized):** if install/dev in OneDrive is painfully slow, move the fork to `C:\dev\presenton-ui`, update `PRESENTON_UI_URL`/`PRESENTON_ENGINE_URL` references, and record the chosen path in `DIVERGENCE.md`.
-- **Legal/marketing pages are not rebranded** — chrome + page titles only.
+- **Legal/marketing pages are not rebranded** â€” chrome + page titles only.
 - Verification is browser/command-based; the fork has no unit-test harness (upstream tests are `node --test` and stay untouched).
 
 ---
@@ -28,34 +28,34 @@
 
 **UniPilot repo (working tree only, uncommitted):**
 
-- `.gitignore` — add `/presenton-ui/`
-- `frontend/lib/integrations/presentonConfig.ts` — add `presentonUiUrl()`
-- `frontend/lib/integrations/presenton.ts` — add `resolveEditorUrl()`, keep `presentonEditUrl()` as the engine fallback
-- `frontend/app/(app)/tools/presentation/page.tsx`, `[id]/edit/page.tsx` — use `resolveEditorUrl()`
-- `frontend/.env.example`, `frontend/.env.development.local.example` — document `PRESENTON_UI_URL`
-- `docs/integrations/presenton.md` — §3.6 update
-- `scripts/start-env.mjs` — optional fork service (never fails the run)
-- `docs/superpowers/plans/2026-09-15-presenton-fork-theme.md` — this plan
+- `.gitignore` â€” add `/presenton-ui/`
+- `frontend/lib/integrations/presentonConfig.ts` â€” add `presentonUiUrl()`
+- `frontend/lib/integrations/presenton.ts` â€” add `resolveEditorUrl()`, keep `presentonEditUrl()` as the engine fallback
+- `frontend/app/(app)/tools/presentation/page.tsx`, `[id]/edit/page.tsx` â€” use `resolveEditorUrl()`
+- `frontend/.env.example`, `frontend/.env.development.local.example` â€” document `PRESENTON_UI_URL`
+- `docs/integrations/presenton.md` â€” Â§3.6 update
+- `scripts/start-env.mjs` â€” optional fork service (never fails the run)
+- `docs/superpowers/plans/2026-09-15-presenton-fork-theme.md` â€” this plan
 
 **Fork (`presenton-ui/`, git-ignored, own repo):**
 
-- `presenton-ui/**` — upstream snapshot copy
-- `presenton-ui/.gitignore` — node_modules, `.next-build`, env files, cypress artifacts
-- `presenton-ui/scripts/dev.mjs` — PORT/engine env defaults + spawn Next
-- `presenton-ui/package.json` — `"dev": "node scripts/dev.mjs"`, `motion` dependency
-- `presenton-ui/app/globals.css` — fonts, tokens, motion CSS behaviours
-- `presenton-ui/tailwind.config.ts` — colors/radius/shadow/fontSize/fonts
-- `presenton-ui/app/layout.tsx` — MotionProvider
-- `presenton-ui/components/motion/*` — pinned port of UniPilot's primitives
-- `presenton-ui/components/ui/*` — re-themed primitives
+- `presenton-ui/**` â€” upstream snapshot copy
+- `presenton-ui/.gitignore` â€” node_modules, `.next-build`, env files, cypress artifacts
+- `presenton-ui/scripts/dev.mjs` â€” PORT/engine env defaults + spawn Next
+- `presenton-ui/package.json` â€” `"dev": "node scripts/dev.mjs"`, `motion` dependency
+- `presenton-ui/app/globals.css` â€” fonts, tokens, motion CSS behaviours
+- `presenton-ui/tailwind.config.ts` â€” colors/radius/shadow/fontSize/fonts
+- `presenton-ui/app/layout.tsx` â€” MotionProvider
+- `presenton-ui/components/motion/*` â€” pinned port of UniPilot's primitives
+- `presenton-ui/components/ui/*` â€” re-themed primitives
 - Screens: `app/(presentation-generator)/upload|outline|presentation|templates...`, `(dashboard)/*`
-- `presenton-ui/utils/mixpanel.ts` — analytics off
-- `presenton-ui/app/(presentation-generator)/presentation/components/PresentationHeader.tsx` — export delegates to the engine
-- `presenton-ui/DIVERGENCE.md` — snapshot, baseline hash, changed files, update procedure
+- `presenton-ui/utils/mixpanel.ts` â€” analytics off
+- `presenton-ui/app/(presentation-generator)/presentation/components/PresentationHeader.tsx` â€” export delegates to the engine
+- `presenton-ui/DIVERGENCE.md` â€” snapshot, baseline hash, changed files, update procedure
 
 ---
 
-## P0 — Fork, wiring, baseline (no styling)
+## P0 â€” Fork, wiring, baseline (no styling)
 
 ### Task P0.1: Snapshot the fork, ignore it, init its repo
 
@@ -95,7 +95,7 @@ cypress/downloads/
 Append after the `/presenton-main/` block:
 
 ```gitignore
-# The forked Presenton UI (re-themed, git-ignored, own repo) — Task 31.x.
+# The forked Presenton UI (re-themed, git-ignored, own repo) â€” Task 31.x.
 /presenton-ui/
 ```
 
@@ -130,7 +130,7 @@ Copy the `rev-parse HEAD` output into a scratch note; it goes into `DIVERGENCE.m
 - Run: `npm install` in `presenton-ui/`
 
 **Interfaces:**
-- Produces: `npm run dev` in the fork → Next on `PORT` (default 5002) with `FAST_API_INTERNAL_URL` derived from `PRESENTON_ENGINE_URL`.
+- Produces: `npm run dev` in the fork â†’ Next on `PORT` (default 5002) with `FAST_API_INTERNAL_URL` derived from `PRESENTON_ENGINE_URL`.
 - Consumes: nothing.
 
 - [ ] **Step 1: Write `presenton-ui/scripts/dev.mjs`**
@@ -186,19 +186,19 @@ npm install --prefix presenton-ui
 Remove-Item Env:\CYPRESS_INSTALL_BINARY
 ```
 
-Time budget: if this exceeds ~10 minutes or the dev server is painfully slow afterwards, apply the OneDrive contingency (move to `C:\dev\presenton-ui`, move the nested `.git`, update references, record in `DIVERGENCE.md`) — pre-authorized by the founder. If install fails for another reason, STOP and report the exact error.
+Time budget: if this exceeds ~10 minutes or the dev server is painfully slow afterwards, apply the OneDrive contingency (move to `C:\dev\presenton-ui`, move the nested `.git`, update references, record in `DIVERGENCE.md`) â€” pre-authorized by the founder. If install fails for another reason, STOP and report the exact error.
 
 - [ ] **Step 5: Start the fork and verify the port + engine proxy**
 
 ```powershell
-Start-Process npm.cmd -ArgumentList "run","dev" -WorkingDirectory "presenton-ui" -RedirectStandardOutput "C:\Users\moham\AppData\Local\Temp\opencode\presenton-ui-dev.log" -RedirectStandardError "C:\Users\moham\AppData\Local\Temp\opencode\presenton-ui-dev.err.log" -WindowStyle Hidden
+Start-Process npm.cmd -ArgumentList "run","dev" -WorkingDirectory "presenton-ui" -RedirectStandardOutput "<temp>\presenton-ui-dev.log" -RedirectStandardError "<temp>\presenton-ui-dev.err.log" -WindowStyle Hidden
 Start-Sleep -Seconds 25
 Invoke-WebRequest http://localhost:5002 -UseBasicParsing -TimeoutSec 10 | Select-Object StatusCode
 Invoke-WebRequest "http://localhost:5002/api/v1/auth/status" -UseBasicParsing -TimeoutSec 10 | Select-Object -ExpandProperty Content
 Invoke-WebRequest "http://localhost:5002/api/v1/ppt/template/all?default=true&page=1&page_size=1" -UseBasicParsing -TimeoutSec 15 | Select-Object -ExpandProperty Content
 ```
 
-Expected: fork 200; auth status JSON from the engine (electron/admin); template list JSON with an `items` array. If the engine proxy fails, check `FAST_API_INTERNAL_URL` in the dev log (values only — never print secrets) and STOP with the exact log line if unresolved.
+Expected: fork 200; auth status JSON from the engine (electron/admin); template list JSON with an `items` array. If the engine proxy fails, check `FAST_API_INTERNAL_URL` in the dev log (values only â€” never print secrets) and STOP with the exact log line if unresolved.
 
 - [ ] **Step 6: Commit in the fork**
 
@@ -213,7 +213,7 @@ git -C presenton-ui commit -m "wire env-driven dev runtime (PORT/PRESENTON_ENGIN
 - Modify: `presenton-ui/app/(presentation-generator)/presentation/components/PresentationHeader.tsx`
 
 **Interfaces:**
-- Consumes: engine endpoint `POST /api/v1/ppt/presentation/{id}/export` body `{export_as}` → `{presentation_id, path, edit_path}` (path may be an absolute filesystem path or an `/app_data/...` URL).
+- Consumes: engine endpoint `POST /api/v1/ppt/presentation/{id}/export` body `{export_as}` â†’ `{presentation_id, path, edit_path}` (path may be an absolute filesystem path or an `/app_data/...` URL).
 - Produces: the browser branch of both export handlers fetches the engine through the fork proxy and downloads via the existing `downloadLink`.
 
 - [ ] **Step 1: Add the path normalizer**
@@ -230,7 +230,7 @@ function normalizeEngineExportPath(rawPath: string): string {
 
 - [ ] **Step 2: Rewire the PPTX browser branch**
 
-Replace the `fetch("/api/export-presentation", ...)` block in `handleExportPptx` (currently lines ~253–271) with:
+Replace the `fetch("/api/export-presentation", ...)` block in `handleExportPptx` (currently lines ~253â€“271) with:
 
 ```ts
 const response = await fetch(
@@ -256,7 +256,7 @@ downloadLink(normalizeEngineExportPath(rawPptxPath), safePptxFileName);
 
 - [ ] **Step 3: Rewire the PDF browser branch**
 
-Replace the `fetch("/api/export-presentation", ...)` block in `handleExportPdf` (currently lines ~335–352) with:
+Replace the `fetch("/api/export-presentation", ...)` block in `handleExportPdf` (currently lines ~335â€“352) with:
 
 ```ts
 const response = await fetch(
@@ -306,11 +306,11 @@ git -C presenton-ui commit -m "export via the engine's export endpoint (bundled 
 
 - [ ] **Step 1: Confirm MCP tooling**
 
-Run `opencode mcp list`; expect `✓ playwright connected`. If not, STOP and report (fallback: a real-Chromium probe script under `frontend/.playwright/` — say so in the report).
+Run `opencode mcp list`; expect `âœ“ playwright connected`. If not, STOP and report (fallback: a real-Chromium probe script under `frontend/.playwright/` â€” say so in the report).
 
-- [ ] **Step 2: Smoke each route (1280×720, dark)**
+- [ ] **Step 2: Smoke each route (1280Ã—720, dark)**
 
-For each route: `browser_navigate` → `browser_snapshot` → `browser_take_screenshot` (`frontend/screenshots/p0-<name>-dark-1280.png`) → `browser_console_messages level:error` and `level:warning` → `browser_network_requests` (flag failed/404 requests).
+For each route: `browser_navigate` â†’ `browser_snapshot` â†’ `browser_take_screenshot` (`frontend/screenshots/p0-<name>-dark-1280.png`) â†’ `browser_console_messages level:error` and `level:warning` â†’ `browser_network_requests` (flag failed/404 requests).
 
 Routes and expected states:
 
@@ -319,27 +319,27 @@ Routes and expected states:
 | `/` | redirects to `/upload` (configured engine) |
 | `/upload` | generate wizard renders |
 | `/outline` | empty-state ("No Presentation Found") without `id` |
-| `/presentation` | empty/error state without `id` (or dashboard redirect — record actual) |
+| `/presentation` | empty/error state without `id` (or dashboard redirect â€” record actual) |
 | `/dashboard` | deck list renders (may be empty) |
 | `/templates` | built-in template cards render |
 | `/template-preview?templateV2Id=general` | preview renders |
-| `/settings` | settings page renders (admin or user variant — record) |
+| `/settings` | settings page renders (admin or user variant â€” record) |
 | `/custom-template` | wizard step 1 renders |
 | `/documents-preview` | legacy content page renders |
 
 - [ ] **Step 3: If the provider wizard gate appears**
 
-Presenton validates provider settings and redirects app routes to its setup wizard when the model is missing. If any route lands on the wizard: STOP with the plain instruction — *"Open http://127.0.0.1:5001, complete/fix the provider settings (model field), then tell me to continue."* Do not guess or modify the engine's settings.
+Presenton validates provider settings and redirects app routes to its setup wizard when the model is missing. If any route lands on the wizard: STOP with the plain instruction â€” *"Open http://127.0.0.1:5001, complete/fix the provider settings (model field), then tell me to continue."* Do not guess or modify the engine's settings.
 
 - [ ] **Step 4: Responsive spot-check**
 
-`browser_resize` 375×720 on `/upload`, `/dashboard`, `/presentation`; screenshot `p0-<name>-dark-375.png`; note overflow/console issues in the phase report.
+`browser_resize` 375Ã—720 on `/upload`, `/dashboard`, `/presentation`; screenshot `p0-<name>-dark-375.png`; note overflow/console issues in the phase report.
 
 - [ ] **Step 5: Emit the phase evidence notes**
 
 Summary of: routes visited, console/network status per route, screenshot filenames, any route that needed a workaround. No commit (evidence lives in the git-ignored screenshots dir).
 
-### Task P0.5: Real generate → viewer → export round-trip
+### Task P0.5: Real generate â†’ viewer â†’ export round-trip
 
 **Files:**
 - Create: `frontend/screenshots/p0-roundtrip-*.png`
@@ -350,7 +350,7 @@ Summary of: routes visited, console/network status per route, screenshot filenam
 
 - [ ] **Step 1: Generate through the fork UI**
 
-`browser_navigate http://localhost:5002/upload` → type a prompt (e.g. "Photosynthesis overview, 5 slides") → submit → wait for the deck (`browser_wait_for` the presentation route or dashboard entry; generation takes minutes). Screenshot `p0-roundtrip-generate-running.png` and `p0-roundtrip-viewer.png`.
+`browser_navigate http://localhost:5002/upload` â†’ type a prompt (e.g. "Photosynthesis overview, 5 slides") â†’ submit â†’ wait for the deck (`browser_wait_for` the presentation route or dashboard entry; generation takes minutes). Screenshot `p0-roundtrip-generate-running.png` and `p0-roundtrip-viewer.png`.
 
 - [ ] **Step 2: Viewer check**
 
@@ -362,7 +362,7 @@ Click into the editor (`/presentation?id=...` editor entry) and confirm the canv
 
 - [ ] **Step 4: Export PDF via the rewired handler**
 
-Header → Export → PDF. Expect the loading toast, then a downloaded file. Screenshot `p0-roundtrip-export.png`. Verify the download landed (Playwright download or `frontend/.playwright/` artifact) and is > 0 bytes.
+Header â†’ Export â†’ PDF. Expect the loading toast, then a downloaded file. Screenshot `p0-roundtrip-export.png`. Verify the download landed (Playwright download or `frontend/.playwright/` artifact) and is > 0 bytes.
 
 - [ ] **Step 5: Record the engine path shape**
 
@@ -370,7 +370,7 @@ From the handler's response (browser network request `.../export` response body)
 
 - [ ] **Step 6: Provider failure handling**
 
-If generation 429s repeatedly (Google free tier is documented as rate-limited): retry once; if it fails again, STOP and tell the founder plainly: *"Generation is rate-limited by the configured provider; I need you to either wait, switch the engine provider, or provide a key — then say continue."*
+If generation 429s repeatedly (Google free tier is documented as rate-limited): retry once; if it fails again, STOP and tell the founder plainly: *"Generation is rate-limited by the configured provider; I need you to either wait, switch the engine provider, or provide a key â€” then say continue."*
 
 ### Task P0.6: Start DIVERGENCE.md, commit, phase report
 
@@ -386,15 +386,15 @@ If generation 429s repeatedly (Google free tier is documented as rate-limited): 
 - Source: `presenton-main/servers/nextjs` (git-ignored checkout), copied 2026-09-15
 - Next 16.2.6 / React 19.2.6; engine image `ghcr.io/presenton/presenton:latest` (built 2026-09-08)
 - Baseline commit: <hash from P0.1>
-- Location: `presenton-ui/` (git-ignored by UniPilot; own repo). OneDrive-synced folder —
+- Location: `presenton-ui/` (git-ignored by UniPilot; own repo). OneDrive-synced folder â€”
   install/dev performance cost noted here; if moved outside OneDrive, record the new path
   and the matching `PRESENTON_UI_URL` here.
 
 ## Changed files (kept deliberately small for rebases)
-- `scripts/dev.mjs`, `package.json` — env-driven PORT/PRESENTON_ENGINE_URL runtime
-- `utils/mixpanel.ts` — analytics disabled (empty token)
-- `app/(presentation-generator)/presentation/components/PresentationHeader.tsx` — export delegates to the engine's `POST /api/v1/ppt/presentation/{id}/export`; engine returns `path` as: <recorded shape>
-- (theme/motion/branding files appended in P1–P3)
+- `scripts/dev.mjs`, `package.json` â€” env-driven PORT/PRESENTON_ENGINE_URL runtime
+- `utils/mixpanel.ts` â€” analytics disabled (empty token)
+- `app/(presentation-generator)/presentation/components/PresentationHeader.tsx` â€” export delegates to the engine's `POST /api/v1/ppt/presentation/{id}/export`; engine returns `path` as: <recorded shape>
+- (theme/motion/branding files appended in P1â€“P3)
 
 ## Update procedure
 1. Fetch upstream `github.com/presenton/presenton` at the target tag/commit.
@@ -403,7 +403,7 @@ If generation 429s repeatedly (Google free tier is documented as rate-limited): 
 4. Re-run the per-screen Chromium checklist; update the recorded upstream hash.
 
 ## Legal
-- Upstream Apache-2.0; `LICENSE`/`NOTICE` kept in the fork. Modifications are listed above (Apache-2.0 §4). The fork is local, git-ignored, not redistributed. Legal/marketing pages are not rebranded.
+- Upstream Apache-2.0; `LICENSE`/`NOTICE` kept in the fork. Modifications are listed above (Apache-2.0 Â§4). The fork is local, git-ignored, not redistributed. Legal/marketing pages are not rebranded.
 ```
 
 - [ ] **Step 2: Commit in the fork**
@@ -413,13 +413,13 @@ git -C presenton-ui add DIVERGENCE.md
 git -C presenton-ui commit -m "docs: divergence + update procedure baseline"
 ```
 
-- [ ] **Step 3: STOP — P0 review**
+- [ ] **Step 3: STOP â€” P0 review**
 
 Report: baseline hash, routes smoked, console/network status, round-trip proof (screenshots + export file size), engine path shape, install/OneDrive note, changed UniPilot files (only `.gitignore` so far). Wait for the founder's go-ahead before P1.
 
 ---
 
-## P1 — Theme foundation
+## P1 â€” Theme foundation
 
 ### Task P1.1: Fonts
 
@@ -429,7 +429,7 @@ Report: baseline hash, routes smoked, console/network status, round-trip proof (
 - Modify: `presenton-ui/tailwind.config.ts` (fontFamily)
 
 **Interfaces:**
-- Produces: `--font-heading` (Bricolage), `--font-sans` (Geist), `--font-mono` (Geist Mono); Tailwind keys `font-heading`/`font-sans`/`font-mono`; temporary bridge: existing `font-syne` → Bricolage, `font-manrope` → Geist (so the whole app switches immediately; class renames happen in P2.3).
+- Produces: `--font-heading` (Bricolage), `--font-sans` (Geist), `--font-mono` (Geist Mono); Tailwind keys `font-heading`/`font-sans`/`font-mono`; temporary bridge: existing `font-syne` â†’ Bricolage, `font-manrope` â†’ Geist (so the whole app switches immediately; class renames happen in P2.3).
 
 - [ ] **Step 1: Copy the font files and any license files**
 
@@ -495,7 +495,7 @@ fontFamily: {
 
 - [ ] **Step 4: Verify fonts in Chromium**
 
-`browser_navigate http://localhost:5002/dashboard` → `browser_evaluate`:
+`browser_navigate http://localhost:5002/dashboard` â†’ `browser_evaluate`:
 
 ```js
 (() => {
@@ -529,7 +529,7 @@ git -C presenton-ui commit -m "theme: UniPilot fonts (Bricolage/Geist/Geist Mono
 - Modify: `presenton-ui/tailwind.config.ts`
 
 **Interfaces:**
-- Consumes: HSL table in spec §5.1 (verbatim below).
+- Consumes: HSL table in spec Â§5.1 (verbatim below).
 - Produces: token utilities `bg-glass`, `bg-glass-strong`, `bg-glass-subtle`, `bg-scrim`, `bg-surface-inverted`, `rounded-frame/card/nested/base/pill`, `shadow-subtle/raised/floating/overlay`.
 
 - [ ] **Step 1: Replace the `:root` and `.dark` token blocks in `globals.css`**
@@ -667,11 +667,11 @@ Note: dark-mode elevation values differ in DESIGN.md; keep the light values as t
 
 - [ ] **Step 3b: Ensure dark is the default theme**
 
-`presenton-ui/app/providers.tsx` (or wherever `next-themes` is configured) — set `defaultTheme="dark"` and `attribute="class"` if not already. Verify with `browser_evaluate "document.documentElement.className"` → contains `dark`.
+`presenton-ui/app/providers.tsx` (or wherever `next-themes` is configured) â€” set `defaultTheme="dark"` and `attribute="class"` if not already. Verify with `browser_evaluate "document.documentElement.className"` â†’ contains `dark`.
 
 - [ ] **Step 4: Evidence pass**
 
-Dashboard, upload, settings: `browser_navigate` → screenshot `p1-<surface>-dark-1280.png` → console/network clean. Compare against `p0-*` screenshots for token/font change. Responsive 375 spot-check on upload.
+Dashboard, upload, settings: `browser_navigate` â†’ screenshot `p1-<surface>-dark-1280.png` â†’ console/network clean. Compare against `p0-*` screenshots for token/font change. Responsive 375 spot-check on upload.
 
 - [ ] **Step 5: Commit in the fork**
 
@@ -688,7 +688,7 @@ git -C presenton-ui commit -m "theme: UniPilot tokens, radius, elevation, glass,
 
 **Interfaces:**
 - Consumes: UniPilot's `frontend/components/motion/` working tree (2026-09-15).
-- Produces: `MotionProvider`, `presets.ts` tokens/variants, `MotionPopover`, `MotionListItem`, `MotionNotice`, `MotionSelectionRing`, `Collapsible`, `RouteTransition`, `motionIndex` — available to P2/P3.
+- Produces: `MotionProvider`, `presets.ts` tokens/variants, `MotionPopover`, `MotionListItem`, `MotionNotice`, `MotionSelectionRing`, `Collapsible`, `RouteTransition`, `motionIndex` â€” available to P2/P3.
 
 - [ ] **Step 1: Copy the primitives**
 
@@ -766,7 +766,7 @@ Run `npx tsc --noEmit -p presenton-ui/tsconfig.json`. The copied primitives may 
 
 - [ ] **Step 6: Verify in Chromium**
 
-`browser_navigate http://localhost:5002/dashboard` → open an interactive popover/menu (e.g. profile/dashboard menu) → confirm it animates (Motion now drives it if the component was rewired; otherwise only confirm no console errors and reduced-motion CSS). `browser_evaluate` with reduced-motion emulation is not available via MCP; record reduced-motion verification as verified-by-code (the CSS block above) plus a manual `prefers-reduced-motion` probe script if needed.
+`browser_navigate http://localhost:5002/dashboard` â†’ open an interactive popover/menu (e.g. profile/dashboard menu) â†’ confirm it animates (Motion now drives it if the component was rewired; otherwise only confirm no console errors and reduced-motion CSS). `browser_evaluate` with reduced-motion emulation is not available via MCP; record reduced-motion verification as verified-by-code (the CSS block above) plus a manual `prefers-reduced-motion` probe script if needed.
 
 - [ ] **Step 7: Commit in the fork**
 
@@ -781,7 +781,7 @@ git -C presenton-ui commit -m "motion: pinned port of UniPilot motion primitives
 
 ---
 
-## P2 — Primitives
+## P2 â€” Primitives
 
 ### Task P2.1: Controls
 
@@ -794,7 +794,7 @@ git -C presenton-ui commit -m "motion: pinned port of UniPilot motion primitives
 
 - [ ] **Step 1: Apply the control mapping** (exact rules, per file)
 
-- `button.tsx`: default and primary variants → `rounded-pill font-heading text-label-sm press-feedback`; keep variant names/API; outline variant → `border-border bg-transparent` (solid fill only on hover); destructive unchanged in shape, `bg-destructive text-destructive-foreground`.
+- `button.tsx`: default and primary variants â†’ `rounded-pill font-heading text-label-sm press-feedback`; keep variant names/API; outline variant â†’ `border-border bg-transparent` (solid fill only on hover); destructive unchanged in shape, `bg-destructive text-destructive-foreground`.
 - `input.tsx` / `textarea.tsx`: `rounded-base border-border bg-card text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring`.
 - `select.tsx`: trigger same as input; menu content `rounded-nested border-border bg-popover shadow-overlay`.
 - `switch.tsx` / `slider.tsx`: thumb/track in `bg-primary`/`bg-muted`; no new colors.
@@ -827,7 +827,7 @@ git -C presenton-ui commit -m "theme: UniPilot-styled controls"
 
 - [ ] **Step 2: Apply Motion where MOTION.md specifies** (P1.3 primitives required)
 
-- Popover/menu content: wrap the content element with `MotionPopover` using the trigger's direction (`down` for header menus, `up` for footer menus) — keep Radix focus/positioning behaviour; only the entrance/exit visual changes.
+- Popover/menu content: wrap the content element with `MotionPopover` using the trigger's direction (`down` for header menus, `up` for footer menus) â€” keep Radix focus/positioning behaviour; only the entrance/exit visual changes.
 - Dialogs: keep the native/Radix open state; wrap panel content with `MotionPopover direction="center"`.
 - If a component's animation is currently CSS-only via `tailwindcss-animate` data-state classes, replace those classes with the Motion wrapper.
 
@@ -846,7 +846,7 @@ git -C presenton-ui commit -m "theme: UniPilot-styled surfaces, overlays, tabs; 
 
 **Files:**
 - Modify: `presenton-ui/components/ui/{loader.tsx,overlay-loader.tsx,skeleton.tsx,sonner.tsx,separator.tsx,table.tsx,progress-bar.tsx}`
-- Sweep: chrome files only (see rule below) — replace `font-syne` → `font-heading`, `font-manrope` → `font-sans`
+- Sweep: chrome files only (see rule below) â€” replace `font-syne` â†’ `font-heading`, `font-manrope` â†’ `font-sans`
 
 - [ ] **Step 1: Feedback components**
 
@@ -883,7 +883,7 @@ After the sweep, delete the `syne`/`manrope` keys from `tailwind.config.ts` and 
 
 - [ ] **Step 4: Verify**
 
-`/dashboard`, `/upload`, `/settings`, `/templates` — screenshots `p2-feedback-<surface>-dark-1280.png`; console/network clean; spot-check 768.
+`/dashboard`, `/upload`, `/settings`, `/templates` â€” screenshots `p2-feedback-<surface>-dark-1280.png`; console/network clean; spot-check 768.
 
 - [ ] **Step 5: Commit in the fork**
 
@@ -894,7 +894,7 @@ git -C presenton-ui commit -m "theme: feedback primitives + chrome font sweep (B
 
 ---
 
-## P3 — Screens (chrome only)
+## P3 â€” Screens (chrome only)
 
 ### Task P3.1: Generate + documents-preview
 
@@ -916,7 +916,7 @@ git -C presenton-ui commit -m "theme: feedback primitives + chrome font sweep (B
 
 **Files:** `presenton-ui/app/(presentation-generator)/(dashboard)/templates/**`, `presenton-ui/app/(presentation-generator)/template-preview/**`
 
-- [ ] **Step 1: Restyle** tab switcher (inverted pill active state), template cards, create-custom entry card, preview editor chrome (left layouts panel, header, side panel shells) — the slide canvas itself is content and stays untouched.
+- [ ] **Step 1: Restyle** tab switcher (inverted pill active state), template cards, create-custom entry card, preview editor chrome (left layouts panel, header, side panel shells) â€” the slide canvas itself is content and stays untouched.
 - [ ] **Step 2: Custom-template studio**: theme only where cheap (step headers/progress/buttons); record any deferred surfaces in `DIVERGENCE.md`.
 - [ ] **Step 3: Verify** `/templates`, `/template-preview?templateV2Id=general`, `/custom-template`: screenshots `p3-templates-*`, console/network, responsive.
 - [ ] **Step 4: Commit in the fork** (`git -C presenton-ui commit -am "theme: templates + preview chrome"`)
@@ -925,7 +925,7 @@ git -C presenton-ui commit -m "theme: feedback primitives + chrome font sweep (B
 
 **Files:** `presenton-ui/app/(presentation-generator)/presentation/components/{PresentationPage,PresentationHeader,SidePanel,SlideThumbnailCard,PresentationMode,...}.tsx` (chrome components only; `SlideContent`/renderers untouched)
 
-- [ ] **Step 1: Restyle** header controls pill (buttons/menus via Motion), thumbnail rail (glass rail, `MotionSelectionRing` on the selected slide, `MotionListItem` for reorder), slide action bar, present-mode chrome (progress, layout grid, speaker-note panel, exit control) — stage/canvas untouched.
+- [ ] **Step 1: Restyle** header controls pill (buttons/menus via Motion), thumbnail rail (glass rail, `MotionSelectionRing` on the selected slide, `MotionListItem` for reorder), slide action bar, present-mode chrome (progress, layout grid, speaker-note panel, exit control) â€” stage/canvas untouched.
 - [ ] **Step 2: Verify** open a real deck: viewer, rail selection/reorder visuals, present mode (keys, grid, notes). Screenshots `p3-viewer-*`, console/network, responsive.
 - [ ] **Step 3: Commit in the fork** (`git -C presenton-ui commit -am "theme: deck viewer + present mode chrome"`)
 
@@ -933,7 +933,7 @@ git -C presenton-ui commit -m "theme: feedback primitives + chrome font sweep (B
 
 **Files:** `presenton-ui/app/(presentation-generator)/presentation/components/PresentationActions.tsx` and the editor panel/toolbar/palette **DOM** shells (not `components/slide-editor/**` canvas internals)
 
-- [ ] **Step 1: Restyle** the insertion palette, toolbars' containers, AI chat panel chrome, dialogs/modals, toasts — all in tokens; apply `MotionPopover` to panels/toolbars and `Collapsible` to option groups. Do not touch Konva/TipTap/dnd behaviour or slide canvas rendering.
+- [ ] **Step 1: Restyle** the insertion palette, toolbars' containers, AI chat panel chrome, dialogs/modals, toasts â€” all in tokens; apply `MotionPopover` to panels/toolbars and `Collapsible` to option groups. Do not touch Konva/TipTap/dnd behaviour or slide canvas rendering.
 - [ ] **Step 2: Verify** open a deck's editor: palette, a text toolbar, the AI panel, an image dialog. Screenshots `p3-editor-*`, console/network. Confirm the slide canvas still renders identically to P0.
 - [ ] **Step 3: Commit in the fork** (`git -C presenton-ui commit -am "theme: editor chrome"`)
 
@@ -941,19 +941,19 @@ git -C presenton-ui commit -m "theme: feedback primitives + chrome font sweep (B
 
 **Files:** `presenton-ui/app/(presentation-generator)/(dashboard)/settings/**`, `presenton-ui/app/(presentation-generator)/OnBoarding/**`, `app/(presentation-generator)/(dashboard)/admin/**` (only if user-facing and cheap)
 
-- [ ] **Step 1: Restyle** settings sidebar/sections/forms; onboarding steps; admin only if it appears for the current user and the change is contained — otherwise record as deferred.
+- [ ] **Step 1: Restyle** settings sidebar/sections/forms; onboarding steps; admin only if it appears for the current user and the change is contained â€” otherwise record as deferred.
 - [ ] **Step 2: Verify** `/settings`, onboarding (if reachable; otherwise verify by code + note), `/admin` if visited. Screenshots `p3-settings-*`, console/network, responsive.
 - [ ] **Step 3: Commit in the fork** (`git -C presenton-ui commit -am "theme: settings + onboarding"`)
 
 ### Task P3.7: P3 evidence + STOP
 
-- [ ] **Step 1: Full sweep check** — every P0 baseline route re-shot as `p3-<route>-dark-{375,768,1280}.png`; console/network clean on all; note any remaining upstream-colored surface.
+- [ ] **Step 1: Full sweep check** â€” every P0 baseline route re-shot as `p3-<route>-dark-{375,768,1280}.png`; console/network clean on all; note any remaining upstream-colored surface.
 - [ ] **Step 2: Update `DIVERGENCE.md`** with the full theme file list.
-- [ ] **Step 3: Commit and STOP — P3 review.** Report screenshots, remaining gaps, and the P4 plan confirmation (proxy or link-only).
+- [ ] **Step 3: Commit and STOP â€” P3 review.** Report screenshots, remaining gaps, and the P4 plan confirmation (proxy or link-only).
 
 ---
 
-## P4 — Surfacing from UniPilot
+## P4 â€” Surfacing from UniPilot
 
 ### Task P4a.1: Env-driven edit URL with honest fallback
 
@@ -964,7 +964,7 @@ git -C presenton-ui commit -m "theme: feedback primitives + chrome font sweep (B
 - Modify: `frontend/.env.example`, `frontend/.env.development.local.example`, `docs/integrations/presenton.md`
 
 **Interfaces:**
-- Produces: `presentonUiUrl(): string | null`; `resolveEditorUrl(presentationId: string): Promise<string | null>` — preferred fork URL when reachable, else today's engine URL, else `null`.
+- Produces: `presentonUiUrl(): string | null`; `resolveEditorUrl(presentationId: string): Promise<string | null>` â€” preferred fork URL when reachable, else today's engine URL, else `null`.
 - Consumes: `PRESENTON_UI_URL` (server-only), existing `presentonEditUrl()`.
 
 - [ ] **Step 1: Add the env reader** in `presentonConfig.ts`:
@@ -999,11 +999,11 @@ export async function resolveEditorUrl(
 }
 ```
 
-- [ ] **Step 3: Use it in both pages** — replace the `presentonEditUrl(...)` calls with `await resolveEditorUrl(...)`; no other behaviour changes (guests/unknown ids keep 404ing; the wrapper keeps its unavailable state).
+- [ ] **Step 3: Use it in both pages** â€” replace the `presentonEditUrl(...)` calls with `await resolveEditorUrl(...)`; no other behaviour changes (guests/unknown ids keep 404ing; the wrapper keeps its unavailable state).
 
-- [ ] **Step 4: Docs + env examples** — document `PRESENTON_UI_URL` in both `.env*.example` files and `docs/integrations/presenton.md` §3.6 (server-only; when set and reachable, the Edit deck link/iframe uses the fork; when unset/unreachable, the embedded engine editor is used — never a dead link).
+- [ ] **Step 4: Docs + env examples** â€” document `PRESENTON_UI_URL` in both `.env*.example` files and `docs/integrations/presenton.md` Â§3.6 (server-only; when set and reachable, the Edit deck link/iframe uses the fork; when unset/unreachable, the embedded engine editor is used â€” never a dead link).
 
-- [ ] **Step 5: Verify both branches** — with the fork running: tool page HTML contains the `:5002` URL; stop the fork (`taskkill` the dev process), reload the tool page: HTML contains the engine URL. Screenshots `p4a-editlink-fork.png`, `p4a-editlink-fallback.png`. If the user is not authenticated, verify via the server-rendered page response or an authenticated MCP session per `QA_SESSION.md` (STOP if the QA session is unavailable).
+- [ ] **Step 5: Verify both branches** â€” with the fork running: tool page HTML contains the `:5002` URL; stop the fork (`taskkill` the dev process), reload the tool page: HTML contains the engine URL. Screenshots `p4a-editlink-fork.png`, `p4a-editlink-fallback.png`. If the user is not authenticated, verify via the server-rendered page response or an authenticated MCP session per `QA_SESSION.md` (STOP if the QA session is unavailable).
 
 - [ ] **Step 6: No commit** (UniPilot repo; working tree only).
 
@@ -1011,14 +1011,14 @@ export async function resolveEditorUrl(
 
 ### Task P4b (optional, only after P3 review confirms): proxy + same-origin iframe
 
-- [ ] **Step 1:** Make the fork's `basePath` env-driven (`process.env.PRESENTON_UI_BASE_PATH ?? ""`) — never a literal.
-- [ ] **Step 2:** Add the UniPilot rewrite `/presenton/:path*` → `${PRESENTON_UI_INTERNAL_URL}/presenton/:path*` in `frontend/next.config.ts`, env-driven with a default.
-- [ ] **Step 3:** Point the wrapper iframe at the proxy path; verify assets, deep links, and a production build (dev HMR websockets do not traverse the proxy — document using the direct origin for dev).
+- [ ] **Step 1:** Make the fork's `basePath` env-driven (`process.env.PRESENTON_UI_BASE_PATH ?? ""`) â€” never a literal.
+- [ ] **Step 2:** Add the UniPilot rewrite `/presenton/:path*` â†’ `${PRESENTON_UI_INTERNAL_URL}/presenton/:path*` in `frontend/next.config.ts`, env-driven with a default.
+- [ ] **Step 3:** Point the wrapper iframe at the proxy path; verify assets, deep links, and a production build (dev HMR websockets do not traverse the proxy â€” document using the direct origin for dev).
 - [ ] **Step 4:** Evidence + docs; if anything is not clean, revert to link-only and record the reason.
 
 ---
 
-## P5 — Optional orchestration + update drill
+## P5 â€” Optional orchestration + update drill
 
 ### Task P5.1: Optional fork service in the dev orchestrator
 
@@ -1026,7 +1026,7 @@ export async function resolveEditorUrl(
 
 - [ ] **Step 1:** Add a warn-only `ensurePresentonUi()` step: if `presenton-ui/package.json` exists and nothing serves `http://127.0.0.1:${PRESENTON_UI_PORT ?? 5002}`, spawn `npm run dev` there with the engine URL env; on any failure log a warning and continue (never fail the run).
 - [ ] **Step 2:** Document the manual command in `DIVERGENCE.md`: `cd presenton-ui && npm run dev` (PORT/PRESENTON_ENGINE_URL overridable).
-- [ ] **Step 3:** Verify `npm run dev` still starts with the fork absent (rename test: temporarily move `presenton-ui` — or simply confirm by code path — then restore) and with it present.
+- [ ] **Step 3:** Verify `npm run dev` still starts with the fork absent (rename test: temporarily move `presenton-ui` â€” or simply confirm by code path â€” then restore) and with it present.
 
 ### Task P5.2: Upstream update drill + final DIVERGENCE.md
 
@@ -1041,7 +1041,7 @@ export async function resolveEditorUrl(
 
 ## Self-Review
 
-- **Spec coverage:** D1 location/ignore → P0.1; D2 fork repo → P0.1; D3 token-first → P1.2/P2/P3; D4 fonts → P1.1; D5 motion → P1.3/P2.2; D6 dark-first → P1.2 step 3b; D7 surfacing + fallback → P4a; D8 export delegation → P0.3; D9 branding → P3 chrome + legal note in DIVERGENCE.md; D10 pin/update → P0.6/P5.2. Refinements: env-driven URL/port → P0.2; honest fallback → P4a; OneDrive note → P0.2/P0.6; legal pages → global constraints; settings/onboarding in P3 → P3.6; admin-if-cheap → P3.6; optional orchestrator → P5.1.
+- **Spec coverage:** D1 location/ignore â†’ P0.1; D2 fork repo â†’ P0.1; D3 token-first â†’ P1.2/P2/P3; D4 fonts â†’ P1.1; D5 motion â†’ P1.3/P2.2; D6 dark-first â†’ P1.2 step 3b; D7 surfacing + fallback â†’ P4a; D8 export delegation â†’ P0.3; D9 branding â†’ P3 chrome + legal note in DIVERGENCE.md; D10 pin/update â†’ P0.6/P5.2. Refinements: env-driven URL/port â†’ P0.2; honest fallback â†’ P4a; OneDrive note â†’ P0.2/P0.6; legal pages â†’ global constraints; settings/onboarding in P3 â†’ P3.6; admin-if-cheap â†’ P3.6; optional orchestrator â†’ P5.1.
 - **Placeholders:** none intentionally left; uncertainty (engine export path shape, auth gate) is handled with explicit record-and-STOP steps, not guesses.
 - **Type consistency:** `presentonUiUrl()` / `resolveEditorUrl()` used consistently in P4a; fork env knobs `PORT`/`PRESENTON_ENGINE_URL` consistent across P0.2/P5.1.
 
@@ -1049,7 +1049,7 @@ export async function resolveEditorUrl(
 
 ## Execution log
 
-### P0 — completed 2026-09-15 (except a founder-gated provider fix)
+### P0 â€” completed 2026-09-15 (except a founder-gated provider fix)
 
 - **P0.1** done. Fork at `presenton-ui/` (864 files), git-ignored
   (`.gitignore:71`), own repo; baseline commit
@@ -1064,28 +1064,28 @@ export async function resolveEditorUrl(
 - **P0.3** done: both export handlers delegate to
   `POST /api/v1/ppt/presentation/{id}/export`; typecheck clean; committed
   `4fd5fa8`.
-- **P0.4** done: all 10 routes smoked in real Chromium — 0 console errors
+- **P0.4** done: all 10 routes smoked in real Chromium â€” 0 console errors
   everywhere (only upstream `404.svg`/`card_bg.svg` preload warnings);
   screenshots `frontend/screenshots/p0-*.png`; 375 px spot-checks done.
-  Recorded upstream behaviours: `/` → `/upload`; `/presentation` without id →
+  Recorded upstream behaviours: `/` â†’ `/upload`; `/presentation` without id â†’
   `/upload`; `/outline` empty state renders.
 - **P0.5** complete (with two recorded caveats). After the founder's provider
   fixes (`LLM_REASONING_MODE=disabled`, `LLM_MAX_OUTPUT_TOKENS=1000`):
-  generate → prepare → live slide stream → persisted deck → viewer all work
+  generate â†’ prepare â†’ live slide stream â†’ persisted deck â†’ viewer all work
   through the fork (real content: "The Early Invention" slide with generated
   images; 17 assets loaded, 0 console errors). Export proven for both formats:
   PDF 911,303 bytes (existing deck) and PPTX 10,151 bytes (new deck, valid
   21-entry OOXML). Caveats recorded in `DIVERGENCE.md`: (a) the 1000-token cap
-  truncates the outline → 1-slide decks (provider/tier tradeoff, not the
-  fork); (b) the fork's **dev-server** long SSE stream disconnected at ~4–5
-  min twice — the engine cancelled the LLM stream and the client stayed in
+  truncates the outline â†’ 1-slide decks (provider/tier tradeoff, not the
+  fork); (b) the fork's **dev-server** long SSE stream disconnected at ~4â€“5
+  min twice â€” the engine cancelled the LLM stream and the client stayed in
   "streaming" until reload; a fresh `stream=true` **resumed from persisted
   slides** and completed. Production-build streaming is the first mitigation
   to try in P5 (or a fork runtime timeout patch); UniPilot's worker path is
   unaffected.
 - **P0.6** done: `DIVERGENCE.md` written and committed (`6a73499`,
-  `c2d5bb7`). Fork commits: `3f1ce2a` baseline → `9afe101` runtime →
-  `d92b7c3` hygiene → `4fd5fa8` export → `6a73499` divergence → `c2d5bb7`
+  `c2d5bb7`). Fork commits: `3f1ce2a` baseline â†’ `9afe101` runtime â†’
+  `d92b7c3` hygiene â†’ `4fd5fa8` export â†’ `6a73499` divergence â†’ `c2d5bb7`
   config path.
 
 **UniPilot working-tree changes so far:** `.gitignore` (one ignore block) plus
@@ -1093,7 +1093,7 @@ the new spec/plan docs. No app behaviour touched, nothing committed.
 
 **P0 review gate:** awaiting founder review + the provider fix before P1.
 
-### P1 — completed 2026-09-15
+### P1 â€” completed 2026-09-15
 
 - Fonts (`37ed375`): Bricolage/Geist/Geist Mono copied to `public/fonts/unipilot/`
   (+ Bricolage OFL), `@font-face` + body font swapped, tailwind font keys
@@ -1109,7 +1109,7 @@ the new spec/plan docs. No app behaviour touched, nothing committed.
 - Evidence: `frontend/screenshots/p1-*.png` (dashboard fonts/tokens, upload,
   settings), 0 console errors throughout.
 
-### P2 — completed 2026-09-15
+### P2 â€” completed 2026-09-15
 
 - Controls (`c0e3f90`), surfaces/overlays (`458bd59`, plus the flat `bg-glass`
   key fix), feedback + 54-file chrome font sweep (`219a22e`). Verified with
@@ -1117,17 +1117,17 @@ the new spec/plan docs. No app behaviour touched, nothing committed.
   (12px radius / 687ms glass / blur), themed dialog geometry; caller-level
   hard-coded overrides identified as P3 work.
 
-### P3 — completed (bulk pass), paused for review
+### P3 â€” completed (bulk pass), paused for review
 
 - Two scripted token-mapping passes over chrome files (79 + 13 editor-chrome,
-  ~1,563 literals) — commit `0047226`. Verified screens with 0 console errors:
+  ~1,563 literals) â€” commit `0047226`. Verified screens with 0 console errors:
   generate, dashboard, templates, settings, viewer/editor (canvas intact).
 - Remaining tail recorded in `DIVERGENCE.md`: ~246 literals, 5 gradients,
   content-adjacent areas on the bridge, present-mode/editor-palette dedicated
   pass pending (P3 cont.), settings switch caller override.
 - Screenshots: `frontend/screenshots/p3-*.png`.
 
-### P3 tail — completed
+### P3 tail â€” completed
 
 - Generalized + palette-family sweep across chrome and the 12 slide-editor
   chrome files; gradients replaced with solid tokens. Final census: 0 hex

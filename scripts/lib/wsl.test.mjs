@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { buildPresentonRunArgs, toWslPath, wslExecArgs } from "./wsl.mjs";
 
 test("toWslPath converts Windows drive paths to /mnt", () => {
-  assert.equal(toWslPath("C:\\Users\\moham\\repo"), "/mnt/c/Users/moham/repo");
+  assert.equal(toWslPath("C:\\Users\\test\\repo"), "/mnt/c/Users/test/repo");
   assert.equal(toWslPath("c:\\work\\a b"), "/mnt/c/work/a b");
   assert.equal(toWslPath("D:\\data"), "/mnt/d/data");
 });

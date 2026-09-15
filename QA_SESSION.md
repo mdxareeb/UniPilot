@@ -1,4 +1,4 @@
-# QA Session — the permitted authenticated environment (Task 20.10)
+# QA Session â€” the permitted authenticated environment (Task 20.10)
 
 This is the permanent way to obtain a **real authenticated UniPilot session**
 against a **non-production** environment. Future tasks that need an
@@ -9,18 +9,18 @@ creating their own identity.
 > **The founder account is never used for QA.** The two QA identities below
 > (QA1 for browser sessions, QA2 for the isolation proof) are the only
 > sanctioned sessions. The hosted (production) project is never written
-> to by any of this — the seed refuses non-local targets by construction.
+> to by any of this â€” the seed refuses non-local targets by construction.
 
 ## What exists
 
 | Piece | Where |
 | --- | --- |
-| Local Supabase stack | Docker Engine inside the `kali-linux` WSL2 distro; trimmed config (studio/realtime/edge-runtime/analytics off; **storage on since Task 23.x** — the `documents` bucket lives in the versioned migration) |
-| Stack config | `backend/supabase/config.toml` (git-ignored — CLI-generated, see backend/EMAIL.md) |
+| Local Supabase stack | Docker Engine inside the `kali-linux` WSL2 distro; trimmed config (studio/realtime/edge-runtime/analytics off; **storage on since Task 23.x** â€” the `documents` bucket lives in the versioned migration) |
+| Stack config | `backend/supabase/config.toml` (git-ignored â€” CLI-generated, see backend/EMAIL.md) |
 | QA identity seed | `backend/supabase/qa/seed-qa-identity.mjs` (checked in, idempotent; creates QA1 + QA2) |
 | Playwright fixture | `frontend/tests/qa/auth.setup.ts` + `frontend/playwright.config.ts` (QA1) |
 | Storage state | `frontend/.playwright/qa-session.json` (git-ignored; configurable via `QA_STORAGE_STATE`) |
-| Smoke proof | `frontend/tests/qa/authenticated.spec.ts` (reaches the protected /onboarding route authenticated — proves the fixture, nothing more) |
+| Smoke proof | `frontend/tests/qa/authenticated.spec.ts` (reaches the protected /onboarding route authenticated â€” proves the fixture, nothing more) |
 | RLS isolation proof | `frontend/tests/qa/rls-isolation.spec.ts` (QA1 vs QA2 vs anon, schema-level; Task 20.9) |
 | Onboarding persistence proof | `frontend/tests/qa/onboarding.spec.ts` (QA1 completes through the real flow, QA2 skips; failure/retry, duplicate writes, redirect gate, two-user isolation; Task 13.10) |
 | Finish-setup affordance proof | `frontend/tests/qa/finish-setup.spec.ts` (QA2 incomplete sees the dashboard banner + setup link, QA1 complete sees neither, guest callout only, reduced motion; Task 14.10) |
@@ -29,7 +29,7 @@ creating their own identity.
   control, proxy-matcher guard; Task 14.11, updated for guest browsing) |
 | Guest browsing proof | `frontend/tests/qa/guest-browsing.spec.ts` (every workspace route renders its
   guest state, zero data reads, skippable prompt on each surface's control, Continue browsing/Escape
-  dismiss, "Sign in" → `/login?next=<path>`; guest-browsing feature) |
+  dismiss, "Sign in" â†’ `/login?next=<path>`; guest-browsing feature) |
 | Tasks data proof | `frontend/tests/qa/tasks-data.spec.ts` (task validation/date units + QA1/QA2 CRUD,
   status and priority isolation under RLS, id-scoped teardown; Task 21.x) |
 | Tasks UI flows | `frontend/tests/qa/tasks-ui.spec.ts` (authenticated create/edit/delete, pointer + keyboard
@@ -40,24 +40,24 @@ creating their own identity.
   all-day span, month+week rendering, detail + edit + confirmed delete, foreign id, forced-failure
   rollback, guest render, reduced motion; Task 17.x) |
 | Documents data/storage proof | `frontend/tests/qa/documents-data.spec.ts` (pure validation + QA1/QA2
-  private-bucket isolation — own access, cross-user and anon denials, bucket MIME/size rejections,
+  private-bucket isolation â€” own access, cross-user and anon denials, bucket MIME/size rejections,
   row-delete chunk cascade; Task 23.x) |
-| Documents UI flows | `frontend/tests/qa/documents-ui.spec.ts` (real upload with progress → verified
+| Documents UI flows | `frontend/tests/qa/documents-ui.spec.ts` (real upload with progress â†’ verified
   record + object, magic-byte rejection with cleanup, rename path-stability, delete object/row/chunks,
   guest prompt; Task 23.x) |
 | Jobs runner proof | `frontend/tests/qa/jobs-runner.spec.ts` (drives `backend/worker/run.mjs --once`:
-  claim → succeeded, retry backoff → dead-letter, non-retryable → failed, stale lock reclaim, system
+  claim â†’ succeeded, retry backoff â†’ dead-letter, non-retryable â†’ failed, stale lock reclaim, system
   job invisibility, RLS + denied client writes/RPCs, residue-free; Task 29.1) |
-| Document processing proof | `frontend/tests/qa/documents-processing.spec.ts` (real upload → worker →
-  indexed chunks/pages, DOCX unit, retry → dead-letter, corrupt permanent failure, OCR-block copy,
+| Document processing proof | `frontend/tests/qa/documents-processing.spec.ts` (real upload â†’ worker â†’
+  indexed chunks/pages, DOCX unit, retry â†’ dead-letter, corrupt permanent failure, OCR-block copy,
   page limit, chunk RLS, step-0 ACL denials, benchmark honesty; Task 24.x) |
-| Documents hub flows | `frontend/tests/qa/documents-hub.spec.ts` (upload → progress → Parsing… →
+| Documents hub flows | `frontend/tests/qa/documents-hub.spec.ts` (upload â†’ progress â†’ Parsingâ€¦ â†’
   Searchable through the poll, search/filters with honest empties, rename/delete, inline PDF +
   download-only DOCX previews, failed-state retry, quota copy, 320/375/1280 + reduced motion, guest;
   Task 18.x) |
 | Retrieval proof | `frontend/tests/qa/documents-search.spec.ts` (re-index idempotency with page
   refs, keyword hits + snippets + document/page filters, honest empty, QA1/QA2 RLS, the search
-  panel → preview flow, and the 25.11 harness honesty; Task 25.x) |
+  panel â†’ preview flow, and the 25.11 harness honesty; Task 25.x) |
 | Assistant backend proof | `frontend/tests/qa/assistant-backend.spec.ts` (provider honesty +
   timeout/retry, injection guard, context budget, structured-action parser, real turns with
   conversation/message/usage persistence and ordering, server-only message writes, owner + RAG
@@ -65,11 +65,11 @@ creating their own identity.
 | WhatsApp security/retention proof | `frontend/tests/qa/whatsapp-security.spec.ts` +
   `whatsapp-retention.spec.ts` (bucket/table/RPC ACLs, encrypted QR round-trip + 60 s TTL,
   token-key rotation, 30-day purge, events provenance forge-proof; Task 46.12) |
-| WhatsApp worker/job proof | `frontend/tests/qa/whatsapp-jobs.spec.ts` (real export object →
-  Node worker → Python `whatsapp.sync`, re-run dedupe, missing-object failure, non-retryable
+| WhatsApp worker/job proof | `frontend/tests/qa/whatsapp-jobs.spec.ts` (real export object â†’
+  Node worker â†’ Python `whatsapp.sync`, re-run dedupe, missing-object failure, non-retryable
   missing-interpreter failure, `whatsapp.push` no-op; Task 46.13) |
 | WhatsApp export-flow proof | `frontend/tests/qa/whatsapp-ui.spec.ts` + `whatsapp-export.spec.ts`
-  (upload → scan → candidate review → confirm with calendar marker → reject, live-gate UI;
+  (upload â†’ scan â†’ candidate review â†’ confirm with calendar marker â†’ reject, live-gate UI;
   Task 46.15) |
 | Env file | `frontend/.env.development.local` (git-ignored; copy from `frontend/.env.development.local.example`) |
 
@@ -82,7 +82,7 @@ creating their own identity.
 
 Both identities are RFC 2606 reserved `.test` addresses (dot-bearing so the
 app's own email validation accepts them) and are created `email_confirm: true`
-through the GoTrue Admin API (the supported server-side mechanism — no
+through the GoTrue Admin API (the supported server-side mechanism â€” no
 confirmation link is intercepted or faked). Since Task 13.10 the suite has a
 deliberate onboarding contract:
 
@@ -96,7 +96,7 @@ deliberate onboarding contract:
   trigger-provisioned empty profile row.
 
 The isolation spec creates the rows it needs through the service role and
-deletes exactly those ids again — never by `user_id`, so it cannot disturb the
+deletes exactly those ids again â€” never by `user_id`, so it cannot disturb the
 onboarding state. `profiles` keeps one row per identity; `subjects` keeps only
 QA1's two onboarding rows.
 
@@ -110,24 +110,24 @@ committed, never logged, never in a screenshot (the login form masks them).
    `apt-get install docker-ce` (Docker's Debian repo; backend/EMAIL.md
    documents the Docker Desktop alternative on Windows if you have admin
    rights).
-2. Supabase CLI (pinned **v2.116.0**) in WSL: release binary → `/usr/local/bin/supabase`.
+2. Supabase CLI (pinned **v2.116.0**) in WSL: release binary â†’ `/usr/local/bin/supabase`.
 3. Run `supabase init` / `supabase start` from `backend/` inside WSL:
-   `wsl -d kali-linux -u root -e sh -c "cd /mnt/c/Users/moham/OneDrive/Desktop/Projects/unipilot/unipilot/backend && supabase init && supabase start"`
+   `wsl -d kali-linux -u root -e sh -c "cd /mnt/c/<checkout>/backend && supabase init && supabase start"`
    (init is once; `backend/supabase/config.toml` is regenerated per machine).
 4. `copy frontend\.env.development.local.example frontend\.env.development.local`,
    set `UNIPILOT_QA_PASSWORD` and `UNIPILOT_QA2_PASSWORD` (distinct 8+ char
-   values — local-only), then run the seed.
+   values â€” local-only), then run the seed.
 5. Keep WSL alive while QA runs: `wsl -d kali-linux --exec sleep 2147483647`
-   (or any long-lived WSL process) — otherwise Windows tears the VM down and
+   (or any long-lived WSL process) â€” otherwise Windows tears the VM down and
    the stack goes with it.
 
 ## Daily usage
 
-Start the local stack, then run the suite — it owns its own server:
+Start the local stack, then run the suite â€” it owns its own server:
 
 ```powershell
-wsl -d kali-linux -u root -e sh -c "cd /mnt/c/Users/moham/OneDrive/Desktop/Projects/unipilot/unipilot/backend && supabase start"   # if not already up
-npm run test         # from the repo root: builds + starts its own production server, then qa-auth-setup → qa-onboarding → every other spec
+wsl -d kali-linux -u root -e sh -c "cd /mnt/c/<checkout>/backend && supabase start"   # if not already up
+npm run test         # from the repo root: builds + starts its own production server, then qa-auth-setup â†’ qa-onboarding â†’ every other spec
 ```
 
 Stop any manual `npm run dev` first: port 3000 must be free for the suite's
@@ -139,7 +139,7 @@ workspace specs load /tasks, /calendar, /documents and /assistant. Without it,
 13.10's redirect gate would send those tests into /onboarding. The onboarding
 project is idempotent: it resets and re-completes QA1 on every run.
 
-One-line reference for future task prompts: **"use the QA fixture — `npm run
+One-line reference for future task prompts: **"use the QA fixture â€” `npm run
 test` from the repo root with the local stack up (the suite starts its own
 production server), then `storageState: frontend/.playwright/qa-session.json`
 (see QA_SESSION.md)"**.
@@ -150,7 +150,7 @@ The suite owns a **production** server: `frontend/playwright.config.ts` declares
 a `webServer` (`npm run build && npm run start`, `reuseExistingServer: false`),
 with the local `NEXT_PUBLIC_*` values passed explicitly so `next build` can
 never pick up `.env.local`'s hosted project. A manual `npm run dev` must be
-stopped before `npm run test` — if port 3000 is taken the run fails loudly
+stopped before `npm run test` â€” if port 3000 is taken the run fails loudly
 instead of silently sharing a server it does not control. Production is
 deliberate: under the suite's parallel load `next dev` tore down in-flight
 streams (`Error: The destination stream closed early`) and reset keep-alive
@@ -171,7 +171,7 @@ single-run reconciliation log is `recon-green-2026-09-12.log`). Every observed
 failure was contention or dev-server churn, not product.
 
 If a second process does start anyway, the enforcement tool is
-`frontend/scripts/qa-single-writer.ps1` — start the suite, then point the guard
+`frontend/scripts/qa-single-writer.ps1` â€” start the suite, then point the guard
 at its PID; it terminates competing Playwright/dev-server processes for the
 duration while leaving the run's own process tree alone:
 
@@ -195,27 +195,27 @@ against it.
 
 For MCP-browser QA (Playwright MCP tools): drive the same real login form at
 `/login` with `qa.unipilot@unipilot.test` + `UNIPILOT_QA_PASSWORD` read from
-`frontend/.env.development.local` — never type the password into a tool call or
+`frontend/.env.development.local` â€” never type the password into a tool call or
 screenshot it.
 
 Expiry handling: the fixture validates any existing storage state first (it
-loads `/onboarding` — the one protected route since guests can browse the
-workspace — and a redirect to `/login` means expired/revoked) and
+loads `/onboarding` â€” the one protected route since guests can browse the
+workspace â€” and a redirect to `/login` means expired/revoked) and
 re-authenticates through the real UI rather than failing. The storage-state
 file holds only Supabase's HTTP-only session cookie.
 
 Missing env vars: the fixture fails with a message naming
-`UNIPILOT_QA_PASSWORD`, the exact file it belongs in, and the seed command —
+`UNIPILOT_QA_PASSWORD`, the exact file it belongs in, and the seed command â€”
 quoted in full in the file header.
 
 ## Verification screenshots
 
-Every ad-hoc verification screenshot — Playwright MCP runs and one-off probes —
+Every ad-hoc verification screenshot â€” Playwright MCP runs and one-off probes â€”
 goes to **`frontend/screenshots/`**, a single git-ignored folder at the
 frontend workspace root. The Playwright MCP server is launched with
 `--output-dir frontend/screenshots` (`opencode.json`), and explicit filenames
 use `frontend/screenshots/<name>.png`. Run artifacts that belong to a test run
-(storage state, traces, `test-results/`) stay under `frontend/.playwright/` —
+(storage state, traces, `test-results/`) stay under `frontend/.playwright/` â€”
 never mix the two. The convention is also documented in
 `frontend/screenshots.md` and the browser-qa skill.
 
@@ -226,7 +226,7 @@ npm run seed:qa                          # from the repo root: create (idempoten
 npm run seed:qa -w backend -- --reset    # destroy + recreate
 ```
 
-Equivalent direct form (run from `backend/` — this is what the npm script does):
+Equivalent direct form (run from `backend/` â€” this is what the npm script does):
 
 ```powershell
 node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs          # create (idempotent)
@@ -270,43 +270,43 @@ of `chromium-authenticated` so the full suite always runs them in order:
 
 ```
 qa-whatsapp-security   whatsapp-security.spec.ts + whatsapp-retention.spec.ts
-  → qa-whatsapp-jobs   whatsapp-jobs.spec.ts
-  → qa-whatsapp-flow   whatsapp-ui.spec.ts + whatsapp-export.spec.ts
+  â†’ qa-whatsapp-jobs   whatsapp-jobs.spec.ts
+  â†’ qa-whatsapp-flow   whatsapp-ui.spec.ts + whatsapp-export.spec.ts
 ```
 
 All three projects raise their timeout to 240 s: the worker-driving specs need
 Python startup and the lock wait, and the security/retention file pair waits on
 the same cross-file lock under a targeted `--no-deps` run.
 
-An upload only queues its `whatsapp.sync` job — the worker (`npm run worker` /
+An upload only queues its `whatsapp.sync` job â€” the worker (`npm run worker` /
 `npm run worker:once`) is what processes it, so a scan left `queued` means the
 worker is not running.
 
 **One worker at a time.** All three projects share QA1's integration rows and
 the global `claim_jobs`, which is why they are chained rather than parallel. A
 targeted `--no-deps` run can still select them together, so each
-worker-driving spec acquires `frontend/tests/qa/workerLock.ts` — an
+worker-driving spec acquires `frontend/tests/qa/workerLock.ts` â€” an
 existence lock at `.playwright/whatsapp-worker.lock` with a 240 s stale-mtime
-steal — for its window. In the full suite the dependency chain makes it
+steal â€” for its window. In the full suite the dependency chain makes it
 uncontended, and the one-writer rule from the section above still applies (no
 second suite, no `db:reset`/`seed:qa` while tests run).
 
 **Python contract.** The pytest half is standalone:
 
 ```powershell
-npm run test:whatsapp          # root → backend: python -m pytest ../whatsapp
+npm run test:whatsapp          # root â†’ backend: python -m pytest ../whatsapp
 ```
 
 The Playwright half probes `python -c "import wa_service"` from `whatsapp/`
 before running. When the probe fails, the Python-dependent tests are reported as
 skipped with the honest reason `python/wa_service unavailable on this host
-(install whatsapp/requirements-dev.txt; see whatsapp/README.md)` — never
+(install whatsapp/requirements-dev.txt; see whatsapp/README.md)` â€” never
 faked. Strict mode turns a failing probe into a collection failure instead:
 
 ```powershell
-# honest-skip (default) — the Python-dependent tests report skipped under `npm run test`
+# honest-skip (default) â€” the Python-dependent tests report skipped under `npm run test`
 npm run test -w frontend -- tests/qa/whatsapp-jobs.spec.ts
-# strict — missing Python fails the run at collection
+# strict â€” missing Python fails the run at collection
 $env:UNIPILOT_REQUIRE_PYTHON="1"; npm run test -w frontend -- tests/qa/whatsapp-jobs.spec.ts tests/qa/whatsapp-export.spec.ts; Remove-Item Env:\UNIPILOT_REQUIRE_PYTHON
 ```
 
@@ -329,14 +329,14 @@ through the service role and deletes it by id before it releases the worker
 lock. Verification screenshots for the UI proof (`whatsapp-*` names)
 go to `frontend/screenshots/` under the usual convention.
 
-**Review-mode coverage (46.21–46.25).** The flow specs also prove the
+**Review-mode coverage (46.21â€“46.25).** The flow specs also prove the
 manual/automatic choice: an automatic run settles the user's pending candidates
 whose fingerprints the run re-detects into `events` (fingerprint dedupe;
 `/calendar` shows the WhatsApp marker) and enqueues no push without Google;
 re-running the same export adds no candidates, events or pushes; QA2's pending
 candidate is never touched (isolation); a connected google row makes the run
 enqueue ids-only `whatsapp.push` jobs that stay `queued` (the Google client pair
-is overridden on the worker call only — no real OAuth exchange, so the P7.3
+is overridden on the worker call only â€” no real OAuth exchange, so the P7.3
 `[!]` blocker stands); a manual run leaves candidates pending; and an upload
 against a live connected row patches `review_mode` only (`mode`/`status`
 untouched). On the Python side, pytest also covers a re-scan that re-detects an
@@ -349,7 +349,7 @@ tracks its id and deletes it in teardown, and the existing afterAll
 zero-residue checks (jobs, `integration_*` tables, WhatsApp events, bucket
 prefix) cover the rest.
 
-**Detection-settings coverage (46.26–46.30).** The same specs prove the two
+**Detection-settings coverage (46.26â€“46.30).** The same specs prove the two
 per-connection detection preferences. Unit level: the export envelope is
 inferred from its unambiguous components, so an MDY fixture with a second
 component > 12 detects its two dated events on **2026-09-12** and
@@ -416,7 +416,7 @@ Supabase's API port 54321, so `127.0.0.1:54321` stopped forwarding from Windows
 into WSL2 while the stack stayed healthy (reachable inside WSL). The local
 stack's API port was therefore moved to **54937** (outside the reserved
 ranges): `backend/supabase/config.toml` `[api] port`, plus the API URL in
-`frontend/.env.development.local` — `supabase stop && supabase start` applies
+`frontend/.env.development.local` â€” `supabase stop && supabase start` applies
 it, and all data persists. The specs' local-only guards require a
 `127.0.0.1`/`localhost` URL, so prefer this over pointing the env at the WSL
 IP. With an elevated shell, check `netsh interface ipv4 show excludedportrange
