@@ -16,12 +16,36 @@
  * 24.2 registers the real document-processing handler here. 29.1 ships
  * `noop.test`, whose payload drives the loop proof: plain payload → success;
  * `{ "fail": true }` → a retryable failure; `{ "fail": true, "retryable":
- * false }` → a permanent failure.
+ * false }` → a permanent failure. 46.13 registers the WhatsApp handlers that
+ * delegate to the Python service through `whatsappJobs.mjs`
+ * (`whatsapp.connect`, `whatsapp.sync`, `whatsapp.push`,
+ * `whatsapp.disconnect`). 31.x registers `presentation.generate`, which drives
+ * the separate Presenton service through `presentationJobs.mjs`.
  */
 import { processDocument } from "./documentProcessing.mjs";
+import { reindexDocument } from "./documentReindex.mjs";
+import { generatePresentation } from "./presentationJobs.mjs";
+import {
+  whatsappConnect,
+  whatsappDisconnect,
+  whatsappPush,
+  whatsappSync,
+} from "./whatsappJobs.mjs";
 
 export const handlers = {
   "document.process": processDocument,
+
+  "document.reindex": reindexDocument,
+
+  "presentation.generate": generatePresentation,
+
+  "whatsapp.connect": whatsappConnect,
+
+  "whatsapp.sync": whatsappSync,
+
+  "whatsapp.push": whatsappPush,
+
+  "whatsapp.disconnect": whatsappDisconnect,
 
   "noop.test": async (payload, ctx) => {
     ctx.log(`noop.test ran (job ${ctx.jobId}, attempt ${ctx.attempt})`);

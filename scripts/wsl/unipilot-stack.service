@@ -1,0 +1,26 @@
+# UniPilot local Supabase stack — WSL boot hook (optional).
+#
+# Installed by scripts/wsl/install-autostart.sh, which fills in the two
+# placeholders below: the checkout's backend/ directory (a /mnt/c/... path) and
+# the distro's supabase CLI path. Docker itself is already enabled in the
+# distro's systemd; Requires=docker.service also pulls it in for distros where
+# it is not. This unit exists because the Supabase containers do not survive a
+# WSL restart — `supabase start` is what brings them back.
+#
+# Remove with:
+#   systemctl disable --now unipilot-stack.service
+#   rm /etc/systemd/system/unipilot-stack.service && systemctl daemon-reload
+[Unit]
+Description=UniPilot local Supabase stack (supabase start)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_BACKEND_DIR__
+ExecStart=__SUPABASE_BIN__ start
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

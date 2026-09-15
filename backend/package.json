@@ -9,7 +9,9 @@
     "seed:qa": "node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs",
     "worker": "node --env-file=../frontend/.env.development.local worker/run.mjs",
     "worker:once": "node --env-file=../frontend/.env.development.local worker/run.mjs --once",
-    "benchmark": "node worker/benchmark.mjs"
+    "benchmark": "node worker/benchmark.mjs",
+    "search-benchmark": "node --env-file=../frontend/.env.development.local worker/searchBenchmark.mjs",
+    "test:whatsapp": "python -m pytest ../whatsapp"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
