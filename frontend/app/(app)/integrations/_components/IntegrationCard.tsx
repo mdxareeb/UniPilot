@@ -27,10 +27,10 @@ export function IntegrationCard({
   return (
     <Card
       variant="compact"
-      className="flex h-full min-w-0 flex-col gap-3 bg-glass p-4"
+      className="flex h-full min-w-0 flex-col gap-3 bg-glass p-4 backdrop-blur-md"
     >
       <div className="flex items-center gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-control border border-border bg-card">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-control border border-border bg-glass-subtle">
           {mark}
         </span>
         <h2 className="min-w-0 text-body-lg font-semibold text-foreground">

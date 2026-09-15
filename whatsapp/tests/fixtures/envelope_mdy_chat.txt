@@ -1,0 +1,9 @@
+[9/12/26, 1:40:35 PM] Aisha: 12th sept is our final exam
+[9/12/26, 1:45:18 PM] Aisha: 20th sept is the project submission
+[9/13/26, 9:02:00 AM] Ben: friday submission check
+[9/13/26, 9:03:00 AM] Ben: friday is a holiday
+[9/13/26, 9:04:00 AM] Chen: ask Dana to print the handouts on monday
+[9/13/26, 9:05:00 AM] Chen: Monday submit the draft
+[9/13/26, 9:06:00 AM] Dana: monday does not work
+[9/13/26, 9:07:00 AM] Dana: tuesday is the CS101 presentation
+[9/13/26, 9:08:00 AM] Eli: no, I am around on Tuesday, we will decide then

@@ -1,0 +1,4 @@
+dateparser>=1.2.0
+requests>=2.32.0
+# IANA timezone database: Windows' zoneinfo needs it (Linux/macOS ship one).
+tzdata>=2025.1

@@ -1,0 +1,11 @@
+# Secrets - never commit these
+.env
+credentials.json
+token.json
+
+# Generated / private files
+__pycache__/
+output/
+data/
+.wa_profile/
+.profiles/
