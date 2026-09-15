@@ -146,7 +146,8 @@ test.describe("tasks UI (16.x)", () => {
     const title = `${PREFIX} create one`;
     await dialog.getByLabel("Title").fill(title);
     await dialog.getByLabel(/due date/i).fill("2026-09-02");
-    await dialog.getByLabel(/priority/i).selectOption("high");
+    await dialog.getByRole("combobox", { name: /priority/i }).click();
+    await dialog.getByRole("option", { name: "High", exact: true }).click();
     await dialog.getByRole("button", { name: "Add task" }).click();
 
     await expect(dialog).not.toBeVisible();
@@ -213,7 +214,8 @@ test.describe("tasks UI (16.x)", () => {
     const dialog = page.getByRole("dialog", { name: "Edit task" });
     await expect(dialog.getByLabel("Title")).toHaveValue(`${PREFIX} edit seed`);
     await dialog.getByLabel("Title").fill(`${PREFIX} edit renamed`);
-    await dialog.getByLabel(/priority/i).selectOption("medium");
+    await dialog.getByRole("combobox", { name: /priority/i }).click();
+    await dialog.getByRole("option", { name: "Medium", exact: true }).click();
     await dialog.getByRole("button", { name: "Save changes" }).click();
 
     await expect(dialog).not.toBeVisible();
@@ -251,10 +253,13 @@ test.describe("tasks UI (16.x)", () => {
     await page
       .getByRole("button", { name: `Delete ${PREFIX} remove me` })
       .click();
-    await page
-      .getByRole("dialog")
+    const confirm = page.getByRole("dialog", { name: "Delete this task?" });
+    await confirm
       .getByRole("button", { name: "Delete task" })
       .click();
+    // The dialog closes only after the action succeeded: reloading before
+    // that can read the pre-delete server render.
+    await expect(confirm).not.toBeVisible();
     await expect(card(page, removeId)).toHaveCount(0);
 
     await page.reload();
@@ -307,6 +312,16 @@ test.describe("tasks UI (16.x)", () => {
     await page.mouse.up();
 
     await expect(columnCard(page, "In progress", id)).toBeVisible();
+
+    // The move is optimistic: wait for the write to settle before reloading,
+    // so the server render is guaranteed to include it.
+    await expect
+      .poll(
+        async () =>
+          (await service.from("tasks").select("status").eq("id", id).single())
+            .data?.status,
+      )
+      .toBe("in_progress");
 
     await page.reload();
     await expect(columnCard(page, "In progress", id)).toBeVisible();

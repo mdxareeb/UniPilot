@@ -131,7 +131,7 @@ export function TaskBoard({ index }: { index: number }) {
       </p>
 
       {error ? (
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-base border border-border bg-card p-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-base border border-border bg-glass p-3 backdrop-blur-md">
           <MotionNotice role="alert" className="text-label-sm text-destructive">
             {error}
           </MotionNotice>
@@ -218,10 +218,10 @@ export function TaskBoard({ index }: { index: number }) {
                   );
                 }}
                 onDrop={(event) => handleDrop(event, column.id)}
-                className={`flex min-w-0 flex-col gap-3 rounded-card border p-4 transition-colors ${
+                className={`flex min-w-0 flex-col gap-3 rounded-card border p-4 transition-colors backdrop-blur-md ${
                   isDropTarget
-                    ? "border-foreground bg-muted/40"
-                    : "border-border bg-glass-subtle"
+                    ? "border-foreground bg-glass-strong"
+                    : "border-border bg-glass"
                 }`}
               >
                 <h3 className="flex items-center gap-1.5 font-mono text-label-caps uppercase text-muted-foreground">

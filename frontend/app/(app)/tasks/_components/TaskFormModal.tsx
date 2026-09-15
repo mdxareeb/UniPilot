@@ -195,16 +195,9 @@ function TaskFormFields({
           name="priority"
           value={priority}
           disabled={pending}
-          onChange={(event) =>
-            setPriority(event.target.value as TaskFormValues["priority"])
-          }
-        >
-          {TASK_PRIORITY_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </Select>
+          options={TASK_PRIORITY_OPTIONS}
+          onChange={(next) => setPriority(next as TaskFormValues["priority"])}
+        />
       </div>
 
       {error ? (

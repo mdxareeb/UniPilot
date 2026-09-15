@@ -116,7 +116,7 @@ export function TaskCard({
     <MotionListItem
       as="li"
       data-task-id={task.id}
-      className={`min-w-0 rounded-base border border-border bg-card p-3.5 transition-opacity${
+      className={`min-w-0 rounded-base border border-border bg-glass-subtle p-3.5 transition-opacity${
         dragging ? " opacity-60" : ""
       }`}
     >
