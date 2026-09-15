@@ -114,7 +114,7 @@ test.describe("structure: /tasks semantics + keyboard", () => {
     // The dialog collects the real model's fields, including 21.7's priority.
     await expect(dialog.getByLabel(/title/i)).toBeVisible();
     await expect(dialog.getByLabel(/due date/i)).toBeVisible();
-    await expect(dialog.getByLabel(/priority/i)).toBeVisible();
+    await expect(dialog.getByRole("combobox", { name: /priority/i })).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();

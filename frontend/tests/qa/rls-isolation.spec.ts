@@ -67,6 +67,10 @@ const RESIDUE_TABLES = [
   ...OWNED_TABLES,
   "document_chunks",
   "messages",
+  "integration_connections",
+  "integration_runs",
+  "integration_messages",
+  "integration_candidates",
 ] as const;
 
 type Result = { data: unknown; error: { message: string } | null };

@@ -18,9 +18,10 @@
  *
  * Own Playwright project (`qa-jobs-runner`, after the existing data projects
  * and their UI consumers). Every row this spec creates is tracked and deleted
- * in `afterEach`; `afterAll` asserts the table is empty, so the spec is
- * repeatable and leaves no residue. Local-only by construction; hosted is
- * never contacted.
+ * in `afterEach`; `afterAll` asserts the spec returns the jobs table to its
+ * pre-run count and none of its own ids survive — other users' jobs are
+ * legitimate state (it must not assume an empty table). Local-only by
+ * construction; hosted is never contacted.
  */
 import { test, expect } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -48,7 +49,14 @@ let service: SupabaseClient;
 let qa1: SupabaseClient;
 let qa2: SupabaseClient;
 
+/** Pre-run jobs-table count; residue is relative to this, not to zero. */
+let jobsCountBefore = 0;
+
+/** Ids pending teardown in the current test. */
 const createdIds: string[] = [];
+
+/** Every id this spec ever created, kept across teardowns for `afterAll`. */
+const everCreatedIds: string[] = [];
 
 async function signIn(
   client: SupabaseClient,
@@ -86,6 +94,7 @@ async function insertJob(
     .insert({ id, kind: "noop.test", payload: {}, ...values });
   expect(error, `seed job: ${error?.message}`).toBeNull();
   createdIds.push(id);
+  everCreatedIds.push(id);
   return id;
 }
 
@@ -119,6 +128,16 @@ test.beforeAll(async () => {
   service = createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // Snapshot the table before any test writes: other users' jobs (e.g. a real
+  // founder scan) are legitimate state, so residue is asserted relative to
+  // this count rather than against an assumed-empty table.
+  const { count, error } = await service
+    .from("jobs")
+    .select("id", { count: "exact", head: true });
+  expect(error, `pre-run jobs count: ${error?.message}`).toBeNull();
+  jobsCountBefore = count ?? 0;
+
   qa1 = createClient(url, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
@@ -142,7 +161,25 @@ test.afterAll(async () => {
     .from("jobs")
     .select("id", { count: "exact", head: true });
   expect(error, `residue count: ${error?.message}`).toBeNull();
-  expect(count, "no job rows may survive the spec").toBe(0);
+  expect(
+    count,
+    "the spec must return the jobs table to its pre-run count",
+  ).toBe(jobsCountBefore);
+
+  // `afterEach` cleared `createdIds`, so the independent proof that no id this
+  // spec ever created survives reads the snapshot of every id it did create.
+  const createdIdsSnapshot = [...everCreatedIds];
+  if (createdIdsSnapshot.length > 0) {
+    const { data, error: ownError } = await service
+      .from("jobs")
+      .select("id")
+      .in("id", createdIdsSnapshot);
+    expect(ownError, `own-id residue read: ${ownError?.message}`).toBeNull();
+    expect(
+      data ?? [],
+      "no id created by this spec may survive the run",
+    ).toHaveLength(0);
+  }
 });
 
 test.describe("jobs runner (29.1)", () => {

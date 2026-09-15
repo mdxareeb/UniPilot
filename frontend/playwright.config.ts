@@ -199,6 +199,75 @@ export default defineConfig({
       },
     },
     {
+      // Task 18.x — the documents hub flows (cards, search/filters, preview,
+      // retry, quota). It drives the worker and the list, so it runs after
+      // the processing spec and before the jobs-runner spec (which also runs
+      // the worker) and the parallel workspace specs.
+      name: "qa-documents-hub",
+      testMatch: /documents-hub\.spec\.ts/,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-tasks-data",
+        "qa-tasks-ui",
+        "qa-events-data",
+        "qa-events-ui",
+        "qa-documents-data",
+        "qa-documents-ui",
+        "qa-documents-processing",
+      ],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
+    },
+    {
+      // Task 25.x — retrieval: chunking/backfill, keyword search, RLS and the
+      // search panel. It drives the worker and the real search function, so
+      // it runs at the tail of the documents chain (after the hub) and before
+      // the jobs-runner spec and the parallel workspace specs.
+      name: "qa-documents-search",
+      testMatch: /documents-search\.spec\.ts/,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-tasks-data",
+        "qa-tasks-ui",
+        "qa-events-data",
+        "qa-events-ui",
+        "qa-documents-data",
+        "qa-documents-ui",
+        "qa-documents-processing",
+        "qa-documents-hub",
+      ],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
+    },
+    {
+      // Task 26.x — the assistant backend: provider honesty, persistence,
+      // RAG isolation, limits and the streaming contract. It drives the real
+      // turn endpoint and the worker, so it runs after the search chain and
+      // before the jobs runner and the parallel workspace specs.
+      name: "qa-assistant-backend",
+      testMatch: /assistant-backend\.spec\.ts/,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-tasks-data",
+        "qa-tasks-ui",
+        "qa-events-data",
+        "qa-events-ui",
+        "qa-documents-data",
+        "qa-documents-ui",
+        "qa-documents-processing",
+        "qa-documents-hub",
+        "qa-documents-search",
+      ],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
+    },
+    {
       // Task 29.1 — the generic background runner. It drives the worker
       // process against real jobs, so it runs at the tail of the mutating
       // projects (after every other data/UI consumer) and before the parallel
@@ -215,7 +284,114 @@ export default defineConfig({
         "qa-documents-data",
         "qa-documents-ui",
         "qa-documents-processing",
+        "qa-documents-hub",
+        "qa-documents-search",
+        "qa-assistant-backend",
       ],
+    },
+    {
+      // Task 31.x — the presentation adapter + `presentation.generate` worker
+      // wiring. In the GATE-1 environment (no Presenton configured) it proves
+      // the honest blocked path end to end: adapter guards, a permanent
+      // not-connected settle, RLS and the parser. It drives `worker/run.mjs`,
+      // so it runs after the jobs runner and before the parallel workspace
+      // specs; it also holds the shared worker lock for targeted runs.
+      name: "qa-presentation-jobs",
+      testMatch: /presentations-jobs\.spec\.ts/,
+      timeout: 120_000,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-tasks-data",
+        "qa-tasks-ui",
+        "qa-events-data",
+        "qa-events-ui",
+        "qa-documents-data",
+        "qa-documents-ui",
+        "qa-documents-processing",
+        "qa-documents-hub",
+        "qa-documents-search",
+        "qa-assistant-backend",
+        "qa-jobs-runner",
+      ],
+    },
+    {
+      // Task 46.12 — schema/ACL/retention proofs. DB-only; local stack only.
+      // The raised timeout covers the cross-file worker lock wait (see
+      // tests/qa/workerLock.ts): the security backfill proof and the retention
+      // overview reads are two files of this project and serialize under a
+      // targeted --no-deps run.
+      name: "qa-whatsapp-security",
+      testMatch: /whatsapp-(security|retention)\.spec\.ts/,
+      timeout: 240_000,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-tasks-data",
+        "qa-tasks-ui",
+        "qa-events-data",
+        "qa-events-ui",
+        "qa-documents-data",
+        "qa-documents-ui",
+        "qa-documents-processing",
+        "qa-documents-hub",
+        "qa-documents-search",
+        "qa-jobs-runner",
+        "qa-presentation-jobs",
+      ],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
+    },
+    {
+      // Task 46.13 — the worker ↔ Python job proofs. Drives worker/run.mjs.
+      // The raised timeout covers the cross-file worker lock wait (see
+      // tests/qa/workerLock.ts) and Python startup; hooks use this timeout.
+      name: "qa-whatsapp-jobs",
+      testMatch: /whatsapp-jobs\.spec\.ts/,
+      timeout: 240_000,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-tasks-data",
+        "qa-tasks-ui",
+        "qa-events-data",
+        "qa-events-ui",
+        "qa-documents-data",
+        "qa-documents-ui",
+        "qa-documents-processing",
+        "qa-documents-hub",
+        "qa-documents-search",
+        "qa-jobs-runner",
+        "qa-whatsapp-security",
+      ],
+    },
+    {
+      // Task 46.15 — export upload + candidate review + calendar marker.
+      // The raised timeout covers the cross-file worker lock wait (see
+      // tests/qa/workerLock.ts), worker startup and the 90 s settle polls.
+      name: "qa-whatsapp-flow",
+      testMatch: /whatsapp-(ui|export)\.spec\.ts/,
+      timeout: 240_000,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-tasks-data",
+        "qa-tasks-ui",
+        "qa-events-data",
+        "qa-events-ui",
+        "qa-documents-data",
+        "qa-documents-ui",
+        "qa-documents-processing",
+        "qa-documents-hub",
+        "qa-documents-search",
+        "qa-jobs-runner",
+        "qa-whatsapp-security",
+        "qa-whatsapp-jobs",
+      ],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
     },
     {
       name: "chromium-authenticated",
@@ -231,7 +407,14 @@ export default defineConfig({
         "qa-documents-data",
         "qa-documents-ui",
         "qa-documents-processing",
+        "qa-documents-hub",
+        "qa-documents-search",
+        "qa-assistant-backend",
         "qa-jobs-runner",
+        "qa-whatsapp-security",
+        "qa-whatsapp-jobs",
+        "qa-whatsapp-flow",
+        "qa-presentation-jobs",
       ],
       use: {
         // Start every test already authenticated (real session obtained by
