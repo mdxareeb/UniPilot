@@ -303,7 +303,10 @@ test.describe("document processing (24.x)", () => {
       buffer: pdf,
     });
 
-    const row = page.locator("[data-document-id]").first();
+    const row = page
+      .locator("[data-document-id]")
+      .filter({ hasText: name })
+      .first();
     await expect(row).toBeVisible({ timeout: 30_000 });
 
     // Track the row before asserting on it, so a failed assertion still tears
@@ -312,8 +315,9 @@ test.describe("document processing (24.x)", () => {
     expect(documentId).toMatch(/^[0-9a-f-]{36}$/i);
     createdDocumentIds.push(documentId!);
 
-    // The finalize hand-off enqueued the job and flipped the status.
-    await expect(row).toContainText("Indexing");
+    // The finalize hand-off enqueued the job and flipped the status (18.8:
+    // the hub's "Parsing…" word for `indexing`).
+    await expect(row).toContainText("Parsing…");
 
     const { data: job } = await service
       .from("jobs")
@@ -343,11 +347,12 @@ test.describe("document processing (24.x)", () => {
     expect(chunks[0].content).toContain("Alpha page content");
     expect(chunks[1].content).toContain("Beta page content");
 
-    // The surface reflects the settled state on the next server render.
+    // The surface reflects the settled state on the next server render
+    // (18.9/18.10: "Searchable" is the hub's word for `indexed`).
     await page.reload();
     await page.waitForLoadState("networkidle");
     await expect(page.locator("[data-document-id]").first()).toContainText(
-      "Indexed",
+      "Searchable",
     );
     await expect(page.locator("[data-document-id]").first()).toContainText(
       "2 pages",

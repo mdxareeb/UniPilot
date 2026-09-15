@@ -121,15 +121,6 @@ function trackConsoleErrors(page: Page): string[] {
   return errors;
 }
 
-/** The row's immutable id as the UI rendered it. */
-async function documentRowId(page: Page): Promise<string> {
-  const row = page.locator("[data-document-id]").first();
-  await expect(row).toBeVisible();
-  const id = await row.getAttribute("data-document-id");
-  expect(id).toMatch(/^[0-9a-f-]{36}$/i);
-  return id!;
-}
-
 test.beforeAll(async () => {
   if (!LOCAL_TARGET.test(url)) {
     throw new Error(
@@ -188,16 +179,20 @@ test.describe("documents UI (23.x)", () => {
       .locator('[role="progressbar"]')
       .waitFor({ state: "attached", timeout: 15_000 });
 
-    const row = page.locator("[data-document-id]").first();
+    const row = page
+      .locator("[data-document-id]")
+      .filter({ hasText: name })
+      .first();
     await expect(row).toBeVisible({ timeout: 30_000 });
     await expect(row).toContainText(name);
     // 24.2: finalize enqueues processing and the document is honestly
-    // "Indexing" until the worker settles it.
-    await expect(row).toContainText("Indexing");
+    // "Parsing…" until the worker settles it (18.8's copy).
+    await expect(row).toContainText("Parsing…");
 
     // The record and the object are both real, and the DB size matches the
     // object Storage actually holds.
-    const id = await documentRowId(page);
+    const id = await row.getAttribute("data-document-id");
+    expect(id).toMatch(/^[0-9a-f-]{36}$/i);
     const { data: stored, error } = await service
       .from("documents")
       .select("id, name, storage_path, size_bytes, status")
@@ -250,14 +245,16 @@ test.describe("documents UI (23.x)", () => {
         .filter({ hasText: "That file isn't supported" }),
     ).toBeVisible({ timeout: 30_000 });
 
-    // Nothing survives: no row, no object.
+    // Nothing survives: no row, no object, no card for this name.
     const { data: rows } = await service
       .from("documents")
       .select("id")
       .eq("user_id", qa1Id)
       .like("name", `${PREFIX}%`);
     expect(rows ?? []).toHaveLength(0);
-    await expect(page.locator("[data-document-id]")).toHaveCount(0);
+    await expect(
+      page.locator("[data-document-id]").filter({ hasText: name }),
+    ).toHaveCount(0);
 
     expect(errors, errors.join("\n")).toEqual([]);
   });
@@ -275,10 +272,12 @@ test.describe("documents UI (23.x)", () => {
     await page.waitForTimeout(400);
 
     await page.setInputFiles('input[type="file"]', pdfPayload(name, 2048));
-    await expect(page.locator("[data-document-id]").first()).toBeVisible({
-      timeout: 30_000,
-    });
-    const id = await documentRowId(page);
+    const uploadedCard = page
+      .locator("[data-document-id]")
+      .filter({ hasText: name });
+    await expect(uploadedCard).toBeVisible({ timeout: 30_000 });
+    const id = await uploadedCard.getAttribute("data-document-id");
+    expect(id).toMatch(/^[0-9a-f-]{36}$/i);
 
     const before = await service
       .from("documents")
@@ -297,18 +296,33 @@ test.describe("documents UI (23.x)", () => {
     await page
       .getByRole("button", { name: `Rename ${name}`, exact: true })
       .click();
-    await page.getByLabel("Document name").fill(renamed);
+    await page.getByLabel(/Document name/).fill(renamed);
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(
       page.locator("[data-document-id]").first(),
     ).toContainText(renamed);
+
+    // Rename is optimistic in the hub: the card changes first, the row
+    // settles a moment later, so poll for the persisted name.
+    await expect
+      .poll(
+        async () => {
+          const { data } = await service
+            .from("documents")
+            .select("name")
+            .eq("id", id)
+            .maybeSingle();
+          return data?.name ?? null;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(renamed);
 
     const afterRename = await service
       .from("documents")
       .select("name, storage_path")
       .eq("id", id)
       .maybeSingle();
-    expect(afterRename.data!.name).toBe(renamed);
     expect(afterRename.data!.storage_path).toBe(storagePath);
 
     // Delete: confirmation first, then object + row (+ cascaded chunks).

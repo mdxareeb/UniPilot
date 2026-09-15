@@ -333,6 +333,63 @@ export async function markDocumentIndexing(
   return data ? documentRowToItem(data, timeZone) : null;
 }
 
+/** What a preview surface may do with a document (18.11). */
+export type DocumentPreview = {
+  /** Short-lived signed URL into the private bucket (60 seconds). */
+  url: string;
+  /**
+   * `inline` for types a browser renders safely in place (PDF via its own
+   * viewer, PNG/JPEG as images); `download` for everything else (DOCX), where
+   * the signed URL carries `Content-Disposition: attachment` so no OOXML is
+   * ever handed to a renderer.
+   */
+  mode: "inline" | "download";
+};
+
+/**
+ * 18.11 — a short-lived, owner-scoped preview URL. The bucket stays private:
+ * the object is addressed with a 60-second signed URL minted through the
+ * caller's session (RLS authorizes the object), the server's content type is
+ * the stored MIME type, and DOCX-class types are forced to an attachment
+ * download (23.13's posture: nothing unknown is rendered). Null when no owned
+ * row matched or the row has no object yet.
+ */
+export async function getDocumentPreview(
+  userId: string,
+  documentId: string,
+): Promise<DocumentPreview | null> {
+  const supabase = await createClient();
+
+  const { data: row, error } = await supabase
+    .from("documents")
+    .select("id, name, storage_path, mime_type")
+    .eq("id", documentId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw new Error("Failed to load document.");
+  if (!row || row.storage_path === null) return null;
+
+  const inline =
+    row.mime_type === "application/pdf" ||
+    row.mime_type === "image/png" ||
+    row.mime_type === "image/jpeg";
+
+  const { data, error: signError } = await supabase.storage
+    .from(DOCUMENT_BUCKET)
+    .createSignedUrl(
+      row.storage_path,
+      60,
+      inline ? { download: false } : { download: row.name },
+    );
+
+  if (signError || !data?.signedUrl) {
+    throw new Error("Failed to sign document URL.");
+  }
+
+  return { url: data.signedUrl, mode: inline ? "inline" : "download" };
+}
+
 /**
  * 23.9 — delete: the storage object first, then the row. `document_chunks`
  * cascades from the row delete. False when no owned row matched; a Storage

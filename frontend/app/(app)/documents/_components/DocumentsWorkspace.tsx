@@ -4,22 +4,27 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 import { useSignInPrompt } from "@/components/auth/SignInPromptProvider";
 import {
   abortDocumentAction,
   deleteDocumentAction,
   finalizeDocumentAction,
+  previewDocumentAction,
   renameDocumentAction,
   reserveDocumentAction,
+  retryDocumentAction,
 } from "@/lib/data/documentActions";
 import {
   DOCUMENT_DELETE_ERROR,
   DOCUMENT_INVALID_INPUT_ERROR,
+  DOCUMENT_PREVIEW_ERROR,
   DOCUMENT_RENAME_ERROR,
   DOCUMENT_SAVE_ERROR,
   DOCUMENT_UPLOAD_ERROR,
@@ -33,35 +38,42 @@ import {
   type DocumentItem,
   type DocumentMimeType,
 } from "@/lib/data/documentValues";
+import type { DocumentPreview } from "@/lib/data/documents";
 import { createClient } from "@/lib/supabase/client";
 import { getSupabaseEnv } from "@/lib/supabase/config";
 
 type UploadPhase = "idle" | "uploading" | "error";
 
-type DocumentsUploadContextValue = {
+export type PreviewResult = {
+  error: string | null;
+  preview: DocumentPreview | null;
+};
+
+type DocumentsContextValue = {
+  /** The hub's live list: server-loaded, then mutated optimistically. */
+  documents: DocumentItem[];
   phase: UploadPhase;
   /** Real byte progress (0–100), reported by the XHR upload. */
   progress: number;
   pendingName: string | null;
+  /** Sanitized upload/quota/processing copy for the hub-level notice. */
   error: string | null;
   notice: string | null;
-  /** The most recently settled document, or the page's latest at rest. */
-  document: DocumentItem | null;
   openPicker: () => void;
   upload: (file: File) => Promise<void>;
+  /** All resolve to the sanitized error, or null on success. */
   rename: (id: string, name: string) => Promise<string | null>;
   remove: (id: string) => Promise<string | null>;
+  retry: (id: string) => Promise<string | null>;
+  preview: (id: string) => Promise<PreviewResult>;
 };
 
-const DocumentsUploadContext =
-  createContext<DocumentsUploadContextValue | null>(null);
+const DocumentsContext = createContext<DocumentsContextValue | null>(null);
 
-export function useDocumentsUpload(): DocumentsUploadContextValue {
-  const value = useContext(DocumentsUploadContext);
+export function useDocuments(): DocumentsContextValue {
+  const value = useContext(DocumentsContext);
   if (!value) {
-    throw new Error(
-      "useDocumentsUpload must be used inside DocumentsUploadProvider.",
-    );
+    throw new Error("useDocuments must be used inside DocumentsWorkspace.");
   }
   return value;
 }
@@ -119,8 +131,7 @@ function putObjectWithProgress(options: {
         options.onProgress(Math.round((event.loaded / event.total) * 100));
       }
     };
-    xhr.onload = () =>
-      resolve(xhr.status >= 200 && xhr.status < 300);
+    xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300);
     xhr.onerror = () => resolve(false);
     xhr.onabort = () => resolve(false);
 
@@ -128,32 +139,69 @@ function putObjectWithProgress(options: {
   });
 }
 
+/** The 18.x hub's refresh policy while processing is in flight. */
+const INDEXING_POLL_MS = 4_000;
+
 /**
- * The one upload pipeline (23.2/23.3/23.7/23.8), shared by the header button
- * and the drop target through this provider.
+ * The documents workspace (18.x hub; 23.x/24.x pipeline): the client boundary
+ * that owns the list the server page loaded and every mutation the hub
+ * performs.
  *
- * Ordering: client pre-check → reserve (row + path) → direct upload with
- * progress → finalize (server verifies the object, its size and its magic
- * bytes). Any failure after the reservation runs the abort action, so a
- * partial upload discards its row and object. State is per-attempt: the
- * progress bar reports real bytes, an error keeps the last good document
- * visible, and success replaces it with the settled row the server verified.
+ * The page stays the server owner of access and data (`getWorkspaceAccess` →
+ * `listDocuments`) and passes the initial list here. Rename/delete/retry are
+ * optimistic with rollback and the settled row reconciled back in; uploads
+ * ride the 23.x reserve → direct upload → finalize pipeline and insert the
+ * settled card.
+ *
+ * Async processing (18.8–18.10): while any document is `indexing`, the
+ * workspace asks the server for a fresh render every four seconds
+ * (`router.refresh()`; the interval clears the moment none remains), and the
+ * refreshed `initialDocuments` replace the local list. This is deliberately
+ * polling a server-owned read rather than inventing a client socket: the
+ * worker owns the status, `revalidatePath` already refreshes after actions,
+ * and a bounded interval is the smallest honest mechanism until a realtime
+ * channel is justified.
  */
-export function DocumentsUploadProvider({
-  initialDocument,
+export function DocumentsWorkspace({
+  initialDocuments,
+  guest,
   children,
 }: {
-  initialDocument: DocumentItem | null;
+  initialDocuments: DocumentItem[];
+  guest: boolean;
   children: ReactNode;
 }) {
   const { requireAuth } = useSignInPrompt();
+  const router = useRouter();
+  const [documents, setDocuments] =
+    useState<DocumentItem[]>(initialDocuments);
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [progress, setProgress] = useState(0);
   const [pendingName, setPendingName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [document, setDocument] = useState<DocumentItem | null>(initialDocument);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /* The refreshed server render is authoritative at rest. React's documented
+     "adjust state when a prop changes" pattern (derived during render, not in
+     an effect): a new `initialDocuments` identity swaps the local list unless
+     an upload is mid-flight, where the optimistic card is the newer truth. */
+  const [serverSnapshot, setServerSnapshot] =
+    useState<DocumentItem[]>(initialDocuments);
+  if (initialDocuments !== serverSnapshot) {
+    setServerSnapshot(initialDocuments);
+    if (phase !== "uploading") setDocuments(initialDocuments);
+  }
+
+  const anyIndexing = documents.some(
+    (document) => document.statusValue === "indexing",
+  );
+
+  useEffect(() => {
+    if (guest || !anyIndexing) return;
+    const timer = window.setInterval(() => router.refresh(), INDEXING_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [guest, anyIndexing, router]);
 
   const openPicker = useCallback(() => {
     inputRef.current?.click();
@@ -163,8 +211,7 @@ export function DocumentsUploadProvider({
     try {
       await abortDocumentAction(id);
     } catch {
-      // Cleanup is best-effort; the finalize path already discarded anything
-      // it could reach, and the 29.x sweep is the backstop.
+      // Cleanup is best-effort; finalize already discarded what it could.
     }
   }, []);
 
@@ -176,11 +223,7 @@ export function DocumentsUploadProvider({
       setError(null);
 
       const mimeType = resolveFileMime(file);
-      if (
-        mimeType === null ||
-        file.size <= 0 ||
-        file.size > DOCUMENT_MAX_BYTES
-      ) {
+      if (mimeType === null || file.size <= 0 || file.size > DOCUMENT_MAX_BYTES) {
         setPendingName(null);
         setPhase("error");
         setError(DOCUMENT_INVALID_INPUT_ERROR);
@@ -253,7 +296,10 @@ export function DocumentsUploadProvider({
         return;
       }
 
-      setDocument(finalized.document);
+      setDocuments((previous) => [
+        finalized.document!,
+        ...previous.filter((document) => document.id !== finalized.document!.id),
+      ]);
       setPhase("idle");
       setProgress(100);
       setPendingName(null);
@@ -265,6 +311,15 @@ export function DocumentsUploadProvider({
     async (id: string, name: string): Promise<string | null> => {
       if (!requireAuth("Sign in to rename documents.")) return null;
 
+      const previous = documents;
+      // Optimistic: the name changes under the pointer; the settled row
+      // reconciles a moment later, or the snapshot comes back on failure.
+      setDocuments((list) =>
+        list.map((document) =>
+          document.id === id ? { ...document, name } : document,
+        ),
+      );
+
       let result: Awaited<ReturnType<typeof renameDocumentAction>>;
       try {
         result = await renameDocumentAction(id, name);
@@ -273,17 +328,29 @@ export function DocumentsUploadProvider({
       }
 
       if (result.error !== null || result.document === null) {
+        setDocuments(previous);
         return result.error ?? DOCUMENT_RENAME_ERROR;
       }
-      setDocument(result.document);
+
+      setDocuments((list) =>
+        list.map((document) =>
+          document.id === id ? result.document! : document,
+        ),
+      );
       return null;
     },
-    [requireAuth],
+    [documents, requireAuth],
   );
 
   const remove = useCallback(
     async (id: string): Promise<string | null> => {
       if (!requireAuth("Sign in to delete documents.")) return null;
+
+      const index = documents.findIndex((document) => document.id === id);
+      if (index === -1) return DOCUMENT_DELETE_ERROR;
+      const previous = documents[index];
+
+      setDocuments((list) => list.filter((document) => document.id !== id));
 
       let result: Awaited<ReturnType<typeof deleteDocumentAction>>;
       try {
@@ -292,43 +359,103 @@ export function DocumentsUploadProvider({
         result = { error: DOCUMENT_DELETE_ERROR };
       }
 
-      if (result.error !== null) return result.error;
-      setDocument(null);
+      if (result.error !== null) {
+        setDocuments((list) => {
+          const next = [...list];
+          next.splice(Math.min(index, next.length), 0, previous);
+          return next;
+        });
+        return result.error;
+      }
+
       setNotice("Document deleted.");
       return null;
+    },
+    [documents, requireAuth],
+  );
+
+  const retry = useCallback(
+    async (id: string): Promise<string | null> => {
+      if (!requireAuth("Sign in to retry documents.")) return null;
+
+      const previous = documents;
+      setDocuments((list) =>
+        list.map((document) =>
+          document.id === id
+            ? { ...document, statusValue: "indexing", statusLabel: "Parsing…", errorMessage: undefined }
+            : document,
+        ),
+      );
+
+      let result: Awaited<ReturnType<typeof retryDocumentAction>>;
+      try {
+        result = await retryDocumentAction(id);
+      } catch {
+        result = { error: DOCUMENT_SAVE_ERROR, document: null };
+      }
+
+      if (result.error !== null || result.document === null) {
+        setDocuments(previous);
+        return result.error ?? DOCUMENT_SAVE_ERROR;
+      }
+
+      setDocuments((list) =>
+        list.map((document) =>
+          document.id === id ? result.document! : document,
+        ),
+      );
+      return null;
+    },
+    [documents, requireAuth],
+  );
+
+  const preview = useCallback(
+    async (id: string): Promise<PreviewResult> => {
+      if (!requireAuth("Sign in to preview documents.")) {
+        return { error: null, preview: null };
+      }
+      try {
+        return await previewDocumentAction(id);
+      } catch {
+        return { error: DOCUMENT_PREVIEW_ERROR, preview: null };
+      }
     },
     [requireAuth],
   );
 
-  const value = useMemo<DocumentsUploadContextValue>(
+  const value = useMemo<DocumentsContextValue>(
     () => ({
+      documents,
       phase,
       progress,
       pendingName,
       error,
       notice,
-      document,
       openPicker,
       upload,
       rename,
       remove,
+      retry,
+      preview,
     }),
     [
+      documents,
       phase,
       progress,
       pendingName,
       error,
       notice,
-      document,
       openPicker,
       upload,
       rename,
       remove,
+      retry,
+      preview,
     ],
   );
 
   return (
-    <DocumentsUploadContext.Provider value={value}>
+    <DocumentsContext.Provider value={value}>
       {children}
       <input
         ref={inputRef}
@@ -343,6 +470,6 @@ export function DocumentsUploadProvider({
           if (file) void upload(file);
         }}
       />
-    </DocumentsUploadContext.Provider>
+    </DocumentsContext.Provider>
   );
 }

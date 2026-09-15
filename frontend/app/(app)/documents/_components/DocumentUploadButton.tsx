@@ -2,17 +2,17 @@
 
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { useDocumentsUpload } from "./DocumentsUploadProvider";
+import { useDocuments } from "./DocumentsWorkspace";
 
 /**
- * The header's "Upload document" trigger (23.2): pressing it opens the
- * provider's file picker. The trigger is only a trigger — the picker, the
+ * The header's "Upload document" trigger (18.4): pressing it opens the
+ * workspace's file picker. The trigger is only a trigger — the picker, the
  * reserve→upload→finalize pipeline, the progress state and the error copy all
- * live in `DocumentsUploadProvider`, shared with the drop target so the two
+ * live in `DocumentsWorkspace`, shared with the hub's drop target so the two
  * entry points can never drift apart.
  */
 export function DocumentUploadButton() {
-  const { openPicker } = useDocumentsUpload();
+  const { openPicker } = useDocuments();
 
   return (
     <Button size="sm" onClick={openPicker}>

@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Search, X } from "lucide-react";
 import { useSignInPromptOptional } from "@/components/auth/SignInPromptProvider";
+import { MotionNotice } from "@/components/motion/MotionNotice";
 import { MotionPopover } from "@/components/motion/MotionPopover";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
+import {
+  SEARCH_QUERY_MIN_LENGTH,
+  type SearchHit,
+  type SemanticSearchStatus,
+} from "@/lib/data/searchValues";
+import { searchAction } from "@/lib/data/searchActions";
 
 /**
  * GlobalSearch — the compact search entry point and shell for the later
@@ -41,19 +48,16 @@ import { Input } from "@/components/ui/Input";
  *
  * Visual discipline:
  * - `bg-glass` (60% Muted) + `backdrop-blur-md` (12px) — the same translucent
- *   surface as PrimaryWorkspaceCard and NotificationCenter after its dotted fix;
- *   one step more transparent than `bg-glass-strong` (ProfileMenu/Assistant) so
- *   the single global `bg-dotted-grid::before` canvas shows through as a faint
- *   frosted grid without a second dot layer anywhere in this component
- * - `border-border rounded-card shadow-raised` and monochrome text/border
+ *   surface as PrimaryWorkspaceCard and NotificationCenter
+ * - `border-border rounded-card shadow-overlay` and monochrome text/border
  *   tokens — no new visual language
- * - panel is `absolute inset-x-4 top-full` relative to the sticky header root
- *   on mobile (`WorkspaceMobileNav`'s `sticky z-30` container via `lg:relative`
- *   on the wrapper), so it spans viewport minus 2rem and stays inside the
- *   isolated `bg-dotted-grid` stacking context; desktop is
- *   `lg:absolute lg:left-0` relative to the wrapper itself, so the compact
- *   panel drops from the trigger inside the rail without overcrowding the
- *   sidebar navigation
+ * - the panel is portalled to `body` and positioned from the trigger rect
+ *   (`fixed`, top/left/width, recomputed on resize and on any scroll). It
+ *   cannot stay absolutely positioned inside the rail: the rail is itself a
+ *   `backdrop-blur-md` element, and a backdrop filter nested inside another one
+ *   samples the parent's painted output instead of the page, so the panel's
+ *   blur would be defeated. Portalling puts it in the page's own backdrop root,
+ *   where the page genuinely blurs behind it.
  * - inputs and chips inside stay on solid `bg-card` — only the outer shell is
  *   glass
  *
@@ -78,8 +82,12 @@ import { Input } from "@/components/ui/Input";
  *   unmounted while closed, so no `aria-hidden` needed
  * - keyboard hint is decorative and hidden from AT
  */
+/** The desktop panel width (26rem); phones span the viewport minus margins. */
+const SEARCH_PANEL_WIDTH = 416;
+
 export function GlobalSearch() {
   const pathname = usePathname();
+  const router = useRouter();
   /* Inside the workspace shell this is the sign-in prompt; where the shell is
      absent the hook is null and the trigger behaves exactly as before. A guest
      pressing search gets the skippable prompt instead of a panel that claims
@@ -87,6 +95,12 @@ export function GlobalSearch() {
   const prompt = useSignInPromptOptional();
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [searchState, setSearchState] = useState<{
+    status: "idle" | "searching" | "ready" | "error";
+    hits: SearchHit[];
+    error: string | null;
+    semantic: SemanticSearchStatus | null;
+  }>({ status: "idle", hits: [], error: null, semantic: null });
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -94,6 +108,27 @@ export function GlobalSearch() {
   const inputId = useId();
   const headingId = useId();
   const open = openedFor === pathname;
+  /* Placement for the portalled panel, computed from the trigger rect before
+     the open state flips so it renders in place on the first frame. */
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({
+    visibility: "hidden",
+  });
+
+  const positionPanel = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const margin = 16;
+    const width = Math.min(SEARCH_PANEL_WIDTH, window.innerWidth - margin * 2);
+    const left = Math.max(
+      margin,
+      Math.min(rect.left, window.innerWidth - width - margin),
+    );
+    setPanelStyle({
+      top: Math.round(rect.bottom + 8),
+      left: Math.round(left),
+      width: Math.round(width),
+    });
+  }, []);
 
   // Focus input when opened; reset query when closed so reopening is predictable.
   // The panel mounts when it opens, so the input exists by the time this effect
@@ -126,7 +161,10 @@ export function GlobalSearch() {
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current?.contains(event.target as Node)) return;
+      const target = event.target as Element | null;
+      if (target && rootRef.current?.contains(target)) return;
+      /* The panel is portalled into `body`, so containment is by its own id. */
+      if (target?.closest?.("[data-popover]")?.id === panelId) return;
       setOpenedFor(null);
     };
 
@@ -136,7 +174,19 @@ export function GlobalSearch() {
       window.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open]);
+  }, [open, panelId]);
+
+  /* Keep the portalled panel anchored while the page moves under it. */
+  useEffect(() => {
+    if (!open) return;
+    positionPanel();
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
+    return () => {
+      window.removeEventListener("resize", positionPanel);
+      window.removeEventListener("scroll", positionPanel, true);
+    };
+  }, [open, positionPanel]);
 
   // Global `Ctrl/Cmd + K` — open and focus. Avoids stealing browser find or
   // other chords; only this exact combination is handled. Respects an input
@@ -160,6 +210,7 @@ export function GlobalSearch() {
             return;
           }
           event.preventDefault();
+          positionPanel();
           setOpenedFor(pathname);
         }
       }
@@ -167,19 +218,67 @@ export function GlobalSearch() {
 
     window.addEventListener("keydown", onGlobalKeyDown);
     return () => window.removeEventListener("keydown", onGlobalKeyDown);
-  }, [open, pathname, prompt]);
+  }, [open, pathname, positionPanel, prompt]);
+
+  /* 25.10 — the real retrieval call: debounce the typed query, ask the
+     Server Action, and keep only the newest response. Every state write
+     happens inside the timer/promise callbacks, never synchronously in the
+     effect body. Queries shorter than the minimum never hit the network; the
+     render path shows the empty state for them regardless of stale hits. */
+  useEffect(() => {
+    if (!open) return;
+    const queryToRun = query.trim();
+    if (queryToRun.length < SEARCH_QUERY_MIN_LENGTH) return;
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSearchState({
+        status: "searching",
+        hits: [],
+        error: null,
+        semantic: null,
+      });
+      const result = await searchAction(queryToRun);
+      if (cancelled) return;
+      if (result.error !== null) {
+        setSearchState({
+          status: "error",
+          hits: [],
+          error: result.error,
+          semantic: result.semantic,
+        });
+      } else {
+        setSearchState({
+          status: "ready",
+          hits: result.hits,
+          error: null,
+          semantic: result.semantic,
+        });
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [open, query]);
 
   const close = () => {
     setOpenedFor(null);
     triggerRef.current?.focus();
   };
 
+  const trimmedQuery = query.trim();
+  /* Queries below the minimum never search; stale hits from a longer query
+     must not render for them. */
+  const showResults = trimmedQuery.length >= SEARCH_QUERY_MIN_LENGTH;
+
   return (
-    <div ref={rootRef} className="lg:relative">
+    <div ref={rootRef}>
       <IconButton
         ref={triggerRef}
-        variant="outline"
-        size="sm"
+        variant="glass"
+        size="xs"
         aria-label="Search"
         aria-expanded={open}
         aria-controls={panelId}
@@ -188,20 +287,23 @@ export function GlobalSearch() {
           if (prompt && !prompt.requireAuth("Sign in to search your workspace.")) {
             return;
           }
-          setOpenedFor(open ? null : pathname);
+          if (open) {
+            setOpenedFor(null);
+          } else {
+            positionPanel();
+            setOpenedFor(pathname);
+          }
         }}
       >
-        <Search aria-hidden="true" className="size-4" />
+        <Search aria-hidden="true" className="size-3.5" />
       </IconButton>
 
       {/* `MotionPopover` unmounts the panel once its exit finishes, which is
            what keeps it out of the tab order and the accessibility tree while
-           closed. `max-h` keeps it scrollable on short viewports. Mobile is
-           `absolute inset-x-4` relative to the sticky header root — same
-           containment fix as NotificationCenter — so the fixed
-           `bg-dotted-grid::before` canvas shows through the translucent glass
-           surface. Desktop is `lg:left-0 lg:w-[26rem]`. The single global dot
-           source is never duplicated inside this panel. */}
+           closed. `max-h` keeps it scrollable on short viewports. The panel is
+           portalled (`fixed` position from the trigger rect) so its
+           `backdrop-blur-md` samples the page rather than the rail's own blurred
+           output; it stays anchored through resize and scroll. */}
       <MotionPopover
         open={open}
         id={panelId}
@@ -210,7 +312,9 @@ export function GlobalSearch() {
         aria-modal="false"
         aria-labelledby={headingId}
         direction="center"
-        className="absolute inset-x-4 top-full z-10 mt-2 flex max-h-[min(20rem,calc(100dvh-10rem))] flex-col gap-5 overflow-hidden rounded-card border border-border bg-glass p-5 shadow-overlay backdrop-blur-md lg:inset-x-auto lg:left-0 lg:right-auto lg:w-[26rem] lg:max-w-[26rem]"
+        portal
+        style={panelStyle}
+        className="fixed z-40 flex max-h-[min(20rem,calc(100dvh-10rem))] flex-col gap-5 overflow-hidden rounded-card border border-border bg-glass p-5 shadow-overlay backdrop-blur-md"
       >
         {/* Search field row — [ Search input ] [ × ] — no keyboard badge. */}
         <div className="flex items-center gap-3">
@@ -260,14 +364,14 @@ export function GlobalSearch() {
           </IconButton>
         </div>
 
-        {/* Content area — future retrieval slot boundary. Today: empty state only,
-            integrated into the panel rather than a separate giant card.
-            No fake results are rendered regardless of query length. When the
-            real search backend exists, this block will be replaced by a
-            conditional rendering of loading / error / grouped results for
-            documents, pages/sections, tasks, calendar/events, and other
-            workspace content — without changing the shell above. */}
-        <div className="flex flex-col gap-2 px-1 pb-1">
+        {/* 25.10 — the real retrieval slot. The shell above is unchanged
+            (trigger, Escape/focus, Ctrl+K, glass popover); this area now
+            renders loading, error, honest no-match and document hits. Each
+            hit cites the document and page (25.9) and opens the 18.11 preview
+            for that document — no content is rendered here, the preview owns
+            safe serving. Semantic search stays keyword-only until 25.3's
+            provider exists, and the quiet mode line says so. */}
+        <div className="flex max-h-[min(16rem,40dvh)] flex-col gap-2 overflow-y-auto px-1 pb-1">
           <div className="flex flex-col gap-1">
             <h2
               id={headingId}
@@ -276,33 +380,129 @@ export function GlobalSearch() {
               Search your UniPilot workspace
             </h2>
             <p className="text-[13px] leading-[1.6] text-muted-foreground/80">
-              Search across your documents, tasks, calendar and other workspace
-              content.
+              Search the text of your documents. Results cite the document and
+              page.
             </p>
           </div>
 
-          {/* Subtle hint that the surface is awaiting the Phase 19 backend —
-              not a result, not a document, not a task. Keeps the panel from
-              reading as broken when a query is typed before the backend exists. */}
-          {query.trim().length > 0 ? (
+          {showResults && searchState.status === "searching" ? (
+            <>
+              <p role="status" className="sr-only">
+                Searching…
+              </p>
+              <div aria-hidden="true" className="flex flex-col gap-2">
+                <div className="h-9 rounded-nested bg-muted" />
+                <div className="h-9 rounded-nested bg-muted" />
+              </div>
+            </>
+          ) : null}
+
+          {showResults && searchState.status === "error" ? (
+            <MotionNotice
+              role="alert"
+              className="text-label-sm text-destructive"
+            >
+              {searchState.error}
+            </MotionNotice>
+          ) : null}
+
+          {showResults &&
+          searchState.status === "ready" &&
+          searchState.hits.length === 0 ? (
             <p className="rounded-nested bg-muted px-3 py-2 text-label-sm leading-5 text-muted-foreground">
-              Search will look across your workspace once the retrieval layer
-              is connected. No results are shown in this preview.
+              No matches for “{trimmedQuery}”.
             </p>
           ) : null}
 
-          {/* === FUTURE BOUNDARY ===
-              results slot: will render
-                - loading skeleton
-                - error state
-                - grouped results: documents, document pages/sections, tasks,
-                  calendar/events, AI/workspace content
-              behind the same glass shell; query + filters will be lifted to
-              a search hook/service (Phase 19 / 25.x). Do not render invented
-              items here.
-          */}
+          {showResults &&
+          searchState.status === "ready" &&
+          searchState.hits.length > 0 ? (
+            <ul aria-label="Search results" className="flex list-none flex-col gap-1">
+              {searchState.hits.map((hit) => (
+                <li key={`${hit.documentId}-${hit.chunkIndex}`}>
+                  {/* A hit is document content that happens to be clickable,
+                      not an action label: the fonts guard reads the explicit
+                      content marker instead of forcing Bricolage. */}
+                  <button
+                    type="button"
+                    data-search-result=""
+                    data-document-id={hit.documentId}
+                    data-fontprobe-role="content"
+                    onClick={() => {
+                      setOpenedFor(null);
+                      router.push(`/documents?preview=${hit.documentId}`);
+                    }}
+                    className="flex w-full flex-col gap-1 rounded-nested border border-transparent px-3 py-2 text-left transition-colors hover:border-border hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  >
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className="min-w-0 truncate font-heading text-label-sm text-foreground">
+                        {hit.documentName}
+                      </span>
+                      <span className="shrink-0 font-mono text-label-caps uppercase text-muted-foreground">
+                        {hit.page ? `Page ${hit.page}` : "Document"}
+                      </span>
+                    </span>
+                    <span className="text-[13px] leading-[1.5] text-muted-foreground/80">
+                      <Snippet text={hit.snippet} />
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {showResults && searchState.status === "ready" ? (
+            <p
+              data-search-mode="keyword"
+              className="px-1 text-[12px] leading-5 text-muted-foreground/70"
+            >
+              {searchState.semantic?.available
+                ? "Hybrid search."
+                : "Keyword search. Semantic search isn't available yet."}
+            </p>
+          ) : null}
         </div>
       </MotionPopover>
     </div>
+  );
+}
+
+/**
+ * The snippet renderer: `[[matched term]]` markers become `<mark>` text
+ * nodes. The SQL function produces the markers; everything is rendered as
+ * text, so no document content is ever parsed as HTML.
+ */
+function Snippet({ text }: { text: string }) {
+  const segments: { text: string; match: boolean }[] = [];
+  const pattern = /\[\[(.+?)\]\]/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ text: text.slice(lastIndex, match.index), match: false });
+    }
+    segments.push({ text: match[1], match: true });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    segments.push({ text: text.slice(lastIndex), match: false });
+  }
+
+  return (
+    <>
+      {segments.map((segment, index) =>
+        segment.match ? (
+          <mark
+            key={index}
+            className="bg-transparent font-medium text-foreground"
+          >
+            {segment.text}
+          </mark>
+        ) : (
+          <span key={index}>{segment.text}</span>
+        ),
+      )}
+    </>
   );
 }

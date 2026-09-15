@@ -155,11 +155,13 @@ async function run(ctx, row) {
     throw permanent(PROCESSING_COPY.TOO_MUCH_TEXT);
   }
 
-  // One unit per page, ordered; 25.x re-chunks for embeddings.
+  // One unit per page, ordered; 25.x re-chunks for embeddings. The source
+  // page travels with the unit so 25.9's references work before re-indexing.
   const units = pages
     .map((content, index) => ({
       document_id: row.id,
       chunk_index: index,
+      page: extracted.pageCount !== null ? index + 1 : null,
       content,
     }))
     .filter((unit) => unit.content !== "");

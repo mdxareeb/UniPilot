@@ -26,6 +26,7 @@ import {
   DOCUMENT_DELETE_ERROR,
   DOCUMENT_INVALID_INPUT_ERROR,
   DOCUMENT_NOT_FOUND_ERROR,
+  DOCUMENT_PREVIEW_ERROR,
   DOCUMENT_QUOTA_ERROR,
   DOCUMENT_RENAME_ERROR,
   DOCUMENT_SAVE_ERROR,
@@ -39,9 +40,12 @@ import {
   abortDocumentReservation,
   deleteDocument,
   finalizeDocument,
+  getDocument,
+  getDocumentPreview,
   markDocumentIndexing,
   renameDocument,
   reserveDocument,
+  type DocumentPreview,
 } from "./documents";
 
 export type DocumentActionResult = {
@@ -58,6 +62,11 @@ export type DocumentReserveResult = {
 
 export type DocumentDeleteResult = {
   error: string | null;
+};
+
+export type DocumentPreviewResult = {
+  error: string | null;
+  preview: DocumentPreview | null;
 };
 
 const UUID_PATTERN =
@@ -209,4 +218,73 @@ export async function deleteDocumentAction(
 
   revalidatePath("/documents");
   return { error: null };
+}
+
+/**
+ * 18.11 — a short-lived signed URL for the preview surface. The bucket's
+ * privacy is unchanged (23.1); this action only mints the URL through the
+ * owner's session, and the service decides inline vs download-only by MIME.
+ */
+export async function previewDocumentAction(
+  documentId: unknown,
+): Promise<DocumentPreviewResult> {
+  const user = await requireOnboardedUser("/documents");
+
+  const id = parseDocumentId(documentId);
+  if (id === null) return { error: DOCUMENT_NOT_FOUND_ERROR, preview: null };
+
+  let preview: DocumentPreview | null;
+  try {
+    preview = await getDocumentPreview(user.id, id);
+  } catch {
+    return { error: DOCUMENT_PREVIEW_ERROR, preview: null };
+  }
+
+  if (preview === null) {
+    return { error: DOCUMENT_NOT_FOUND_ERROR, preview: null };
+  }
+  return { error: null, preview };
+}
+
+/**
+ * 18.15 — the user-facing retry: a failed document is put back into
+ * `indexing` and a fresh `document.process` job is enqueued, so the 29.1
+ * runner owns the attempt/backoff/dead-letter policy as it always does. Only
+ * `failed` documents re-enqueue; any other status is returned unchanged
+ * (idempotent — a double click cannot queue two processing runs).
+ */
+export async function retryDocumentAction(
+  documentId: unknown,
+): Promise<DocumentActionResult> {
+  const user = await requireOnboardedUser("/documents");
+
+  const id = parseDocumentId(documentId);
+  if (id === null) return { error: DOCUMENT_NOT_FOUND_ERROR, document: null };
+
+  let current: DocumentItem | null;
+  try {
+    current = await getDocument(user.id, id);
+  } catch {
+    return { error: DOCUMENT_SAVE_ERROR, document: null };
+  }
+
+  if (current === null) {
+    return { error: DOCUMENT_NOT_FOUND_ERROR, document: null };
+  }
+  if (current.statusValue !== "failed") {
+    return { error: null, document: current };
+  }
+
+  try {
+    await enqueueJob(
+      "document.process",
+      { documentId: id },
+      { userId: user.id },
+    );
+    const indexing = await markDocumentIndexing(user.id, id);
+    revalidatePath("/documents");
+    return { error: null, document: indexing ?? current };
+  } catch {
+    return { error: DOCUMENT_SAVE_ERROR, document: null };
+  }
 }

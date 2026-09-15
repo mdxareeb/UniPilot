@@ -27,5 +27,13 @@ export const DOCUMENT_DELETE_ERROR =
 
 export const DOCUMENT_NOT_FOUND_ERROR = "That document no longer exists.";
 
+export const DOCUMENT_PREVIEW_ERROR =
+  "We couldn't open that document. Please try again.";
+
+/**
+ * 23.12/18.16 — the flat free-tier guard's copy. The numbers are the
+ * documented default, not a plan matrix: plan-based entitlements wait for
+ * billing (49.x), and the sentence says so rather than inventing tiers.
+ */
 export const DOCUMENT_QUOTA_ERROR =
-  "You've reached the free document limit (50 documents or 250 MB). Delete a document to upload another.";
+  "You've reached the free document limit (50 documents or 250 MB). Plan-based limits aren't available yet — delete a document to upload another.";

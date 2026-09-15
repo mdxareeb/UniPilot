@@ -1,0 +1,6 @@
+# Placeholder so the retrieval-benchmark fixture location exists (Task 25.11).
+# Add real <name>.json fixtures shaped
+#   { "query": "...", "expected": [{ "documentName": "...", "page": N }] }
+# and run `npm run search-benchmark -w backend`. Until then the harness
+# reports "No fixtures found" and exits 1 — 25.11 stays [~] because no
+# human-checked sample set exists yet, and no accuracy numbers are recorded.

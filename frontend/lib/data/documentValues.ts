@@ -84,11 +84,11 @@ export const DOCUMENT_STATUSES = [
 ] as const;
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 
-/** The schema's status vocabulary in display words (18.x renders these). */
+/** The schema's status vocabulary in the hub's words (18.8/18.9/18.10). */
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
   uploaded: "Uploaded",
-  indexing: "Indexing",
-  indexed: "Indexed",
+  indexing: "Parsing…",
+  indexed: "Searchable",
   failed: "Failed",
 };
 
