@@ -123,7 +123,7 @@ export function OnboardingShell({
       <div
         data-enter
         style={motionIndex(3)}
-        className="mt-5 rounded-card border border-border bg-glass p-5"
+        className="mt-5 rounded-card border border-border bg-glass p-5 backdrop-blur-md"
       >
         {/* `key={step}` remounts this region on every step change, which plays
             the shared step-enter variant: a fade plus a 16px slide from the

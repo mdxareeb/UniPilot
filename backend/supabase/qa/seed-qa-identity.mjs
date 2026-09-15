@@ -7,11 +7,17 @@
  *   QA1  qa.unipilot@unipilot.test   password: UNIPILOT_QA_PASSWORD   "QA"
  *   QA2  qa2.unipilot@unipilot.test  password: UNIPILOT_QA2_PASSWORD  "QA 2"
  *
- * QA1 backs the authenticated Playwright fixture (`frontend/tests/qa/auth.setup.ts`);
- * QA2 exists only so `frontend/tests/qa/rls-isolation.spec.ts` can prove two real users
- * cannot see each other's rows. Both are authenticated users with no
- * application data at rest — the isolation spec creates the rows it needs and
- * deletes them again.
+ * QA1 backs the authenticated Playwright fixture (`frontend/tests/qa/auth.setup.ts`)
+ * and is left in the standard onboarded fixture state: the seed signs in as
+ * QA1 with the real password grant and, when incomplete, completes the real
+ * `complete_onboarding` RPC with the answers the onboarding spec asserts. When
+ * QA1 is already complete the seed writes nothing. QA2 exists only so
+ * `frontend/tests/qa/rls-isolation.spec.ts` can prove two real users cannot see
+ * each other's rows; QA2 stays without application data at rest — the
+ * isolation spec creates the rows it needs and deletes them again. The
+ * onboarding spec (`frontend/tests/qa/onboarding.spec.ts`) still resets QA1
+ * itself before proving the flow end to end, so seed pre-onboarding is
+ * compatible with it.
  *
  * This script is the only sanctioned way to create either identity. It is
  * versioned, re-runnable and idempotent: running it twice must not error and
@@ -68,6 +74,7 @@ const isReset = process.argv.includes("--reset");
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 // ---------------------------------------------------------------------------
 // Guard 1 — refuse anything that is not the local stack. This seed must never
@@ -116,6 +123,13 @@ if (!isLocal) {
 if (!serviceRoleKey) {
   console.error(
     "Missing SUPABASE_SERVICE_ROLE_KEY. Set it in frontend/.env.development.local (server-side only).",
+  );
+  process.exit(1);
+}
+
+if (!anonKey) {
+  console.error(
+    "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY. Set it in frontend/.env.development.local (the QA1 password grant and onboarding RPC need the anon key).",
   );
   process.exit(1);
 }
@@ -237,8 +251,99 @@ for (const identity of IDENTITIES) {
   }
 }
 
-console.log("");
-console.log("QA identities ready (no application data):");
-for (const identity of IDENTITIES) {
-  console.log(`  ${identity.email}  "${identity.displayName}"`);
+// ---------------------------------------------------------------------------
+// QA1 onboarding fixture — leave QA1 in the standard onboarded state the
+// workspace specs and manual QA expect. QA2 is deliberately never onboarded:
+// the onboarding spec needs an incomplete second user for skip and isolation.
+// When QA1 is already complete the seed must make no writes, so re-running it
+// cannot re-stamp `onboarding_completed_at` or touch QA1's subjects.
+// ---------------------------------------------------------------------------
+
+const QA1 = IDENTITIES[0];
+
+/** Real password grant — the same path the browser login uses. */
+async function signInWithPassword(identity) {
+  const response = await fetch(
+    `${target.origin}/auth/v1/token?grant_type=password`,
+    {
+      method: "POST",
+      headers: {
+        apikey: anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: identity.email,
+        password: identity.password,
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `QA1 sign-in failed: HTTP ${response.status}. Verify ${identity.passwordEnv} in frontend/.env.development.local and re-run \`npm run seed:qa\`.`,
+    );
+  }
+  return response.json();
 }
+
+/** Service-role REST read (Node-only; the key never leaves this process). */
+async function serviceGet(path) {
+  return fetch(`${target.origin}/rest/v1${path}`, {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+    },
+  });
+}
+
+async function ensureQa1Onboarded(userId, accessToken) {
+  const profileResponse = await serviceGet(
+    `/profiles?id=eq.${userId}&select=onboarding_completed_at`,
+  );
+  if (!profileResponse.ok) {
+    throw new Error(`QA1 profile read failed: HTTP ${profileResponse.status}`);
+  }
+  const profiles = await profileResponse.json();
+  if (profiles.length > 0 && profiles[0].onboarding_completed_at) {
+    console.log("QA1 onboarding: already complete (no change)");
+    return;
+  }
+
+  const response = await fetch(
+    `${target.origin}/rest/v1/rpc/complete_onboarding`,
+    {
+      method: "POST",
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        p_first_name: "QA",
+        p_last_name: "One",
+        p_institution: "UniPilot Test University",
+        p_course_program: "Computer Science",
+        p_academic_year: 2,
+        p_semester: 1,
+        p_planning_style: "balanced",
+        p_reminder_lead: "1_week",
+        p_subjects: ["Linear Algebra", "Thermodynamics"],
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`QA1 complete_onboarding failed: HTTP ${response.status}`);
+  }
+  console.log("QA1 onboarding: completed (standard fixture written)");
+}
+
+const qa1Session = await signInWithPassword(QA1);
+await ensureQa1Onboarded(qa1Session.user.id, qa1Session.access_token);
+
+console.log("");
+console.log("QA identities ready:");
+console.log(
+  `  ${IDENTITIES[0].email}  "${IDENTITIES[0].displayName}" — onboarded (standard fixture)`,
+);
+console.log(
+  `  ${IDENTITIES[1].email}  "${IDENTITIES[1].displayName}" — no application data`,
+);

@@ -183,8 +183,14 @@ async function fillAndSubmitOnboarding(page: Page) {
   await page.locator("#courseProgram").fill(ANSWERS.courseProgram);
   await continueStep(page);
 
-  await page.locator("#academicYear").selectOption(ANSWERS.academicYear);
-  await page.locator("#semester").selectOption(ANSWERS.semester);
+  await page.locator("#academicYear").click();
+  await page
+    .getByRole("option", { name: ANSWERS.academicYear, exact: true })
+    .click();
+  await page.locator("#semester").click();
+  await page
+    .getByRole("option", { name: ANSWERS.semester, exact: true })
+    .click();
   await continueStep(page);
 
   // The radio itself is `sr-only` and drawn by a sibling span; the label

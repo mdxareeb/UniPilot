@@ -58,7 +58,7 @@ export function SignupForm() {
          reduced-motion gate is already handled for it. */
       <div
         data-enter="scale"
-        className="flex flex-col gap-4 rounded-card border border-border bg-glass p-5"
+        className="flex flex-col gap-4 rounded-card border border-border bg-glass p-5 backdrop-blur-md"
       >
         <h2 className="text-headline-md text-foreground">Check your email</h2>
         <p className="text-body-md text-muted-foreground">

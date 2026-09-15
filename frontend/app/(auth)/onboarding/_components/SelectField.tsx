@@ -46,15 +46,12 @@ export function SelectField({
         value={value}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
-        onChange={(event) => onChange(field, event.target.value)}
-      >
-        <option value="">{placeholder}</option>
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </Select>
+        options={[
+          { value: "", label: placeholder },
+          ...options.map((option) => ({ value: option, label: option })),
+        ]}
+        onChange={(next) => onChange(field, next)}
+      />
       {error ? (
         <p id={errorId} role="alert" className="text-label-sm text-destructive">
           {error}

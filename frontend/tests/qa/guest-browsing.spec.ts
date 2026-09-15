@@ -163,7 +163,7 @@ test.describe("guest browsing", () => {
     }
     await page.goto("/integrations");
     await expect(
-      visibleCopy(page, /nothing is wired up yet/i),
+      visibleCopy(page, /connect the services you already use/i),
     ).toBeVisible();
 
     // The URL-driven task detail never resolves for a guest: no Server Action

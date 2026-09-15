@@ -13,7 +13,7 @@ export default function ForgotPasswordPage() {
   return (
     <Card
       data-enter
-      className="w-full max-w-[420px] bg-glass p-6 md:p-8"
+      className="w-full max-w-[420px] bg-glass p-6 backdrop-blur-md md:p-8"
     >
       <header className="mb-6">
         <p className="text-label-caps uppercase text-muted-foreground">

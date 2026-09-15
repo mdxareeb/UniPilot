@@ -140,7 +140,7 @@ export function AuthOptions({
             content: the panel itself collapses to zero height, and its own box
             would survive that as a visible sliver. */}
         <Collapsible open={open} variant="scale" id={panelId}>
-          <div className="mt-4 rounded-card border border-border bg-glass p-5">
+          <div className="mt-4 rounded-card border border-border bg-glass p-5 backdrop-blur-md">
             <p className="mb-4 text-center font-mono text-label-caps uppercase text-muted-foreground">
               {emailLabel}
             </p>
