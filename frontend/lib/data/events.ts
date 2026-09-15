@@ -29,7 +29,7 @@ import {
 
 /** The embedded course name comes through RLS like any other subjects read. */
 const EVENT_COLUMNS =
-  "id, title, type, description, location, start_at, end_at, all_day, subject_id, subjects(name)";
+  "id, title, type, description, location, start_at, end_at, all_day, subject_id, source, subjects(name)";
 
 type EventRange = {
   /** Inclusive lower bound, ISO instant. */

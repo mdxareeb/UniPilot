@@ -229,16 +229,9 @@ function EventFormFields({
           name="type"
           value={type}
           disabled={pending}
-          onChange={(changeEvent) =>
-            setType(changeEvent.target.value as EventFormValues["type"])
-          }
-        >
-          {EVENT_TYPE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </Select>
+          options={EVENT_TYPE_OPTIONS}
+          onChange={(next) => setType(next as EventFormValues["type"])}
+        />
       </div>
 
       {subjects.length > 0 ? (
@@ -254,15 +247,15 @@ function EventFormFields({
             name="course"
             value={subjectId}
             disabled={pending}
-            onChange={(changeEvent) => setSubjectId(changeEvent.target.value)}
-          >
-            <option value="">No course</option>
-            {subjects.map((subject) => (
-              <option key={subject.id} value={subject.id}>
-                {subject.name}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "No course" },
+              ...subjects.map((subject) => ({
+                value: subject.id,
+                label: subject.name,
+              })),
+            ]}
+            onChange={setSubjectId}
+          />
         </div>
       ) : null}
 

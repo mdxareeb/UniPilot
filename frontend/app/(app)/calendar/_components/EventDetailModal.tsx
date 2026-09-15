@@ -37,8 +37,9 @@ function Field({ label, value }: { label: string; value: string }) {
  *
  * Only supported fields render, in the calendar's monochrome treatment:
  * title, type, the profile-zone when, course and location when the event
- * carries them. Edit and Delete are the real 17.9/17.10 actions; each closes
- * this dialog and opens its own, so two dialogs never stack.
+ * carries them, plus the `via WhatsApp` provenance line (P5.3) for
+ * WhatsApp-sourced events. Edit and Delete are the real 17.9/17.10 actions;
+ * each closes this dialog and opens its own, so two dialogs never stack.
  */
 export function EventDetailModal({
   state,
@@ -97,6 +98,12 @@ export function EventDetailModal({
               <Field label="Location" value={event.location} />
             ) : null}
           </dl>
+
+          {event.source === "whatsapp" ? (
+            <p className="font-mono text-label-caps text-muted-foreground">
+              via WhatsApp
+            </p>
+          ) : null}
 
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onEdit(event)}>

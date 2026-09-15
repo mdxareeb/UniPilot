@@ -545,7 +545,7 @@ export function CalendarSurface({
       {/* The real grid, keyed by view so AnimatePresence treats each view
           as its own surface. Week renders the time-structured `WeekGrid`;
           month keeps 17.3's `CalendarGrid` — no gutter there, by design. */}
-      <div className="flex min-w-0 flex-col gap-2 rounded-card border border-border bg-glass p-3 sm:p-4">
+      <div className="flex min-w-0 flex-col gap-2 rounded-card border border-border bg-glass p-3 backdrop-blur-md sm:p-4">
         <AnimatePresence initial={false} mode="wait">
           <motion.div
             key={view}

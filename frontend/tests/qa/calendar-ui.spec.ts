@@ -245,9 +245,13 @@ test.describe("calendar UI (17.x)", () => {
     await expect(dialog).toBeVisible();
 
     await dialog.getByLabel("Title").fill(title);
-    await dialog.getByLabel("Type").selectOption("class");
+    await dialog.getByRole("combobox", { name: "Type" }).click();
+    await dialog.getByRole("option", { name: "Class", exact: true }).click();
     if (course) {
-      await dialog.getByLabel(/Course/).selectOption(course.id);
+      await dialog.getByRole("combobox", { name: /Course/ }).click();
+      await dialog
+        .getByRole("option", { name: course.name, exact: true })
+        .click();
     }
     await dialog.getByLabel("Starts").fill(`${today}T09:00`);
     await dialog.getByLabel("Ends").fill(`${today}T10:30`);

@@ -45,6 +45,8 @@ export type EventRow = Pick<
 > & {
   /** PostgREST embedding of the optional course, RLS-scoped like the rest. */
   subjects?: { name: string } | null;
+  /** Provenance (`manual` | `whatsapp`); only WhatsApp renders a marker. */
+  source?: string | null;
 };
 
 export const EVENT_TYPES = ["class", "exam", "deadline"] as const;
@@ -127,6 +129,8 @@ export type EventItem = {
   subjectId?: string;
   location?: string;
   description?: string;
+  /** Provenance marker; only WhatsApp-sourced events carry it (P5.3). */
+  source?: "whatsapp";
 };
 
 type Read<T> = { ok: true; value: T } | { ok: false };
@@ -336,6 +340,7 @@ export function eventRowToItem(row: EventRow, timeZone: string): EventItem {
   }
   if (row.location !== null) item.location = row.location;
   if (row.description !== null) item.description = row.description;
+  if (row.source === "whatsapp") item.source = "whatsapp";
 
   return item;
 }

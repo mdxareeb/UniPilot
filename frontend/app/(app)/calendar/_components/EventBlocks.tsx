@@ -5,6 +5,7 @@ import {
   CalendarClock,
   CalendarDays,
   ClipboardCheck,
+  MessageCircle,
   type LucideIcon,
 } from "lucide-react";
 import type { EventItem, EventType } from "@/lib/data/eventValues";
@@ -39,15 +40,33 @@ export function eventKind(event: EventItem): EventKind {
 
 /**
  * The block's (and chip's) accessible name: category, title, time or all-day,
- * and the display date — everything the visual hierarchy demotes is still
- * spoken once.
+ * the display date, and the provenance for WhatsApp-sourced events —
+ * everything the visual hierarchy demotes is still spoken once, and the
+ * `aria-label` override cannot swallow the sr-only marker.
  */
 export function eventAccessibleName(event: EventItem): string {
   const parts = [`${EVENT_KIND_META[eventKind(event)].label}: ${event.title}`];
   const when = event.allDay ? "All day" : event.timeLabel;
   if (when) parts.push(when);
   parts.push(event.dateLabel);
+  if (event.source === "whatsapp") parts.push("From WhatsApp");
   return parts.join(", ");
+}
+
+/**
+ * 17.x — the provenance marker (P5.3), rendered by the block and the chip for
+ * WhatsApp-sourced events only. The glyph is the generic Lucide chat bubble in
+ * the inherited monochrome treatment — never the official brand mark, which
+ * stays scoped to `/integrations` — and the sr-only span names the source in
+ * the DOM while `eventAccessibleName` announces it through the `aria-label`.
+ */
+function WhatsAppMarker() {
+  return (
+    <>
+      <MessageCircle aria-hidden="true" className="size-3 shrink-0" />
+      <span className="sr-only">From WhatsApp</span>
+    </>
+  );
 }
 
 type BlockProps = {
@@ -69,6 +88,7 @@ function EventBlock({
     <button
       type="button"
       data-event-id={event.id}
+      data-source={event.source}
       data-fontprobe-role="content"
       aria-label={eventAccessibleName(event)}
       onClick={() => onOpen(event)}
@@ -76,7 +96,7 @@ function EventBlock({
         top: `${placement.topPercent}%`,
         height: `${placement.heightPercent}%`,
       }}
-      className="absolute inset-x-1 z-10 flex min-w-0 flex-col overflow-hidden rounded-base border border-border bg-card px-1.5 py-1 text-left shadow-subtle transition-colors hover:border-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      className="absolute inset-x-1 z-10 flex min-w-0 flex-col overflow-hidden rounded-base border border-border bg-glass-subtle px-1.5 py-1 text-left shadow-subtle transition-colors hover:border-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
     >
       <span className="flex min-w-0 items-center gap-1">
         <Icon
@@ -86,6 +106,7 @@ function EventBlock({
         <span className="min-w-0 truncate text-label-sm font-medium text-foreground">
           {event.title}
         </span>
+        {event.source === "whatsapp" ? <WhatsAppMarker /> : null}
       </span>
       {/* Metadata is demoted by duration: a 20-minute block keeps its title,
           a class-length block earns its line of quiet context. */}
@@ -147,10 +168,11 @@ export function EventChip({
     <button
       type="button"
       data-event-id={event.id}
+      data-source={event.source}
       data-fontprobe-role="content"
       aria-label={eventAccessibleName(event)}
       onClick={() => onOpen(event)}
-      className="flex w-full min-w-0 items-center gap-1 rounded-base border border-border bg-card px-1 py-0.5 text-left transition-colors hover:border-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      className="flex w-full min-w-0 items-center gap-1 rounded-base border border-border bg-glass-subtle px-1 py-0.5 text-left transition-colors hover:border-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
     >
       <Icon
         aria-hidden="true"
@@ -159,6 +181,7 @@ export function EventChip({
       <span className="min-w-0 truncate text-label-sm text-foreground">
         {event.title}
       </span>
+      {event.source === "whatsapp" ? <WhatsAppMarker /> : null}
     </button>
   );
 }
