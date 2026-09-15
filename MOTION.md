@@ -115,6 +115,7 @@ before writing a new animation, which is the only thing that keeps it reused.
 | Notice | `noticeIn`, `noticeVariants` | Inline feedback arriving: fade + 4px drop, no delay. |
 | Rail | `railFillVariants`, `railFillIn`, `railMarkerVariants` | Progress: `scaleX` fill plus a marker that scales as it becomes current. |
 | List | `listItemVariants(reduced)`, `listItemIn` | A row joining or leaving a list that changes length. |
+| Status dissolve | `dissolveVariants(reduced)` | A label changing value in place (documents `Parsing…` → `Searchable`, 18.13): blur + opacity at `scale(0.98)`, keyed inside `AnimatePresence`. The text is content regardless of the animation; reduced motion runs both legs at zero. |
 
 The five reveal directions are `up` (16px rise), `down` (16px drop), `left`
 (24px from the left), `right` (24px from the right) and `scale` (8px rise +

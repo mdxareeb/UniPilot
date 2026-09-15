@@ -4,9 +4,20 @@
 - `backend/` — the Supabase project (migrations, seed, templates, ops) and the
   backend docs (`backend/DATABASE.md`, `backend/EMAIL.md`,
   `backend/supabase/MIGRATIONS.md`).
-- Root scripts orchestrate both workspaces:
-  `npm run dev|build|start|lint|typecheck|test` (frontend) and
-  `npm run db:reset|db:lint|db:types|seed:qa` (backend). See README.md.
+- `whatsapp/` — the Python service workspace behind the worker's `whatsapp.*`
+  jobs (export parser/extractor, self-host live driver). The worker host that
+  serves export/push must ship Python >= 3.11 and `whatsapp/requirements.txt`
+  (plus `requirements-google.txt` for push; `requirements-live.txt` only on the
+  self-host live host); live mode is single-tenant (Chrome + phone QR). See
+  `whatsapp/README.md`.
+- Root scripts orchestrate the workspaces:
+  `npm run dev` = the one-command local environment (`scripts/start-env.mjs`:
+  WSL/Docker → Presenton → Supabase → worker → Next; `npm run dev:web` is Next
+  alone, Windows host only — see README.md §"One-command local environment"),
+  `npm run build|start|lint|typecheck|test` (frontend),
+  `npm run test:scripts` (root `scripts/` Node tests) and
+  `npm run db:reset|db:lint|db:types|seed:qa|worker|worker:once|test:whatsapp`
+  (backend). See README.md.
 
 # Motion
 

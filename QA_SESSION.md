@@ -51,6 +51,26 @@ creating their own identity.
 | Document processing proof | `frontend/tests/qa/documents-processing.spec.ts` (real upload → worker →
   indexed chunks/pages, DOCX unit, retry → dead-letter, corrupt permanent failure, OCR-block copy,
   page limit, chunk RLS, step-0 ACL denials, benchmark honesty; Task 24.x) |
+| Documents hub flows | `frontend/tests/qa/documents-hub.spec.ts` (upload → progress → Parsing… →
+  Searchable through the poll, search/filters with honest empties, rename/delete, inline PDF +
+  download-only DOCX previews, failed-state retry, quota copy, 320/375/1280 + reduced motion, guest;
+  Task 18.x) |
+| Retrieval proof | `frontend/tests/qa/documents-search.spec.ts` (re-index idempotency with page
+  refs, keyword hits + snippets + document/page filters, honest empty, QA1/QA2 RLS, the search
+  panel → preview flow, and the 25.11 harness honesty; Task 25.x) |
+| Assistant backend proof | `frontend/tests/qa/assistant-backend.spec.ts` (provider honesty +
+  timeout/retry, injection guard, context budget, structured-action parser, real turns with
+  conversation/message/usage persistence and ordering, server-only message writes, owner + RAG
+  cross-user isolation, rate/spend guards; Task 26.x) |
+| WhatsApp security/retention proof | `frontend/tests/qa/whatsapp-security.spec.ts` +
+  `whatsapp-retention.spec.ts` (bucket/table/RPC ACLs, encrypted QR round-trip + 60 s TTL,
+  token-key rotation, 30-day purge, events provenance forge-proof; Task 46.12) |
+| WhatsApp worker/job proof | `frontend/tests/qa/whatsapp-jobs.spec.ts` (real export object →
+  Node worker → Python `whatsapp.sync`, re-run dedupe, missing-object failure, non-retryable
+  missing-interpreter failure, `whatsapp.push` no-op; Task 46.13) |
+| WhatsApp export-flow proof | `frontend/tests/qa/whatsapp-ui.spec.ts` + `whatsapp-export.spec.ts`
+  (upload → scan → candidate review → confirm with calendar marker → reject, live-gate UI;
+  Task 46.15) |
 | Env file | `frontend/.env.development.local` (git-ignored; copy from `frontend/.env.development.local.example`) |
 
 ## The QA identities (two users since Task 20.9)
@@ -213,8 +233,15 @@ node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.
 node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs --reset  # destroy + recreate
 ```
 
+- `npm run seed:qa` leaves **QA1 onboarded** with the standard fixture (QA /
+  One / UniPilot Test University / Computer Science / Year 2 / Semester 1 /
+  balanced / 1 week / Linear Algebra + Thermodynamics) and **QA2 data-free**.
+  `frontend/tests/qa/onboarding.spec.ts` still resets QA1 itself (answers and
+  subjects) before proving the real flow, so pre-onboarding does not weaken
+  that proof.
 - Running the seed twice does not error and never duplicates (it finds each
-  identity by exact email and only ensures `email_confirm`).
+  identity by exact email, only ensures `email_confirm`, and makes no writes
+  at all when QA1 is already onboarding-complete).
 - The seed **refuses to run** against any non-`localhost`/`127.0.0.1`
   Supabase URL, loudly, before making any network call. The hosted project
   can never be seeded by accident.
@@ -236,6 +263,129 @@ authenticated clients. Teardown removes every seeded row and the spec asserts
 only the two trigger-provisioned `profiles` rows remain. It never contacts
 hosted.
 
+## WhatsApp integration QA (Task 46.x)
+
+The WhatsApp proof is three projects after `qa-jobs-runner`, all dependencies
+of `chromium-authenticated` so the full suite always runs them in order:
+
+```
+qa-whatsapp-security   whatsapp-security.spec.ts + whatsapp-retention.spec.ts
+  → qa-whatsapp-jobs   whatsapp-jobs.spec.ts
+  → qa-whatsapp-flow   whatsapp-ui.spec.ts + whatsapp-export.spec.ts
+```
+
+All three projects raise their timeout to 240 s: the worker-driving specs need
+Python startup and the lock wait, and the security/retention file pair waits on
+the same cross-file lock under a targeted `--no-deps` run.
+
+An upload only queues its `whatsapp.sync` job — the worker (`npm run worker` /
+`npm run worker:once`) is what processes it, so a scan left `queued` means the
+worker is not running.
+
+**One worker at a time.** All three projects share QA1's integration rows and
+the global `claim_jobs`, which is why they are chained rather than parallel. A
+targeted `--no-deps` run can still select them together, so each
+worker-driving spec acquires `frontend/tests/qa/workerLock.ts` — an
+existence lock at `.playwright/whatsapp-worker.lock` with a 240 s stale-mtime
+steal — for its window. In the full suite the dependency chain makes it
+uncontended, and the one-writer rule from the section above still applies (no
+second suite, no `db:reset`/`seed:qa` while tests run).
+
+**Python contract.** The pytest half is standalone:
+
+```powershell
+npm run test:whatsapp          # root → backend: python -m pytest ../whatsapp
+```
+
+The Playwright half probes `python -c "import wa_service"` from `whatsapp/`
+before running. When the probe fails, the Python-dependent tests are reported as
+skipped with the honest reason `python/wa_service unavailable on this host
+(install whatsapp/requirements-dev.txt; see whatsapp/README.md)` — never
+faked. Strict mode turns a failing probe into a collection failure instead:
+
+```powershell
+# honest-skip (default) — the Python-dependent tests report skipped under `npm run test`
+npm run test -w frontend -- tests/qa/whatsapp-jobs.spec.ts
+# strict — missing Python fails the run at collection
+$env:UNIPILOT_REQUIRE_PYTHON="1"; npm run test -w frontend -- tests/qa/whatsapp-jobs.spec.ts tests/qa/whatsapp-export.spec.ts; Remove-Item Env:\UNIPILOT_REQUIRE_PYTHON
+```
+
+`UNIPILOT_REQUIRE_PYTHON=1` fails with the install message quoted in
+`whatsapp/README.md`; `WHATSAPP_PYTHON` overrides the interpreter for both the
+probe and the worker's Python spawn (default `python`).
+
+**Cleanup obligations.** The worker-driving specs (`whatsapp-jobs`,
+`whatsapp-export`) seed through the service role and delete exactly their ids
+(including the `noop.test` lease fixture, which is not a `whatsapp.*` kind),
+and their `afterAll` asserts QA1 has zero residue in `jobs` and the
+`integration_*` tables plus no objects under its `whatsapp-exports` prefix (the
+export spec also checks `events` with `source = 'whatsapp'`). `whatsapp-security`
+and `whatsapp-retention` delete their seeded rows by id in `afterAll` without
+absolute residue counts; the security spec additionally removes its bucket
+objects and its `google_calendar_credentials` rows through the
+`delete_google_credentials` RPC (never a direct write). `whatsapp-ui` otherwise
+performs no writes: its queued-state test seeds exactly one `queued` run
+through the service role and deletes it by id before it releases the worker
+lock. Verification screenshots for the UI proof (`whatsapp-*` names)
+go to `frontend/screenshots/` under the usual convention.
+
+**Review-mode coverage (46.21–46.25).** The flow specs also prove the
+manual/automatic choice: an automatic run settles the user's pending candidates
+whose fingerprints the run re-detects into `events` (fingerprint dedupe;
+`/calendar` shows the WhatsApp marker) and enqueues no push without Google;
+re-running the same export adds no candidates, events or pushes; QA2's pending
+candidate is never touched (isolation); a connected google row makes the run
+enqueue ids-only `whatsapp.push` jobs that stay `queued` (the Google client pair
+is overridden on the worker call only — no real OAuth exchange, so the P7.3
+`[!]` blocker stands); a manual run leaves candidates pending; and an upload
+against a live connected row patches `review_mode` only (`mode`/`status`
+untouched). On the Python side, pytest also covers a re-scan that re-detects an
+earlier pending candidate (it settles), that a rejected fingerprint is not
+resurrected, and that an already-confirmed fingerprint is not re-stated. The UI
+preselection test reads the connection default, so the upload that reserves an
+export run now leaves a `review_mode` connection row on QA1: the export
+spec's `seedWhatsAppConnection` helper patches an existing row or inserts one,
+tracks its id and deletes it in teardown, and the existing afterAll
+zero-residue checks (jobs, `integration_*` tables, WhatsApp events, bucket
+prefix) cover the rest.
+
+**Detection-settings coverage (46.26–46.30).** The same specs prove the two
+per-connection detection preferences. Unit level: the export envelope is
+inferred from its unambiguous components, so an MDY fixture with a second
+component > 12 detects its two dated events on **2026-09-12** and
+**2026-09-20** under the DMY default, while message-text dates follow the
+saved `date_order`. Worker-driven flows prove the two candidate sets through
+the real upload path: with the defaults (`DMY`, relative off) the MDY export
+yields exactly **2** pending candidates, and toggling "Also detect weekday and
+relative dates" before upload persists `detect_relative_dates=true` and
+yields **5** (Sat Sep 12, Mon Sep 14, Tue Sep 15, Fri Sep 18, Sun Sep 20).
+Settings persistence/preselection: the UI test seeds a connection
+(`MDY`/true), reloads, and proves the radiogroup/checkbox come up
+preselected; switching them and intercepting the server-action POST shows the
+new values in the upload payload; the live-row test proves the patch path
+persists both settings while `mode`/`status` stay transport-owned. The
+`seedWhatsAppConnection` helper tracks and deletes its connection row, and the
+existing afterAll zero-residue checks apply.
+
+### [!] Live mode E2E is blocked in this environment
+
+```
+[!] Live end-to-end verification blocked: requires a single-tenant worker host
+with Chrome + selenium (whatsapp/requirements-live.txt) and a physical phone to
+scan the WhatsApp Web QR; no QR was ever faked. Flag-off/flag-on UI, action
+gating, and the Python connect/disconnect units are verified.
+```
+
+### [!] Google Calendar push E2E is blocked in this environment
+
+```
+[!] Google Calendar push end-to-end verification blocked: requires a Google
+Cloud OAuth client (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET) with
+{origin}/api/integrations/google/callback registered. The insert/dedupe/refresh
+paths are covered by pytest with a mocked Google client; the no-credentials
+no-op is covered end to end; no calendar push was faked.
+```
+
 ## What this deliberately does NOT include
 
 - **No application data beyond onboarding.** The identities own no
@@ -246,7 +396,9 @@ hosted.
   the same rule: they upload through the real pipeline, then delete their own
   objects and rows (with a prefix sweep as the backstop), so the bucket is
   empty at rest. The jobs-runner spec (29.1) likewise deletes every job it
-  inserts and asserts zero job rows before it finishes.
+  inserts and asserts zero job rows before it finishes. The assistant-backend
+  spec (26.x) deletes its conversations/messages and assistant usage rows by
+  owner and asserts the tables are empty at rest.
 - **No third identity.** Two users are what the RLS proof needs; a future
   task that needs more adds them here with their own env var and history
   entry.
@@ -256,3 +408,18 @@ hosted.
 - **No service-role key in any browser.** The key is read only by the seed
   and the isolation spec (Node processes) from `SUPABASE_SERVICE_ROLE_KEY`;
   the browser storage state holds only the anon-key session cookie.
+
+## WSL2 port-forwarding workaround (2026-09-14)
+
+On this host Windows' `winnat` dynamically reserved a TCP range containing
+Supabase's API port 54321, so `127.0.0.1:54321` stopped forwarding from Windows
+into WSL2 while the stack stayed healthy (reachable inside WSL). The local
+stack's API port was therefore moved to **54937** (outside the reserved
+ranges): `backend/supabase/config.toml` `[api] port`, plus the API URL in
+`frontend/.env.development.local` — `supabase stop && supabase start` applies
+it, and all data persists. The specs' local-only guards require a
+`127.0.0.1`/`localhost` URL, so prefer this over pointing the env at the WSL
+IP. With an elevated shell, check `netsh interface ipv4 show excludedportrange
+protocol=tcp` first: any port inside a listed range cannot be forwarded into
+Windows. To return to the standard port later, free it (`net stop winnat &&
+net start winnat` or an explicit exclusion) and revert `config.toml` + the env.

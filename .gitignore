@@ -36,10 +36,42 @@ yarn-error.log*
 !.env.example
 !.env.development.local.example
 
+# Task 30 — WhatsApp service secrets and runtime state. credentials.json /
+# token.json are live Google OAuth material, .wa_profile/ is a logged-in
+# WhatsApp Web session, and data/ + output/ hold scraped private messages and
+# generated calendars. None may ever be committed; .env.example stays tracked.
+/whatsapp/**/.wa_profile/
+/whatsapp/**/.profiles/
+/whatsapp/**/credentials.json
+/whatsapp/**/token.json
+/whatsapp/**/.env
+/whatsapp/**/data/
+/whatsapp/**/output/
+/whatsapp/**/__pycache__/
+*.pyc
+
 # Task 20.10 — QA session artifacts. Storage-state files contain live session
 # tokens; MCP browser output may contain QA screenshots. Never commit either.
 .playwright/
 .playwright-mcp/
+
+# Task 31 — Presenton (the presentation-generator service) is a SEPARATE,
+# Apache-2.0-licensed project that UniPilot calls over HTTP. Its vendored
+# checkout lives beside the repo for local development only and must never be
+# committed to UniPilot's GitHub repo — not its source, not its app_data
+# runtime state, and not its .env (LLM provider keys; see
+# docs/integrations/presenton.md).
+/presenton-main/
+
+# Task 31.x — the forked Presenton UI (re-themed to UniPilot's design system).
+# Lives beside the repo for local development only, keeps its OWN git repo for
+# upstream-divergence tracking, and must never be committed to UniPilot's repo
+# — not its source, not its runtime state, not its .env (see
+# docs/superpowers/specs/2026-09-15-presenton-fork-theme-design.md).
+/presenton-ui/
+
+# Stray Playwright artifact directory (run output; never committed)
+/frontend/test-results/
 
 # Verification screenshots (ad-hoc QA evidence; never committed)
 /frontend/screenshots/

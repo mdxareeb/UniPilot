@@ -353,40 +353,28 @@ back into the flow; both hide themselves once the completion marker is set
 
 ### Google OAuth configuration (verified live)
 
-- Google provider is enabled on the hosted Supabase project with valid Google Cloud credentials (configured in Supabase dashboard; no secrets in this repo). The **local** stack has no Google provider configured, so its authorize endpoint returns `400 Unsupported provider`; see the local runbook below. A full consent roundtrip cannot be exercised locally (Stage 1 A.2, 12.3 remains `[~]`).
+- Google provider is enabled on the hosted Supabase project with valid Google Cloud credentials (configured in Supabase dashboard; no secrets in this repo). The **local** stack is configured too (2026-09-13): the authorize endpoint returns `302 → accounts.google.com`; see the local runbook below. The full consent roundtrip has still never been completed locally (it needs a consented test identity), so 12.3 remains `[~]` on that point.
 - Supabase authorize endpoint accepts `http://localhost:3000/auth/callback` as redirect target.
 - For production, add the deployed site's `https://<domain>/auth/callback` and `https://<domain>/auth/confirm` to the Supabase project's **Redirect URLs** allowlist.
 - Post-auth destination is `/dashboard` (existing placeholder route; becomes the real authenticated landing in Phase 14).
 
-#### Local Google OAuth — not yet enabled (blocked on credentials)
+#### Local Google OAuth — configured and provider-verified (2026-09-13)
 
-The local GoTrue has **no Google provider**, so `GET
-/auth/v1/authorize?provider=google` (with the local anon key) returns
-`400 {"error_code":"validation_failed","msg":"Unsupported provider: provider
-is not enabled"}`. Application code is already provider-agnostic
-(`signInWithGoogle` sends `provider: "google"`, scopes `openid email profile`
-and `redirectTo: ${origin}/auth/callback`), so this is configuration only.
-Enabling it locally is blocked on three external things, none of which exists
-in the repo or this machine's environment:
-
-1. A Google OAuth 2.0 client **id and secret**. Nothing under `.env*` carries
-   them, `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET` is absent from the shell (and
-   from user/machine-level environment), and there is no Supabase access
-   token for the Management API, so the secret cannot be read back from the
-   dashboard either.
-2. Console access to add `http://127.0.0.1:54321/auth/v1/callback` to that
-   client's **Authorized redirect URIs**, keeping the hosted
-   `https://xxbdnhpkllfpixhqukws.supabase.co/auth/v1/callback`.
-3. A sanctioned Google identity (never the founder account) for the consent
-   roundtrip.
-
-Repeatable procedure once those exist — no application-code change:
+The local GoTrue now serves the Google provider. `GET
+/auth/v1/authorize?provider=google` (local anon key) returns `302` to
+`https://accounts.google.com/o/oauth2/v2/auth` carrying the client id below,
+`redirect_uri=http://127.0.0.1:54321/auth/v1/callback` and
+`scope=email profile`; the recreated auth container reports
+`GOTRUE_EXTERNAL_GOOGLE_ENABLED=true`, `GOTRUE_EXTERNAL_GOOGLE_SKIP_NONCE_CHECK=true`
+and a non-empty secret (value never printed). Live browser check: `/login` →
+Continue with Google reached Google's sign-in page with zero console errors and
+no `redirect_uri_mismatch`.
 
 ```toml
 # backend/supabase/config.toml (git-ignored, machine-local)
 [auth.external.google]
 enabled = true
-client_id = "<Google OAuth 2.0 client id>"
+client_id = "337856140334-52mvfgfihnkvd9itr93hbpp3qef6v160.apps.googleusercontent.com"
 secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
 # Required for local sign-in: GoTrue cannot validate the Google ID token's
 # nonce while it is reached on 127.0.0.1. Hosted keeps the dashboard-managed
@@ -394,22 +382,37 @@ secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
 skip_nonce_check = true
 ```
 
-- Pass the secret to the **Supabase CLI process** as
-  `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET` (environment or a git-ignored file
-  the CLI reads). Never write it into `config.toml`, a tracked file, a tool
-  call or a log.
-- The local redirect allow-list already contains `http://localhost:3000/**`
-  (set in A.2), so the roundtrip returns to `/auth/callback` and the app lands
-  on `/dashboard`.
-- Restart: `supabase stop && supabase start` (data preserved; re-run the QA
-  seed only if the identity was lost).
-- Verify without a browser first: `GET
-  http://127.0.0.1:54321/auth/v1/authorize?provider=google` with the local
-  anon key must `302` to `accounts.google.com` (it is `400` today).
-- Then the real roundtrip: `/login` → Continue with Google → consent →
-  `/auth/callback` → `/dashboard`; sign out returns to `/login`. Watch that
-  the flow never touches the hosted project's host. Until that roundtrip is
-  observed, 12.3 stays `[~]`; do not mark it `[x]`.
+- Secret provisioning: export `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET` in the
+  **same WSL shell** that runs `supabase stop && supabase start`; the CLI
+  substitutes `env()` values from the process environment (or a git-ignored
+  project env file) and fails fast when the variable is unset. `supabase start`
+  on an already-running stack is a silent no-op — the stack must be stopped
+  first or GoTrue never receives the provider.
+- App-level redirect allow-list (already set in A.2): `site_url =
+  "http://localhost:3000"` and `additional_redirect_urls` includes
+  `http://localhost:3000/**` and `http://127.0.0.1:3000/**`, so the roundtrip
+  returns to `/auth/callback` and the app lands on `/dashboard`.
+- Google Cloud (on the OAuth client matching the id above): Authorized
+  redirect URIs must include `http://127.0.0.1:54321/auth/v1/callback` and
+  `http://localhost:54321/auth/v1/callback` alongside the hosted callback; the
+  consent screen stays in **Testing** and the roundtrip account must be a Test
+  user.
+- Provider-only verification (repeatable):
+
+```sh
+curl -sS -D - -o /dev/null \
+  -H "apikey: $NEXT_PUBLIC_SUPABASE_ANON_KEY" \
+  "http://127.0.0.1:54321/auth/v1/authorize?provider=google" | head -1
+# expect: HTTP/1.1 302 Found
+```
+
+- End-to-end roundtrip: `[~]` — `/login` → Continue with Google reaches
+  Google's sign-in/consent page (evidence:
+  `frontend/screenshots/google-local-02-google-signin.png`), but no consented
+  test identity is available to this agent, so Google → Supabase
+  `/auth/v1/callback` → app `/auth/callback` → `/dashboard` has not been
+  observed locally. Complete it once in a browser signed in as the test user;
+  until then 12.3 stays `[~]` — do not mark it `[x]`.
 
 ### Email verification notes (verified live)
 

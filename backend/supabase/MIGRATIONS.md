@@ -130,7 +130,13 @@ The hosted project is production.
 | `20260912053249_documents_storage_bucket.sql` | The private `documents` bucket (25 MiB, PDF/DOCX/PNG/JPEG) and the owner-folder RLS policies on `storage.objects` (Task 23.1) |
 | `20260912065021_jobs_runner.sql` | The durable `jobs` store, its partial claim/reclaim indexes, owner-only SELECT RLS, and the service-role-only `claim_jobs`/`finish_job` protocol (Task 29.1) |
 | `20260912072133_acl_least_privilege.sql` | Step-0 ACL audit: revoke the bootstrap's structural table grants, policy-less write grants and client function EXECUTE to match the DATABASE.md matrix (Task 24.x) |
+| `20260912095011_search_embeddings.sql` | pgvector in `extensions`, `document_chunks.embedding vector(1536)` + `page`, HNSW cosine and GIN full-text indexes, and the hybrid-ready `search_document_chunks` retrieval function (Task 25.x) |
+| `20260912103529_assistant_persistence.sql` | Assistant turns: `messages.status` + `sources`, ordering indexes, and server-only message writes (write grants revoked, write policies dropped) (Task 26.x) |
 | `20260912072153_documents_failed_state.sql` | The documents status vocabulary gains `failed` (uploaded → indexing → indexed / failed), with sanitized `error_message` (Task 24.10) |
+| `20260912120000_whatsapp_integration.sql` | WhatsApp integration schema: `events` provenance (`source`/`source_ref` + lock trigger), the four owner-only integration tables, deny-by-default `google_calendar_credentials`, and the service-role-only credential/QR RPCs (Task 46.12) |
+| `20260912120100_whatsapp_exports_bucket.sql` | The private `whatsapp-exports` bucket (25 MiB, `text/plain`) and its four owner-folder `storage.objects` policies (Task 46.12) |
+| `20260913050000_whatsapp_review_mode.sql` | Review mode: `integration_connections.review_mode` / `integration_runs.review_mode` (`manual`/`automatic`, default `manual`) (Task 46.21) |
+| `20260913080000_whatsapp_detection_settings.sql` | Detection settings: `integration_connections.date_order` (`DMY`/`MDY`, default `DMY`) and `detect_relative_dates` (default false) (Task 46.26) |
 | `ops/reconcile-legacy-profiles-preflight.sql` | Hosted preflight (rename + drop legacy trigger), run manually after approval |
 | `ops/generate-types.sh` | Regenerate `frontend/lib/supabase/database.types.ts` from the local schema (Task 20.8) |
 | `ops/check-types.sh` | Manual drift check: regenerate and diff against the committed types |

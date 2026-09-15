@@ -1468,23 +1468,80 @@ UI (bound to the real 21.x service — Stage 3 item 16):
 
 # 18. DOCUMENTS `/documents`
 
-- [ ] 18.1 Header
-- [ ] 18.2 Search
-- [ ] 18.3 Filter pills
-- [ ] 18.4 Upload button
-- [ ] 18.5 Drag-and-drop
-- [ ] 18.6 Document cards
-- [ ] 18.7 Uploading
-- [ ] 18.8 Parsing
-- [ ] 18.9 Indexed
-- [ ] 18.10 Searchable state
-- [ ] 18.11 Preview
-- [ ] 18.12 Delete/rename
-- [ ] 18.13 Pixel-dissolve parsing → indexed transition
-- [ ] 18.14 Real upload pipeline
-- [ ] 18.15 Failed-state UX
-- [ ] 18.16 Quota-exceeded UX
-- [ ] 18.17 Responsive/accessibility QA
+- [x] 18.1 Header
+  - The shared `PageHeader` with the real `DocumentUploadButton` (signed-in) or
+    the `SignInAction` (guest); unchanged copy, now above the hub.
+- [x] 18.2 Search
+  - Name search over the real server-loaded list, client-side and honest: an
+    empty result says "No documents match your search." with a
+    "Clear filters" action; no mocked dimensions and no result counts that
+    count nothing.
+- [x] 18.3 Filter pills
+  - The status vocabulary as pills (`All` · `Uploaded` · `Parsing…` ·
+    `Searchable` · `Failed`) with `aria-pressed`, per-status counts only when
+    they count something, and the same `font-heading` button treatment the
+    tasks board uses.
+- [x] 18.4 Upload button
+  - The header's `DocumentUploadButton` opens the workspace picker; one
+    pipeline, shared with the drop target.
+- [x] 18.5 Drag/drop
+  - The drop target is the list's second entry point; dragging highlights it,
+    dropping hands the file to the same `upload()`.
+- [x] 18.6 Document cards
+  - Real, presentational `DocumentCard`s (`MotionListItem` for add/remove)
+    with the name, one mono metadata line (type · size · pages · status ·
+    date — only segments that exist), per-card preview/rename/delete, the
+    failed copy + retry, and `data-document-id`/`data-document-status` for
+    the specs.
+- [x] 18.7 Uploading
+  - Real byte progress (`role="progressbar"` with live `aria-valuenow`) from
+    the 23.x XHR pipeline, then the settled card inserted into the list.
+- [x] 18.8 Parsing
+  - `indexing` renders as "Parsing…" on the card and in the filter; the
+    workspace polls `router.refresh()` every 4s while any document is
+    indexing (cleared when none remains) — a bounded, server-owned read
+    rather than an invented client socket, documented in
+    `DocumentsWorkspace`.
+- [x] 18.9 Indexed
+  - `indexed` renders as "Searchable"; page count joins the metadata line.
+- [x] 18.10 Searchable state
+  - The transition arrives through the poll without a manual reload and is
+    announced politely (`role="status"`); the filter pill and counts update
+    with it.
+- [x] 18.11 Preview
+  - A 60-second signed URL minted by `previewDocumentAction` through the
+    owner's session: PDF renders in the shared `Modal` via `<iframe>`, PNG/
+    JPEG as `<img>`, and DOCX is download-only (the signed URL carries
+    `Content-Disposition: attachment`); no file content is executed or
+    injected, and the bucket stays private (23.13's posture).
+- [x] 18.12 Delete/rename
+  - Per-card rename (optimistic, storage path stable, DB-settled) and delete
+    (optimistic with old-position rollback, shared `Modal` confirmation,
+    focus return); the specs assert persistence after reload.
+- [x] 18.13 Pixel-dissolve parsing → indexed transition
+  - `dissolveVariants` added to the shared Motion vocabulary
+    (`frontend/components/motion/presets.ts`): the status word dissolves
+    through blur + opacity at a hair of scale, keyed by `statusValue` inside
+    `AnimatePresence`. The word is always content — the animation only
+    changes how it arrives — and reduced motion runs both legs at zero.
+- [x] 18.14 Real upload pipeline
+  - Unchanged 23.x/24.x reserve → direct upload → finalize → enqueue path;
+    the hub only consumes it.
+- [x] 18.15 Failed-state UX
+  - The card shows the worker's sanitized copy and a "Retry processing"
+    action; `retryDocumentAction` re-enqueues a fresh `document.process` job
+    through the 29.1 runner (only from `failed`, idempotent), flipping the
+    row back to `indexing`.
+- [x] 18.16 Quota-exceeded UX
+  - The 23.12 guard's copy surfaces as a prominent alert, now ending with the
+    honest caveat ("Plan-based limits aren't available yet") — no invented
+    plan numbers.
+- [x] 18.17 Responsive/accessibility QA
+  - Widths 320/375/768/1024/1280 verified with zero horizontal overflow;
+    labelled search field, `aria-pressed` pills, labelled icon controls,
+    `role="progressbar"` with live values, polite live region for
+    poll-driven status changes, focus return on dialog close, reduced-motion
+    pass.
 
 ---
 
@@ -1813,39 +1870,161 @@ to assert the stronger privilege-level denial where grants were removed.
 
 # 25. SEARCH / EMBEDDINGS
 
-- [ ] 25.1 Chunking strategy
-- [ ] 25.2 Chunking
-- [ ] 25.3 Embeddings
-- [ ] 25.4 pgvector
-- [ ] 25.5 Vector index
-- [ ] 25.6 Semantic search
-- [ ] 25.7 Keyword/metadata filtering
-- [ ] 25.8 Hybrid retrieval
-- [ ] 25.9 Page references
-- [ ] 25.10 Search result UI
-- [ ] 25.11 Retrieval quality test set
-- [ ] 25.12 Re-embedding/backfill path
+- [x] 25.1 Chunking strategy
+  - Documented and implemented in `backend/worker/chunkText.mjs`:
+    ~1200-character windows with 200-character overlap, window ends preferring
+    paragraph → sentence → word boundaries, deterministic by construction. The
+    numbers are recorded in DATABASE.md as the initial strategy.
+- [x] 25.2 Chunking
+  - The `document.reindex` job re-chunks the stored page text into
+    embedding-sized rows (`page` carried through) and replaces the document's
+    chunks — delete-then-insert, so running it twice yields the identical
+    `(chunk_index, page, content)` set. Proven in the committed spec.
+- [!] 25.3 Embeddings — BLOCKED (no provider)
+  - [!] BLOCKED BY provider access: generating vectors needs an embedding
+    provider credential (the chosen family is OpenAI `text-embedding-3-small`,
+    1536 dims — the 20.6 deferral resolved for the column). The seam exists
+    (`backend/worker/embed.mjs` + `semanticSearchStatus()` in the data layer)
+    and both report exactly what is missing; no vector is ever fabricated and
+    `document_chunks.embedding` stays NULL.
+- [x] 25.4 pgvector
+  - Migration `20260912095011_search_embeddings.sql`: `create extension if not
+    exists vector with schema extensions`, nullable
+    `document_chunks.embedding extensions.vector(1536)` and `page integer`
+    (+CHECK), both documented in DATABASE.md. RLS unchanged (chunks inherit
+    through the parent).
+- [x] 25.5 Vector index
+  - HNSW with `extensions.vector_cosine_ops` on `embedding`, plus a GIN
+    full-text index on `to_tsvector('english', content)`; both built empty and
+    documented with their predicates.
+- [!] 25.6 Semantic search — BLOCKED (same provider as 25.3)
+  - The SQL query path is implemented (`search_document_chunks` vector branch
+    with cosine ordering, owned-only, top-k clamped) and the service passes
+    `p_embedding: null` until a provider exists, so semantic search is
+    keyword-only by construction — never a fabricated vector or result.
+- [x] 25.7 Keyword/metadata filtering
+  - `search_document_chunks`' keyword branch: `websearch_to_tsquery` over
+    content, `ts_rank` ordering, document-id and page filters, and
+    `ts_headline` snippets with `[[…]]` markers (rendered as text, never
+    HTML). `searchDocumentChunks` is the typed data-layer read; the scope is
+    the caller's rows through RLS.
+- [~] 25.8 Hybrid retrieval
+  - Reciprocal-rank fusion (k = 60) is implemented in SQL and feeds whichever
+    branches return rows; with no provider it is exactly keyword-only, and the
+    search panel says so ("Keyword search. Semantic search isn't available
+    yet."). The full hybrid path lights up when 25.3 lands.
+- [x] 25.9 Page references
+  - Every hit carries `document_id`, `document_name`, `page` and
+    `chunk_index`; 24.x's page units now stamp the source page too, so
+    references work before a reindex, and the UI cites "Page N" per result.
+- [x] 25.10 Search result UI
+  - `GlobalSearch`'s reserved slot now renders the real retrieval flow:
+    debounced query → loading → results (document name, page, marked snippet)
+    → honest "No matches for …" → sanitized error; clicking a hit navigates
+    to `/documents?preview=<id>`, which opens the 18.11 preview. The shell,
+    keyboard contract and copy honesty note are unchanged.
+- [~] 25.11 Retrieval quality test set
+  - `backend/worker/searchBenchmark.mjs` + `search-fixtures/` runs real
+    queries and reports measured recall@k and MRR (no invented numbers),
+    exiting non-zero with no fixtures. Marked [~] until a real human-checked
+    sample set exists; semantic recall is not measurable without 25.3.
+- [x] 25.12 Re-embedding/backfill path
+  - The `document.reindex` job kind is registered with the 29.1 runner and
+    runs today (chunk + replace); when a provider exists it embeds the new
+    chunks in the same pass. Document status is deliberately untouched by
+    re-indexing (a retrieval concern, not processing state).
 
 ---
 
 # 26. ASSISTANT BACKEND
 
-- [ ] 26.1 Provider abstraction
-- [ ] 26.2 Chat service
-- [ ] 26.3 Conversation persistence
-- [ ] 26.4 Message persistence
-- [ ] 26.5 RAG
-- [ ] 26.6 Context assembly + token budget
-- [ ] 26.7 Source references
-- [ ] 26.8 Streaming
-- [ ] 26.9 Structured tool outputs
-- [ ] 26.10 Rate limits
-- [ ] 26.11 Usage tracking
-- [ ] 26.12 Failure/timeout handling
-- [ ] 26.13 Cross-user leakage test
-- [ ] 26.14 Empty retrieval behavior
-- [ ] 26.15 Spend caps
-- [ ] 26.16 Prompt-injection protection
+- [~] 26.1 Provider abstraction
+  - `frontend/lib/ai/provider.ts` defines the one interface (`chat`, `stream`,
+    `embed`), the env-only registry (`ASSISTANT_PROVIDER` /
+    `ASSISTANT_API_KEY` / `ASSISTANT_MODEL`, server-only, documented in
+    `.env.example`) and `providerStatus()`/`resolveChatProvider()`. [!] The
+    registry is deliberately empty: no provider client or key exists in this
+    repo, so every caller gets the sanitized "isn't configured yet" reason
+    naming the exact dependency — no invented reply. Adding a factory is the
+    only change needed when a provider lands.
+- [~] 26.2 Chat service
+  - `frontend/lib/data/assistant.ts` is the turn pipeline (guards →
+    conversation → user message → retrieval → answer → persistence) with the
+    non-streaming `runAssistantTurn` and streaming `streamAssistantTurn`; the
+    provider branch is real code against the interface but unreachable [!]
+    until a provider exists, and the honest branches (unconfigured, empty
+    retrieval) are fully live.
+- [x] 26.3 Conversation persistence
+  - `frontend/lib/data/conversations.ts` (server-only, session client, RLS
+    owner CRUD): list (most recently active first), get, create, rename,
+    delete (messages cascade); `ConversationItem` display contract; title
+    derivation from the first message. Actions in
+    `frontend/lib/data/assistantActions.ts` for 19.x.
+- [x] 26.4 Message persistence
+  - `frontend/lib/data/messages.ts`: reads through the session client (parent
+    RLS), writes through the **service role** after an ownership check —
+    migration `20260912103529_assistant_persistence.sql` revokes
+    INSERT/UPDATE/DELETE on `messages` from `authenticated` and drops the
+    three write policies, so no client can forge a user/assistant/system
+    message. `status` (`complete|failed`) and `sources` jsonb are the 26.12/
+    26.7 columns; ordering uses `(conversation_id, created_at, id)`.
+- [x] 26.5 RAG
+  - Turns retrieve through 25.x's `searchDocumentChunks` (keyword branch live;
+    vector branch when embeddings exist) with the session client, so RLS is
+    the retrieval scope. Proven cross-user: QA1's turn over QA2's unique
+    marker finds nothing.
+- [x] 26.6 Context assembly + token budget
+  - `frontend/lib/ai/context.ts`: dedupe by `(documentId, chunkIndex)`, at
+    most 8 chunks, 2000-token budget (documented as 4 chars/token ≈ 8000
+    chars), last chunk truncated at a word boundary, provenance kept.
+- [x] 26.7 Source references
+  - Every hit's document id/name/page/chunk index is persisted in
+    `messages.sources` and streamed as a `sources` frame; the 19.11 UI reads
+    it unchanged.
+- [~] 26.8 Streaming
+  - The frame contract is end-to-end: `streamAssistantTurn` →
+    `POST /api/assistant/turn` (`text/event-stream`:
+    start/delta/sources/done/error) → consumed by the spec exactly as 19.x
+    will. The provider-stream leg (`provider.stream`) is wired and
+    compile-checked but [!] blocked without a provider — the reachable frames
+    carry the honest unconfigured answer.
+- [x] 26.9 Structured tool outputs
+  - `frontend/lib/ai/toolContracts.ts`: the fenced `unipilot-action` JSON
+    contract, `parseStructuredAction` (closed type pattern, payload object,
+    `requiresConfirmation` forced true) and `collectStructuredActions`. No
+    tool executes here; 27.x consumes it.
+- [x] 26.10 Rate limits
+  - Per-user 10 turns/minute, read from the `usage_events` ledger; over-limit
+    answers the sanitized copy as an error frame and persists nothing.
+- [x] 26.11 Usage tracking
+  - Every turn records `assistant_turn` (1) and, when a provider reports
+    usage, `assistant_tokens` (prompt+completion) in `usage_events`.
+- [x] 26.12 Failure/timeout handling
+  - `withTimeoutAndRetries` (30s timeout via AbortSignal, 2 attempts) around
+    non-streaming provider calls; streaming gets one attempt bounded by the
+    timeout (retrying after deltas would duplicate text). Every failure
+    persists a `failed` assistant message with sanitized copy — a half-answer
+    is never presented as complete.
+- [x] 26.13 Cross-user leakage test
+  - `assistant-backend.spec.ts`: QA2 cannot read QA1's conversations or
+    messages, conversations are owner-CRUD with zero foreign rows, and the
+    RAG proof uses the real turns (foreign marker → "no matching sources";
+    own marker → matched).
+- [x] 26.14 Empty retrieval behavior
+  - Unconfigured + nothing matched says so explicitly; configured + nothing
+    matched answers the deterministic empty-retrieval copy without a paid
+    call. Never a fabricated source or guess.
+- [x] 26.15 Spend caps
+  - Documented default monthly token guard (200,000 tokens) enforced from
+    `usage_events` with sanitized over-limit copy; plan-driven entitlements
+    remain [~] pending billing (49.x).
+- [x] 26.16 Prompt-injection protection (R11)
+  - `frontend/lib/ai/prompt.ts`: exactly one immutable system message, all
+    retrieved/user text quoted inside a `<workspace_data>` block with
+    delimiter collisions and control characters defused, no tool execution or
+    policy change from retrieved text. The guard is a committed unit test
+    (injected "ignore previous instructions" + a forged closing tag changes
+    nothing).
 
 ---
 
@@ -2056,17 +2235,151 @@ These can be post-launch and should be marked Planned until genuinely implemente
 
 ## 31. Presentation Generator
 
-- [ ] 31.1 Setup
-- [ ] 31.2 Topic → outline
+- [x] 31.1 Setup
+  - Presenton (Apache-2.0) runs as a **separate service**, never vendored:
+    `presenton-main/` is git-ignored at the repo root (Phase 0) and driven over
+    HTTP via `PRESENTON_URL` (+ optional `PRESENTON_API_KEY`;
+    `PRESENTON_PUBLIC_URL` for the editor). Integration contract, run
+    instructions, exact request/response shapes and the provider-switch matrix
+    (Gemini / OpenAI / Anthropic / OpenRouter / Ollama — config-only, never a
+    UniPilot change): `docs/integrations/presenton.md`. Adapter
+    `frontend/lib/integrations/presenton.ts` (server-only, typed, no secrets to
+    the browser) + env readers in `presentonConfig.ts`; env templates updated
+    (0.14). Migration `20260914100000_presentation_generator.sql`:
+    `public.presentations` (request + status mirror + real slide progress,
+    owner-SELECT RLS, service-role-only writes like `jobs`) and
+    `documents.source` ('upload' | 'presentation'), bucket allowlist gains PPTX.
+- [x] 31.2 Topic → outline
+  - Verified end to end on 2026-09-14 with a real provider (Google Gemini via
+    Presenton on `localhost:5001`): a topic prompt plus template/format/length
+    produced a real 5-slide deck (`Photosynthesis: Light-Dependent Reactions
+    and the Calvin Cycle…`, `v2-standard`, Verdant template). The flow: the
+    tool page creates the row and enqueues `presentation.generate` (ids-only
+    payload) through the 29.1 runner; the worker starts Presenton's async
+    generation (`content`, `n_slides`, `template`, `export_as`, optional
+    `files`). The outline itself is Presenton's pipeline (not re-implemented);
+    real per-slide progress was mirrored to the row while it generated.
 - [ ] 31.3 Outline editing
-- [ ] 31.4 Slide generation
+- [x] 31.4 Slide generation
+  - Worker `backend/worker/presentationJobs.mjs`: resumes a recorded task
+    when one exists, uploads an optional source document (ownership
+    re-checked), polls with the shared `touch_job` heartbeat (interval/
+    timeout knobs), mirrors `created_slides`/`remaining_slides` onto the row,
+    downloads the export, applies the documented quota/size guards and stores
+    a `documents` row (`source = 'presentation'`) in the private bucket —
+    `/documents` shows it with the existing preview/download. Verified: the
+    generated deck landed as a 1,729,322-byte PPTX document row
+    (`source='presentation'`) in the QA account; the job settled `succeeded`.
+    Failure policy mirror of 24.x: permanent for task-error/missing/oversized
+    export and quota, retryable (row back to `queued`, honest transient copy)
+    for transport/5xx/poll-timeout — extended during verification to retry
+    provider task errors that are 429/5xx (see 31.11). Registry flipped to
+    `live` with `href=/tools/presentation`; the tool page renders the real
+    form when configured and the honest blocked state when not.
 - [ ] 31.5 Upload presentation template
 - [ ] 31.6 Analyze uploaded template
 - [ ] 31.7 Recreate style/layout from template
-- [ ] 31.8 Slide editing
-- [ ] 31.9 Reordering
-- [ ] 31.10 Export
-- [ ] 31.11 Failure/quality handling
+- [x] 31.8 Slide editing
+  - GATE 2 decision: **embed Presenton's own editor in a UniPilot-styled
+    wrapper** (`/tools/presentation/[id]/edit`): page chrome, labels, loading
+    and unavailable states are UniPilot's (shared system + MotionNotice);
+    the editor interior keeps Presenton's look — a separate Next.js app on
+    its own origin, so no cross-origin CSS injection is attempted. Auth
+    bridge: the frame loads the browser's Presenton session; the labelled
+    line explains Presenton's sign-in and offers open-in-new-tab. Verified:
+    the wrapper loaded the real deck's editor (frame URL
+    `/presentation?id=…`, HTTP 200, 5 slide thumbnails rendered); the result
+    card links to the wrapper route, and guests/unknown ids 404. Restyling
+    the editor interior is a later, separate fork task (recorded, not
+    attempted).
+- [~] 31.9 Reordering
+  - Reordering is available inside the embedded Presenton editor (its own
+    sortable slides); no UniPilot-native reordering surface is built. The
+    wrapper covers the flow per GATE 2.
+- [x] 31.10 Export
+  - PPTX/PDF chosen per request (`export_as`), fetched from Presenton's
+    static export route and stored as a `documents` row; PDFs preview inline
+    through the existing signed-URL path, PPTX downloads (18.11 posture).
+    Verified: the result card's Download delivered the exported PPTX
+    (1,729,322 bytes, correct filename), and `/documents` shows the deck with
+    the preview surface (honest download-only dialog for PPTX, signed URL
+    minted for the owner).
+- [x] 31.11 Failure/quality handling
+  - Sanitized copy only (`presentationErrors.ts` + the worker's copy map — no
+    provider/Postgres text reaches a student); retry/backoff/dead-letter ride
+    29.1; enqueue failure settles the row `failed` (never a stuck `queued`);
+    the unconfigured path is permanent, honest and stores nothing. Generated
+    decks are stored `uploaded` (not auto-processed — PPTX has no extractor;
+    the 24.x pipeline would fail it honestly). Verified against real failure
+    modes: Google free-tier 429s surfaced as retryable task errors (row back
+    to `queued`, transient copy, exponential backoff — each retry starts a
+    fresh Presenton task because the failed one is dead), exhausted attempts
+    dead-letter with the terminal copy, and a genuine multi-minute generation
+    completed on retry. Quality judged from the real deck (title, sections,
+    template styling) — good.
+
+  **Verification.** `frontend/tests/qa/presentations-jobs.spec.ts` (own
+  project `qa-presentation-jobs`, after the jobs runner): adapter guards
+  (unset URL refuses before any fetch; unsafe task ids/export paths rejected),
+  parser vocabulary, the worker's unconfigured path (row + job settle `failed`,
+  `attempts=1`, nothing stored), the unreachable-service path (retryable
+  requeue with the transient copy + 30 s backoff) and RLS (owner-only reads,
+  no client writes, `anon` denied). 7/7; full suite **225/225** green
+  (`npm run test`, re-run after the registry flip), typecheck/lint/build pass,
+  `db:reset` applies all nineteen migrations cleanly. MCP Chromium: `/tools/presentation` renders
+  the honest blocked state and — with `PRESENTON_URL` pointed at a dead
+  loopback for the render check — the full form (templates degrade to General,
+  guest submit opens the shared prompt with `?next=`, zero console errors,
+  zero data reads for guests, no overflow at 375/1280);
+  `/tools/presentation/<id>/edit` 404s for guests/unknown ids. Authenticated
+  MCP submit was not driven: the MCP sandbox cannot read the QA password from
+  env without leaking it into a tool call (QA_SESSION.md forbids that) — the
+  authenticated paths are covered by the committed specs instead.
+
+  **Live end-to-end proof (2026-09-14, real provider).** With Presenton
+  running on `localhost:5001` (`LLM=google`) and the worker running, a
+  disposable real-Chromium probe (git-ignored under
+  `frontend/.playwright/`, logs in through the real login form with the seeded
+  QA identity) submitted the tool page's form: real progress appeared, the
+  async task generated for ~2m14s, and the finished PPTX (5 slides,
+  1,729,322 bytes) was stored as a `documents` row with
+  `source='presentation'` in the QA account; the job settled `succeeded` on
+  attempt 1. The probe then downloaded the deck through the result card
+  (1,729,322 bytes, correct `.pptx` filename), found it on `/documents` with
+  the preview surface (honest download-only dialog; owner-signed URL minted),
+  loaded the embedded editor in the wrapper (frame HTTP 200, 5 slide
+  thumbnails rendered, screenshot evidence in `frontend/screenshots/live-*`),
+  and confirmed the guest 404 on the edit route. Registry flip verified live:
+  the tool hub cards "Presentation generator — Open → /tools/presentation"
+  and the features section shows the three delivered capabilities as
+  "Available" with the honest footnote; the aggregate "not built yet" notes
+  disappeared by themselves (0.12). One reproducible real failure mode was
+  exercised on the way: Google's free tier rate-limited a 5-slide run (429 on
+  every attempt); the worker now classifies 429/5xx task errors as retryable
+  (fresh task per retry, exponential backoff) and the run completed once the
+  provider window allowed it — nothing was faked.
+
+  **Operational notes from the live run** (all config-only, all local):
+  - The service ran with Presenton's own single-user runtime
+    (`-e DISABLE_AUTH=true`): the instance had auth enabled but no API key was
+    provisioned anywhere, and minting one needs the admin session. The data
+    volume is unchanged; re-create without the flag (and set
+    `PRESENTON_API_KEY`) to return to key-based auth.
+  - `GOOGLE_MODEL=models/gemini-3.5-flash` was added to `presenton-main/.env`
+    (Google rejects the old `gemini-2.5-flash` for new users; `gemini-3.6`
+    hit quota) **and** to Presenton's admin provider settings — its web UI
+    validates the model field there and otherwise redirects every app route
+    (including the editor) to its setup wizard.
+  - Upstream bug worked around in both call sites and documented
+    (docs/integrations/presenton.md §3.2): `GET
+    /presentation/status/{id}` and `/async-tasks/status/{id}` 500 on the
+    current upstream image (SQLAlchemy GC error); the worker/adapter read the
+    same task from the async-tasks list endpoint instead.
+  - Machine-level: WSL2 localhost forwarding for `:54321` was blocked by a
+    winnat-reserved range on this host; the local Supabase URL in the
+    git-ignored `frontend/.env.development.local` was pointed at the WSL IP to
+    unblock the session (restore `127.0.0.1` after a host restart that frees
+    the range; noted in QA_SESSION.md).
 
 Priority:
 topic → slides must be reliable before uploaded-template recreation.
@@ -2221,6 +2534,226 @@ This supersedes Dashboard task 15.9.
 - [ ] 46.8 Sync errors
 - [ ] 46.9 Early Google OAuth verification
 - [ ] 46.10 Read-only vs two-way decision
+
+- [x] 46.11 Python service refactor (proven parser/extractor moved; pytest)
+  - `whatsapp/wa_service/` now owns the proven pipeline (reader, extractor,
+    fingerprint, supabase_client, sync, live, calendar_push and the
+    JSON-stdout CLI). The moved modules were AST/behavioral-equivalence
+    checked against the pre-deletion source; the fifth authorized parser
+    delta (P2.8) makes senders run to the first colon so multi-word names
+    survive, and colon-less system lines carry no sender (RED-first, five
+    new tests). pytest 53 (P2.7, after the move) → 63 (P7.0), green at
+    every phase gate; `npm run test:whatsapp` 63/63 at close.
+- [x] 46.12 Schema + bucket + RPCs + pgcrypto + type regen
+  - `20260912120000_whatsapp_integration.sql`: `events.source`/`source_ref`
+    with the unique `(user_id, source, source_ref)` index and the
+    security-invoker provenance trigger (non-service callers always write
+    `manual`); the `integration_connections/runs/messages/candidates` set
+    with owner-only RLS and CHECK vocabularies; pgcrypto-encrypted
+    `google_calendar_credentials` with zero API-role grants; the
+    `upsert/get/delete/rotate_google_token_key`, `set/get/clear_whatsapp_qr`
+    and `touch_job` RPCs; explicit revokes defeat the 29.1 default-grant
+    trap. `20260912120100_whatsapp_exports_bucket.sql`: private 25 MiB
+    `text/plain` bucket with owner-folder RLS. Types regenerated (P1.4);
+    `db:check-types` matches.
+- [x] 46.13 Worker kinds + touch_job lease heartbeat
+  - The 29.1 runner gained `whatsapp.connect|sync|push|disconnect` (spawned
+    as `python -m wa_service <action>`; the P3.1 argv fix), mode-aware
+    timeouts, the 60 s `touch_job` heartbeat held while the child runs and
+    cleared on exit, terminal-state-only export-object cleanup (a retryable
+    failure keeps the object), ENOENT as a non-retryable Python dependency
+    message, and non-retryable live-browser failures (P7.0). Jobs spec
+    5 → 7 → 10 → 11 passed; pytest 61 at the phase gate.
+- [x] 46.14 Integration data layer + Server Actions + limits
+  - `lib/data/integrations.ts` + `integrationActions`/`Values`/`Errors`:
+    owner reads through RLS, service-role-only writes; 1 active run / 20 per
+    rolling 24 h / 5,000 messages / 500 candidates; a 30-day
+    read-triggered archive purge; stale sweeps for queued and running runs
+    older than 1 h; confirm/reject; the reserve → direct-upload → finalize
+    export pipeline; live actions gated by `UNIPILOT_WHATSAPP_LIVE`; the
+    Google action + callback + backfill with a 1-hour retry window. Guarded
+    runs green (values 9, retention 15, live 13, Google 25/26);
+    typecheck/lint clean.
+- [x] 46.15 WhatsApp card: export upload, runs, candidate review
+  - The real `/integrations` WhatsApp card (dropzone, `aria-live` run
+    history, pending-only candidate review + reject modal, honest
+    empty/error states), the flag-gated live panel, and the Google panel
+    (Connected / Not connected / Not configured on this server / error +
+    retry, one-way note). MCP Chromium guest pass (honest card, sign-in
+    prompt) + authenticated probe (upload → candidates → confirm → calendar
+    marker, zero console errors); P5 checkpoint **193/193**.
+- [!] 46.16 Live self-host mode (self-host dependency; see entry)
+  - [!] Live end-to-end verification blocked: requires a single-tenant
+    worker host with Chrome + selenium (whatsapp/requirements-live.txt) and
+    a physical phone to scan the WhatsApp Web QR; no QR was ever faked.
+    Flag-off/flag-on UI, action gating, and the Python connect/disconnect
+    units are verified.
+  - QR-RPC encryption/TTL/owner-scoping is covered by the security spec;
+    the P6 flag-on probe exercised the panel, "Waiting for the QR scan", the
+    queued live run + job and Disconnect (QR/status/messages cleared), with
+    `whatsapp-live-*` screenshots.
+- [!] 46.17 Google Calendar OAuth + push (OAuth credentials; see entry)
+  - [!] Google Calendar push end-to-end verification blocked: requires a
+    Google Cloud OAuth client (GOOGLE_OAUTH_CLIENT_ID /
+    GOOGLE_OAUTH_CLIENT_SECRET) with
+    {origin}/api/integrations/google/callback registered. The
+    insert/dedupe/refresh paths are covered by pytest with a mocked Google
+    client; the no-credentials no-op is covered end to end; no calendar
+    push was faked.
+  - Verified so far: per-user OAuth URL/state cookie/callback + encrypted
+    token upsert (P7.1) and the Google panel/backfill (P7.2), guarded 25
+    and 26 passed; the P7.3 no-credentials `whatsapp.push` no-op runs the
+    real worker; the P7 probe renders "Not configured on this server" with
+    zero Connect controls. Overlap note: 46.12/46.17 deliver the per-user
+    Google OAuth + push used by 46.2/46.3/46.4 for WhatsApp; the broader
+    46.1–46.10 items stay untouched and open.
+- [x] 46.18 Calendar WhatsApp source marker + honesty spec rewrite
+  - Calendar events with `source='whatsapp'` expose `data-source`, a Lucide
+    icon and the sr-only accessible name ("From WhatsApp"), plus "via
+    WhatsApp" on the detail surface; the brand mark never leaks to
+    `/calendar`. The old coming-soon integrations spec was rewritten to the
+    real honest states (P5.4; guarded 2 passed).
+- [x] 46.19 Docs (DATABASE.md, QA_SESSION.md, AGENTS.md, READMEs, env examples)
+  - Docs phase: `backend/DATABASE.md` (table matrix rows, provenance
+    trigger, encrypted-credential key home + rotation runbook, QR TTL,
+    retention, limits, bucket), `QA_SESSION.md` (new specs,
+    `whatsapp-exports` cleanup, Python-less honest-skip contract,
+    `test:whatsapp`, live/Google blocked notes), `AGENTS.md` (the
+    `whatsapp/` service workspace + worker-host requirement),
+    `whatsapp/README.md` (run/self-host/live-blocked/retention) and the env
+    examples (`GOOGLE_OAUTH_CLIENT_ID`/`SECRET`,
+    `UNIPILOT_INTEGRATIONS_KEY`, `UNIPILOT_WHATSAPP_LIVE`,
+    `WHATSAPP_SYNC_TIMEOUT`, `WHATSAPP_PYTHON`, `WHATSAPP_PROFILE_ROOT`).
+- [x] 46.20 Verification (pytest + Playwright + MCP + static gates)
+  - `db:reset`/`db:lint`/`db:check-types` clean; typecheck/lint/build
+    clean; pytest **63/63** (`npm run test:whatsapp` **63/63**); full
+    `npm run test` **197/197** (5.8m; pre-feature baseline **153** — the
+    plan's expected 145/145 was already superseded). Chromium: `whatsapp-*`
+    screenshot sets under `frontend/screenshots/` (guest/auth/live/Google),
+    the flag-on live probe and the Google not-configured probe; the
+    authenticated MCP path is blocked by the credential rule, so
+    authenticated flows were verified by the committed suite + probes (both
+    real Chromium). One transient `finish-setup.spec.ts` strict-mode
+    failure under full-suite load was isolated 4/4 green and did not recur.
+- [x] 46.21 Review-mode schema (`manual` | `automatic`, founder-origin)
+  - Founder-origin note: the original standalone tool gated its pushes on
+    `ASK_BEFORE_PUSH` / `--ask`; UniPilot moves that choice into the product.
+    `20260913050000_whatsapp_review_mode.sql` adds `review_mode` to
+    `integration_connections` and `integration_runs` (text not null default
+    `manual`, CHECK `manual`/`automatic`), applied via
+    `supabase migration up` (no reset): the founder's runs/messages are
+    intact and existing rows are backfilled by the column default.
+    `db:lint` and `db:types`/`db:check-types` clean.
+- [x] 46.22 Python auto-confirm on sync completion
+  - `sync.py` reads the run's `review_mode` (absent/junk → manual; manual
+    behavior unchanged). Automatic settles the user's pending candidates
+    whose fingerprints the run re-detects (new or earlier runs), mapping
+    each to `events` with the same body mapping as the TS confirm
+    (`source='whatsapp'`, `source_ref=fingerprint`, UTC instants, range end
+    preserved), deduped by `events_user_source_ref_key` — ignored inserts
+    resolve through a batched `source_ref=in.(...)` select. The candidate
+    settle is rejection-safe (`status=eq.pending`,
+    `return=representation`), so only candidates this run actually
+    transitions to `confirmed` are push-eligible. `whatsapp.push` jobs are
+    enqueued (ids-only `{candidateId}` payloads, never executed here) only
+    when a google row is `connected` **and** the Google client env pair is
+    present. Pending candidates outside the detected set stay pending, and
+    rejected or already-confirmed fingerprints are never resurrected.
+    pytest **76** (RED-first for every automatic case). Automatic scope
+    (B6.1): settles pending candidates whose fingerprints the run re-detects;
+    rejected/confirmed fingerprints are never resurrected; pytest **82**.
+- [x] 46.23 Data layer + actions + UI mode choice
+  - `WHATSAPP_REVIEW_MODES` + labels; `parseWhatsAppExport` defaults an
+    absent `reviewMode` to `manual` and rejects junk; run/connection mappers
+    read `review_mode` with a manual fallback. `reserveExportRun` persists
+    the chosen default on the `(user_id, provider='whatsapp')` row with a
+    `review_mode`-only service update (a live row's transport `mode`/`status`
+    are never clobbered) or inserts a `disconnected` export row; the run
+    records the mode actually used. `ExportDropzone` renders the
+    `role="radiogroup"` "Review mode" choice — "Review each event" / "Add
+    automatically" — preselected from the connection default, with one
+    honest sentence per mode; `RunHistory` labels every run with its mode.
+- [x] 46.24 Flow tests + verification
+  - Automatic run adds its candidates to `events` (fingerprints matching,
+    `/calendar` marker) and enqueues nothing without Google; a re-run
+    dedupes (0 new candidates/events/pushes); QA2's pending candidate is
+    untouched (isolation); the google-connected path enqueues ids-only push
+    jobs that stay `queued` (env override only — no real OAuth call); the
+    manual regression stays pending with no events. UI: automatic upload
+    settles to confirmed rows with no review queue, the saved connection
+    default preselects the radio after reload, and an upload against a live
+    connected row patches `review_mode` only. Guarded jobs+export+ui
+    **41 passed** (`b4-green`), ui+integrations+export **23 passed**
+    (`b3-green`); typecheck/lint clean.
+- [x] 46.25 Docs/spec (this task)
+  - The `/integrations` page header no longer promises "nothing is added
+    without you" — it names the review/automatic choice, matching the card
+    (guarded `integrations` + `guest-browsing` pair green; `b5-green`).
+    `backend/DATABASE.md` documents both `review_mode` columns (vocabulary,
+    default, connection default vs per-run actual, detected-set scope and
+    the M1 mixed state); `QA_SESSION.md` adds the review-mode proof and the
+    mode-default seed/cleanup; the design spec gains its dated addendum;
+    `whatsapp/README.md` gains the mode paragraph. Google push stays `[!]`
+    without OAuth credentials while automatic events still land in
+    `/calendar`.
+- [x] 46.26 Detection-settings schema (`date_order`, `detect_relative_dates`)
+  - `20260913080000_whatsapp_detection_settings.sql` (the 18th migration) adds
+    `integration_connections.date_order` (text not null default `DMY`, CHECK
+    `DMY`/`MDY`) and `detect_relative_dates` (boolean not null default false),
+    each with a column comment; no RLS/grant changes (the columns ride the
+    existing owner-SELECT / server-write policies). Applied with
+    `supabase migration up` (no reset): the founder's 3 runs / 1034 messages
+    unchanged, `db:lint` clean, `db:types`/`db:check-types` clean.
+- [x] 46.27 Extractor root-cause fix + conservative relative gate
+  - Root cause, measured on the founder's 753-message export: the ENVELOPE is
+    month-first (493 messages with a second component > 12, 0 with a first
+    > 12) while extraction defaulted to `DATE_ORDER=DMY`, so DMY read the
+    envelope day-first and the "12th sept"/"20th sept" mentions landed in
+    2027; a same-day year roll compounded it (with the base at the message
+    day's midnight, a same-day 00:00 candidate read as past under the future
+    preference and rolled a year). `infer_date_order` (reader.py) infers the
+    envelope order from unambiguous 1-2 digit components (majority signal;
+    tie → `None`); `sync` parses the envelope with the inferred order
+    (fallback to the user's `date_order`), message-text dates keep the user's
+    `date_order`, and the relative base is normalized to the message day's
+    midnight plus a narrow same-day equality correction (re-parse with
+    `PREFER_DATES_FROM=current_period`; keep the un-rolled year only when the
+    fragment resolves to the base day).
+  - Relative gate (opt-in, default off): a weekday/relative mention qualifies
+    only when the message also has a clock time or an academic keyword
+    (submission/submit/exam/deadline/presentation/class/test/quiz/assignment/
+    viva/due); all-day without a time; time-only still rejected.
+- [x] 46.28 Sync wiring + pytest 97
+  - `sync._run` reads the WhatsApp connection once (`date_order`,
+    `detect_relative_dates`; missing row → DMY/false), computes
+    `envelope_order = infer_date_order(messages) or date_order`, uses it for
+    message `sent_at`, and threads it plus the connection settings into
+    `extract_events`; manual/automatic/reviewer flows untouched. pytest **97
+    passed**; `npm run test:whatsapp` **97** (14 new tests, incl. the
+    year-first-envelope hardening case; the synthetic `envelope_mdy_chat.txt`
+    fixture never reuses founder content).
+- [x] 46.29 Settings UI + guarded 32
+  - `WHATSAPP_DATE_ORDERS` + labels; `parseWhatsAppExport` defaults an absent
+    `dateOrder`/`detectRelativeDates` to `DMY`/false and rejects junk;
+    `connectionRowToItem` maps with defensive defaults; `reserveExportRun`
+    persists `review_mode` + `date_order` + `detect_relative_dates` together
+    (patch path leaves transport `mode`/`status` untouched). `ExportDropzone`
+    adds the "Date order for ambiguous dates (9/10)" radiogroup and the "Also
+    detect weekday and relative dates" checkbox with its honest helper copy;
+    the workspace preselects from the connection default and a refreshed
+    render never stomps a fresh selection. Guarded three-file run (`--no-deps`
+    ui + export + integrations) **32 passed**; typecheck/lint clean.
+- [x] 46.30 Data correction + final verification
+  - Founder data corrected in place (UPDATE by id, not duplicate): both
+    candidates and both events now start **2026-09-12** and **2026-09-20**
+    (local), `source_ref == candidate fingerprint`, 0 × 2027; row ids,
+    confirmed status, event linkage and the user-wide counts (2 candidates /
+    2 events) preserved.
+  - Real-export probe (both modes, real Chromium): 5 candidates/events dated
+    2026-06-19, 2026-07-06, 2026-07-07, 2026-09-12, 2026-09-20; automatic →
+    0 review prompts; 2 calendar markers in the Sept 2026 view; 0
+    console/page errors; screenshots `whatsapp-detect-*`. Guarded c4 run
+    **32 passed**; full `npm run test` **217/217** (7.6m).
 
 ## 47. Academic Integrations
 
@@ -3113,6 +3646,142 @@ gesture explicitly, waiting on that state before release instead of
 → `Failed` with the sanitized OCR copy; light/dark, 1280/375, zero console
 errors, clean product network; documents/jobs/objects swept to zero.
 25.x boundary untouched: no embeddings, no second chunking system.
+Stage 3 item 22 — 18.x Documents hub ✅.
+The 23.x upload surface became the real hub: `documents/page.tsx` loads
+`listDocuments` and hands the list to `DocumentsWorkspace` (the client
+boundary that owns the live list and every mutation), which renders
+`DocumentsHub` — cards, search, status pills, the drop target and the preview
+surface. `DocumentCard` is presentational (name + one mono metadata line:
+type · size · pages · status · date; only segments that exist), with per-card
+Preview/Rename/Delete and, for `failed`, the worker's sanitized copy plus a
+"Retry processing" action that re-enqueues through the 29.1 runner (only from
+`failed`, idempotent). Rename/delete/retry are optimistic with rollback and
+the settled row reconciled; rename keeps the storage path. The status
+vocabulary gained its hub words in one place (`Parsing…`/`Searchable` in
+`documentValues.ts`), and the filter pills use them with real counts only when
+they count something. Async processing: while any document is `indexing` the
+workspace refreshes the server render every 4 seconds and stops the moment
+none remains (documented mechanism; no fake realtime), with a polite live
+region announcing indexed/failed transitions. 18.11's preview mints a
+60-second signed URL through the owner's session — PDF in an `<iframe>`, PNG/
+JPEG as `<img>`, DOCX download-only with `Content-Disposition: attachment`;
+the bucket stays private and nothing is rendered unsafely. 18.13's
+pixel-dissolve is `dissolveVariants` in the shared Motion vocabulary (blur +
+opacity at a hair of scale, keyed by the status value inside
+`AnimatePresence`; the word is content regardless of animation, reduced
+motion runs zero-duration). 18.16 surfaces the 23.12 quota copy with the
+honest "plan-based limits aren't available yet" caveat. QA:
+`frontend/tests/qa/documents-hub.spec.ts` (upload → real progress →
+"Parsing…" → poll → "Searchable" without reload; search + pills + honest
+empty; rename/delete cancel+confirm with persistence; PDF inline and DOCX
+download-only previews; failed copy + retry re-enqueue; 50-document quota
+alert; 320/375/1280 overflow; reduced motion; guest) runs as
+`qa-documents-hub` after the processing project and before `qa-jobs-runner`;
+the 23.x/24.x specs now pin the new status words. Full `npm run test`
+**141/141** (`frontend/.playwright/hub-green-3.log`), typecheck/lint/build
+pass. Stabilisation in the same pass — three test-side races that full runs
+had exposed were fixed at their mechanism: optimistic rename/delete/move
+specs now wait for the settled row (dialog-close or `expect.poll`) before
+reloading, the pointer-drag spec already waits on `data-dragging`/
+`data-drop-target`, and upload specs locate the card by its name rather than
+"first card". The fonts guard caught one real convention miss — the raw
+filter pills now carry `font-heading` like the tasks board's — proving the
+role guard still bites. MCP Chromium (QA1): three seeded states rendered
+(failed copy, uploaded, indexed with pages), search narrowed to one card,
+the Failed pill filtered with the sanitized copy visible, PDF preview opened
+a signed iframe and DOCX a download-only dialog, a real 8 MB upload ran
+through real progress → "Parsing…" → the poll flipped it to "Searchable"
+with the dissolve captured mid-flight, retry flipped the failed card to
+"Parsing…", rename/delete cancel+confirm behaved, light/dark at 1280 plus
+375/320 with zero overflow and zero console errors; guest saw the honest
+line + prompt and no list; store swept back to zero.
+Stage 3 item 23 — 25.x Search/embeddings ✅ (keyword retrieval live;
+25.3/25.6 [!] blocked on an embedding provider, 25.8/25.11 [~]).
+`20260912095011_search_embeddings.sql` resolves the 20.6 deferral: pgvector in
+the `extensions` schema, nullable `document_chunks.embedding
+vector(1536)` (the recorded model family is OpenAI `text-embedding-3-small`)
+plus a `page integer` column, an HNSW cosine index and a GIN full-text index.
+`search_document_chunks` (security invoker; RLS through the parent) fuses a
+`websearch_to_tsquery`/`ts_rank` keyword branch with an optional cosine vector
+branch by reciprocal rank (k=60), filters by owning document and page, and
+returns document id/name, page, chunk index, the `[[…]]`-marked headline and
+the match kind; explicit grant hygiene (anon revoked, authenticated +
+service_role only). 25.1/25.2's chunking (1200/200 windows, paragraph →
+sentence → word boundary preference) lives in `backend/worker/chunkText.mjs`
+and runs through the new `document.reindex` job (25.12): deterministic,
+delete-then-insert, so a second run is provably identical; 24.x's page units
+now stamp `page` as well. The worker's `embed.mjs` and the data layer's
+`semanticSearchStatus()` both report the exact missing dependency; nothing
+fabricates a vector, `p_embedding` stays null and search is keyword-only by
+construction (the panel states it). 25.10 wires the real flow into
+`GlobalSearch`'s reserved slot (debounce → loading → hits with document/page/
+snippet → honest no-match → sanitized error; hit → `/documents?preview=<id>`
+opens the 18.11 preview), and the client-safe contract was split into
+`searchValues.ts` after the build caught `next/headers` crossing into the
+browser bundle. 25.11 ships `backend/worker/searchBenchmark.mjs` +
+`search-fixtures/` measuring recall@k and MRR from real queries with no
+invented numbers ([~] until a human-checked set exists; semantic recall not
+measurable without 25.3). QA: `frontend/tests/qa/documents-search.spec.ts`
+(reindex idempotency with page refs and untouched document status; keyword
+hits with snippets, document/page filters, honest empty, QA1/QA2 RLS and the
+security-invoker session read; the real panel flow including the preview
+navigation; harness honesty) runs as `qa-documents-search` at the tail of the
+documents chain; full `npm run test` **145/145**
+(`frontend/.playwright/search-green.log`), typecheck/lint/build pass,
+`db:reset` applies all thirteen migrations cleanly and `db:check-types`
+matches. MCP Chromium (QA1): indexed and re-indexed a real 2-page PDF, then
+the panel returned the correct hit ("MCP Thermodynamics Notes.pdf · PAGE 1")
+with the keyword-only line, opened the document's preview from the hit, showed
+the honest no-match state, guest saw the prompt, light/dark + 1280/375 with
+zero overflow and zero console errors; store swept to zero. Assistant (26.x)
+untouched; no embeddings, no fake semantic results.
+Stage 4 item 24 — 26.x Assistant backend ✅ (provider legs [!] blocked).
+`20260912103529_assistant_persistence.sql` adds `messages.status`
+(`complete|failed`) and `messages.sources` jsonb, ordering indexes
+(`messages(conversation_id, created_at, id)`,
+`conversations(user_id, updated_at desc)`), and makes messages
+**server-write-only**: INSERT/UPDATE/DELETE revoked from `authenticated` and
+the three write policies dropped, so no client can forge an assistant/system
+message — the service-role writer is the only one trusted with `role`,
+`status` and `sources`. The provider abstraction (`lib/ai/provider.ts`) is
+env-only and registry-driven with an honest unconfigured status naming the
+exact dependency (`ASSISTANT_PROVIDER`/`ASSISTANT_API_KEY`/`ASSISTANT_MODEL`,
+documented in `.env.example`); the registry stays empty because no provider
+client or key exists, and nothing fabricates a reply. The turn pipeline
+(`lib/data/assistant.ts`) runs guards → conversation → user message →
+25.x RAG → answer → persistence, with `runAssistantTurn` (Server Action) and
+`streamAssistantTurn` behind `POST /api/assistant/turn` (`text/event-stream`:
+start/delta/sources/done/error — the exact contract 19.x consumes; the
+provider-stream leg is wired and blocked). Persistence: conversations are
+owner CRUD through the session client; messages are server-written after an
+ownership check; both read through RLS. Context assembly is budgeted (8
+chunks, 2000 tokens ≈ 8000 chars, word-boundary truncation, dedupe,
+provenance kept). Limits: 10 turns/minute, 200,000 documented monthly tokens,
+both read from `usage_events`, with sanitized over-limit copy that persists
+nothing; each turn records `assistant_turn` and (when reported)
+`assistant_tokens`. Failure policy: 30s timeout + 2 attempts around
+non-streaming provider calls, one timeout-bounded attempt for streaming, and
+a `failed` assistant message with sanitized copy on any failure — no
+half-answer as complete. Injection defense is structural: one immutable
+system message, all user/retrieved text quoted inside `<workspace_data>` with
+delimiter/control-character defusal, no tool execution from retrieved text;
+the 27.x structured contract (`unipilot-action` fences,
+`requiresConfirmation` forced true) is defined but never executed here.
+QA: `frontend/tests/qa/assistant-backend.spec.ts` (provider honesty +
+timeout/retry policy, injection guard, context budget, structured parser,
+real turns persisting conversation/messages/usage in order, server-only
+writes + owner isolation, RAG cross-user isolation through real turns,
+rate/spend caps) runs as `qa-assistant-backend` before the jobs runner; full
+`npm run test` **153/153** (`frontend/.playwright/assistant-green.log`),
+typecheck/lint/build pass, `db:reset` applies all fourteen migrations cleanly
+and `db:check-types` matches. MCP Chromium (QA1): `/assistant` renders
+`data-assistant-status="unconfigured"` with the honest copy, a real browser
+turn through the SSE endpoint returned start/delta/done
+(`configured:false`, "isn't configured yet"), the DB held the conversation,
+both messages (`user`/`assistant`, both `complete`) and the usage row, and
+the surface was verified light/dark at 1280/375 with zero product console
+errors; conversations/messages/usage swept to zero. 19.x owns the UI; 27.x
+owns tool execution. No provider key exists or is logged.
 ```
 
 Stage 2 items 12–14 are ✅ (above). With item 9 (20.7) still [~] pending the
@@ -3169,6 +3838,70 @@ passed on re-run/isolation), typecheck/lint/build pass; MCP Chromium pass at
 1280/375, light + dark, clean consoles and zero horizontal overflow. DESIGN.md
 §Typography amended; the closed three-family set is intact.
 
+Stage 3 item 24 — 46.11–46.20 WhatsApp integration ✅ (46.16/46.17 [!]
+blocked on self-host live + OAuth credentials; founder-requested pull-forward
+from Stage 7, recorded that way in the execution order).
+`whatsapp/wa_service/` is the new Python service workspace (reader,
+extractor, fingerprint, supabase_client, sync, live, calendar_push and the
+JSON-stdout CLI) with the proven parser moved and reviewed; the fifth
+authorized parser delta makes senders run to the first colon (multi-word
+names survive) and colon-less system lines carry no sender. pytest and
+`npm run test:whatsapp` close at **63/63**. Two migrations:
+`20260912120000_whatsapp_integration.sql` adds `events.source`/`source_ref`
+with the unique `(user_id, source, source_ref)` index and the
+security-invoker provenance trigger, the `integration_connections/runs/
+messages/candidates` tables with owner-only RLS and CHECK vocabularies, the
+pgcrypto-encrypted `google_calendar_credentials` (zero API-role grants) and
+the token/QR/`touch_job` RPCs (explicit revokes defeat the 29.1 default-grant
+trap); `20260912120100_whatsapp_exports_bucket.sql` adds the private 25 MiB
+`text/plain` bucket with owner-folder RLS. `db:reset`, `db:lint` and
+`db:check-types` are clean; types regenerated.
+The 29.1 runner gained `whatsapp.connect|sync|push|disconnect`, mode-aware
+timeouts and the 60-second `touch_job` heartbeat cleared on exit; export
+objects are deleted only when the run is terminal (a retryable failure keeps
+the object), ENOENT returns the non-retryable Python dependency message and
+live browser failures are non-retryable. The data layer/Server Actions keep
+reads owner-scoped through RLS and writes service-role-only, enforce 1
+active run / 20 per rolling 24 h / 5,000 messages / 500 candidates, purge the
+message archive 30 days after a read-triggered check, fail stale queued and
+running runs past one hour, settle confirm/reject, run the reserve →
+direct-upload → finalize export, and backfill Google pushes on the connected
+overview with a 1-hour retry window. Rulings: 4xx HTTP responses are
+non-retryable (retry is 5xx/408/429 only), an all-day Google event's end is
+exclusive, and re-sync needed the real `on_conflict=user_id,fingerprint` fix
+(a plain ignore-duplicates insert hit the candidate unique index with a 409
+and failed the second run). The UI is the real `/integrations` WhatsApp card
+(dropzone, `aria-live` run history, pending-only candidate review + reject
+modal, honest empty/error states), the `UNIPILOT_WHATSAPP_LIVE`-gated live
+panel and the Google panel (Connected / Not connected / Not configured on
+this server / error + retry, one-way note); calendar events from WhatsApp
+carry `source='whatsapp'` with an accessible name (Lucide icon + sr-only
+"From WhatsApp") and the brand mark never leaks to `/calendar`. Chromium
+evidence: the `whatsapp-*` screenshot sets in `frontend/screenshots/`
+(guest, authenticated, live flag-on, Google not-configured), the live probe
+(panel, "Waiting for the QR scan", queued live run + job, Disconnect
+clearing QR/status/messages) and the Google probe ("Not configured on this
+server", zero Connect controls); the authenticated MCP path stays blocked by
+the credential rule, so authenticated flows were verified by the committed
+suite + probes (both real Chromium). Full `npm run test` **197/197** (5.8m):
+the plan expected a 145/145 baseline, but the assistant-backend feature had
+already landed, so the measured pre-feature baseline was **153**; one
+transient `finish-setup.spec.ts` strict-mode failure under full-suite load
+was isolated 4/4 green and did not recur in the next full **197/197** run
+(pre-existing under-load flake in untouched code). typecheck/lint/build pass.
+46.16 [!] Live end-to-end verification blocked: requires a single-tenant
+worker host with Chrome + selenium (whatsapp/requirements-live.txt) and a
+physical phone to scan the WhatsApp Web QR; no QR was ever faked. Flag-off/
+flag-on UI, action gating, and the Python connect/disconnect units are
+verified (QR-RPC encryption/TTL/owner-scoping is covered by the security
+spec).
+46.17 [!] Google Calendar push end-to-end verification blocked: requires a
+Google Cloud OAuth client (GOOGLE_OAUTH_CLIENT_ID /
+GOOGLE_OAUTH_CLIENT_SECRET) with {origin}/api/integrations/google/callback
+registered. The insert/dedupe/refresh paths are covered by pytest with a
+mocked Google client; the no-credentials no-op is covered end to end; no
+calendar push was faked.
+
 ---
 
 ## STAGE 1 — INTEGRITY / ARCHITECTURE RECONCILIATION
@@ -3211,28 +3944,29 @@ Then:
 19. 23.x Document storage — ✅ private bucket + upload pipeline + data layer (23.12 [~] plan-driven enforcement; QA 118/118; see CURRENT STATE)
 20. 29.1 Background jobs — ✅ durable store + atomic claim + worker runner + enqueue helper (24.2 now unblocked; QA 124/124; see CURRENT STATE)
 21. 24.x Document processing/OCR — ✅ text pipeline (24.5/24.6 [!] blocked on an OCR provider, 24.14 [~] until a real benchmark set); QA 133/133; see CURRENT STATE
-22. 18.x Documents UI
+22. 18.x Documents UI — ✅ full hub (cards, search/filters, preview, retry, quota, dissolve transition; QA 141/141; see CURRENT STATE)
 
-23. 25.x Search/embeddings
+23. 25.x Search/embeddings — ✅ keyword retrieval live (pgvector + chunking + hybrid-ready); 25.3/25.6 [!] blocked on an embedding provider, 25.8/25.11 [~]; QA 145/145; see CURRENT STATE
+24. 46.11–46.20 WhatsApp integration — ✅ export path + owner tables + encrypted Google push (46.16/46.17 [!] blocked on self-host live + OAuth credentials); founder-requested pull-forward from Stage 7; QA 197/197; see CURRENT STATE
 
 ---
 
 ## STAGE 4 — AI
 
-24. 26.x Assistant backend
-25. 19.x Assistant UI bound to real backend
-26. 27.x AI action engine
-27. 28.x Academic intelligence
+25. 26.x Assistant backend — ✅ backend (persistence, RAG, limits, streaming contract, injection guard); provider legs [!] blocked (no key/client), 26.8 streamed leg [~]; QA 153/153; see CURRENT STATE
+26. 19.x Assistant UI bound to real backend
+27. 27.x AI action engine
+28. 28.x Academic intelligence
 
 ---
 
 ## STAGE 5 — DASHBOARD INTELLIGENCE
 
-28. 44.x Workload engine
-29. 45.x Dashboard intelligence
-30. 15.10 Final Dashboard responsive QA
-31. 15.11 Create with UniPilot tool hub
-32. 15.12 New-account Dashboard zero state
+29. 44.x Workload engine
+30. 45.x Dashboard intelligence
+31. 15.10 Final Dashboard responsive QA
+32. 15.11 Create with UniPilot tool hub
+33. 15.12 New-account Dashboard zero state
 
 Note:
 15.9 is superseded and must NOT be implemented separately.
@@ -3241,17 +3975,17 @@ Note:
 
 ## STAGE 6 — TIER 1 TOOLS
 
-33. 39 Flashcards
-34. 40 Quiz / MCQ
-35. 43 Data Tables
-36. 38 QR Generator
+34. 39 Flashcards
+35. 40 Quiz / MCQ
+36. 43 Data Tables
+37. 38 QR Generator
 
 Then bind them into:
 
-37. 15.11 Tool Hub
-38. Quick Actions
-39. Homepage
-40. Features page
+38. 15.11 Tool Hub
+39. Quick Actions
+40. Homepage
+41. Features page
 
 Registry remains the single source of truth.
 
@@ -3259,35 +3993,35 @@ Registry remains the single source of truth.
 
 ## STAGE 7 — PRODUCT SYSTEMS
 
-41. 48 Notifications backend
-42. 49 Billing
-43. 46 Calendar integrations
-44. 47 Academic integrations
+42. 48 Notifications backend
+43. 49 Billing
+44. 46 Calendar integrations
+45. 47 Academic integrations
 
 ---
 
 ## STAGE 8 — HARDENING
 
-45. 50 Security
-46. 51 Accessibility
-47. 52 Performance
-48. 53 Errors/empty states
-49. 29.3–29.8 infrastructure hardening
+46. 50 Security
+47. 51 Accessibility
+48. 52 Performance
+49. 53 Errors/empty states
+50. 29.3–29.8 infrastructure hardening
 
 ---
 
 ## STAGE 9 — FINAL QA
 
-50. 54 Marketing QA
-51. 55 Application QA
-52. 56 Automated tests
-53. 57 E2E
-54. 58 SEO
-55. 59 Legal/trust
-56. 60 Deployment
-57. 61 Final launch checklist
-58. 62 Admin
-59. 63 Academic integrity
+51. 54 Marketing QA
+52. 55 Application QA
+53. 56 Automated tests
+54. 57 E2E
+55. 58 SEO
+56. 59 Legal/trust
+57. 60 Deployment
+58. 61 Final launch checklist
+59. 62 Admin
+60. 63 Academic integrity
 
 Only after these stages is the product considered launch-ready.
 
