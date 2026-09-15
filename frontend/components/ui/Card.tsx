@@ -41,11 +41,12 @@ const variantClasses: Record<CardVariant, string> = {
  * Surface convention: the default background is solid `bg-card`, which is right
  * for a card layered over other content (a dropdown, a dialog, a row inside
  * another panel). A card sitting directly on the page — on the fixed dotted
- * canvas — passes `bg-glass` instead, so the dots read through it, and
- * `bg-glass-strong` for its selected state. Those two and `bg-glass-subtle` are
- * the only transparency levels in the project; they are defined once in
- * `app/globals.css` and must not be re-derived as one-off alpha-modifier
- * backgrounds on individual cards.
+ * canvas — passes `bg-glass` plus `backdrop-blur-md` instead, so the page reads
+ * faintly through it; `bg-glass-strong` is its selected/emphasised state, and a
+ * card nested inside a glass panel takes `bg-glass-subtle` (the parent is
+ * already frosted). Those are the only transparency levels in the project; they
+ * are defined once in `app/globals.css` and must not be re-derived as one-off
+ * alpha-modifier backgrounds on individual cards.
  */
 export function Card({ variant = "default", className, ...props }: CardProps) {
   return (

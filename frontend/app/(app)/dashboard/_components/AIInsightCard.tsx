@@ -90,7 +90,7 @@ export function AIInsightCard({ index, insight, guest = false }: AIInsightCardPr
     <div data-enter="scale" style={motionIndex(index)} className="min-w-0">
       <Card
         variant="compact"
-        className="flex min-w-0 flex-col gap-2 bg-glass p-4 hover-lift hover:border-foreground"
+        className="flex min-w-0 flex-col gap-2 bg-glass p-4 backdrop-blur-md hover-lift hover:border-foreground"
       >
         <span className="flex items-center gap-1.5 font-mono text-label-caps uppercase text-muted-foreground">
           <Sparkles aria-hidden="true" className="size-3.5 shrink-0" />

@@ -1,6 +1,7 @@
 "use client";
 
 import type { HTMLAttributes, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   POPOVER_ORIGIN,
@@ -31,6 +32,16 @@ type MotionPopoverProps = Omit<
    */
   origin?: string;
   children?: ReactNode;
+  /**
+   * Mount the panel in `document.body` instead of in place. A popover rendered
+   * inside the glass rail cannot blur the page: the rail is itself a
+   * `backdrop-blur-md` element, and a backdrop filter nested inside another one
+   * samples the parent's painted output, while absolute positioning is trapped
+   * by ancestor stacking contexts. Portalling puts the panel in the page's own
+   * backdrop root — pair it with fixed positioning computed from the trigger.
+   * The panel still unmounts through `AnimatePresence` when closed.
+   */
+  portal?: boolean;
 };
 
 /**
@@ -58,11 +69,12 @@ export function MotionPopover({
   origin,
   style,
   children,
+  portal = false,
   ...props
 }: MotionPopoverProps) {
   const reduced = useReducedMotion() ?? false;
 
-  return (
+  const panel = (
     <AnimatePresence>
       {open ? (
         <motion.div
@@ -82,6 +94,11 @@ export function MotionPopover({
       ) : null}
     </AnimatePresence>
   );
+
+  if (!portal) return panel;
+  /* Server render has no portal host; the panel is client-only anyway (it
+     mounts on interaction), so an empty client portal hydrates cleanly. */
+  return typeof document === "undefined" ? null : createPortal(panel, document.body);
 }
 
 export type { MotionPopoverProps };

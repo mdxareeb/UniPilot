@@ -106,7 +106,10 @@ export function WorkspaceMobileNav({
             </span>
             UniPilot
           </Link>
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* `gap-2` at every width: the compact trio's 40px pointer targets
+              (32px visual + 4px `::after` bleed per side) exactly abut at 8px,
+              so no two hit areas overlap on a phone. */}
+          <div className="flex items-center gap-2">
             <GlobalSearch />
             <NotificationCenter />
             <ThemeToggle />
@@ -144,7 +147,7 @@ export function WorkspaceMobileNav({
         as="nav"
         id="mobile-navigation"
         aria-label="Workspace"
-        className="absolute inset-x-4 top-full mt-2 max-h-[calc(100dvh-10rem)] overflow-y-auto overscroll-contain rounded-card border border-border bg-card shadow-overlay"
+        className="absolute inset-x-4 top-full mt-2 max-h-[calc(100dvh-10rem)] overflow-y-auto overscroll-contain rounded-card border border-border bg-glass-strong shadow-overlay backdrop-blur-md"
       >
         <div className="flex flex-col gap-0.5 p-2">
           {WORKSPACE_NAV.map((item) => {
@@ -159,13 +162,13 @@ export function WorkspaceMobileNav({
                   className={`flex min-w-0 items-center gap-2.5 rounded-base px-3 py-2.5 text-body-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card${
                     active
                       ? /* `font-semibold` is the rail's own active weight, and
-                           `aria-current` matches it. The fill cannot: the rail
-                           lights its active row with solid `bg-card` because the
-                           rail itself is `bg-glass`, and this drawer is already
-                           `bg-card`, so the same utility here would draw nothing.
-                           `bg-muted` is the one step of contrast the surface has
-                           left, and a `shadow-subtle` under a recessed fill would
-                           read as a mistake rather than as the rail's lift. */
+                           `aria-current` matches it. The row is a control, so it
+                           keeps its solid `bg-muted` fill over the frosted
+                           drawer — controls stay solid on every glass surface
+                           (the rail's own inverted active pill is its
+                           equivalent), and a `shadow-subtle` under a recessed
+                           fill would read as a mistake rather than as the
+                           rail's lift. */
                         " bg-muted font-semibold text-foreground"
                       : " text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}

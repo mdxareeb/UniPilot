@@ -45,6 +45,15 @@
   --surface-glass-strong: color-mix(in srgb, var(--muted) 80%, transparent);
   --surface-glass-subtle: color-mix(in srgb, var(--muted) 30%, transparent);
 
+  /* The modal/popup scrim. One dark translucent veil in BOTH themes — it is
+     deliberately not derived from `--foreground`, because the dark theme's
+     foreground is near-white and a foreground scrim would wash the page grey
+     instead of dimming it. The dark theme is a touch heavier so the veil
+     still separates the panel on an already-dark page. Components read this
+     only through `bg-scrim` (mapped in `@theme inline`), paired with
+     `backdrop-blur-md` so the page behind reads blurred, not flat. */
+  --scrim: rgba(0, 0, 0, 0.4);
+
   --border: #e5e5e5;
   --input: #e5e5e5;
   --ring: #000000;
@@ -76,6 +85,11 @@
      founder's choice lands here. */
   --motif: dots;
   --motif-color: #d4d4d4;
+  /* The motif's counterpart for dialog panels. The page motif is tuned to the
+     flat canvas; a dialog panel paints its own copy of the geometry locally
+     (see `bg-dotted-surface`), and this token lets that copy be tuned per
+     theme for the glass fill without touching the page motif. */
+  --motif-color-surface: #d4d4d4;
   --motif-scale: 1px;
   --motif-spacing: 32px;
 
@@ -169,6 +183,11 @@
   --surface-glass-strong: color-mix(in srgb, var(--muted) 88%, transparent);
   --surface-glass-subtle: color-mix(in srgb, var(--muted) 40%, transparent);
 
+  /* Same dark veil as the light theme, one step heavier because the page it
+     dims is already dark. The token never follows `--foreground`, so it can
+     never become a light wash here. */
+  --scrim: rgba(0, 0, 0, 0.55);
+
   --border: #2e2e33;
   --input: #2e2e33;
   --ring: #ffffff;
@@ -191,6 +210,11 @@
   /* Slightly lighter dots: the motif must read through the dark floor the way
      the #d4d4d4 dots read through the light one. */
   --motif-color: #3c3c41;
+
+  /* The surface copy sits one small step lighter than the page mark: a dark
+     glass card is a touch lighter than the floor, so the same value would
+     read weaker on it than on the page. */
+  --motif-color-surface: #414147;
 
   /* The CTA band's motif mark is the same light low-alpha value as the light
      theme's: the charcoal fill does not change, so the mark cannot either. */
@@ -263,6 +287,8 @@
   --color-glass: var(--surface-glass);
   --color-glass-strong: var(--surface-glass-strong);
   --color-glass-subtle: var(--surface-glass-subtle);
+
+  --color-scrim: var(--scrim);
 
   --color-border: var(--border);
   --color-input: var(--input);
@@ -522,6 +548,50 @@
       transparent calc(var(--motif-spacing) - var(--motif-scale)),
       var(--motif-color-cta) calc(var(--motif-spacing) - var(--motif-scale)),
       var(--motif-color-cta) var(--motif-spacing)
+    );
+    background-size: auto;
+  }
+}
+
+/* The same motif, painted locally on a dialog panel (the shared `Modal`
+   primitive) instead of the fixed page canvas. The page draws its dots on a
+   fixed layer behind every surface; once the panel carries `bg-glass` +
+   `backdrop-blur-md`, that layer is blurred into a wash and the texture stops
+   reading on it. This utility paints a second copy of the SAME geometry as the
+   panel's own `background-image` — over its glass `background-color`, behind
+   its content — so the dot texture reads on the dialog the way it reads on the
+   page.
+
+   It reuses `bg-dotted-grid`'s recipes exactly (dots default; grid/diagonal
+   keyed on the mounting root's `data-motif` attribute) and the same
+   `--motif-scale` / `--motif-spacing` geometry, with `--motif-color-surface`
+   as the mark colour so the panel copy is tuned for the glass fill per theme
+   without touching the page motif. Static, non-interactive, background only:
+   never over text, no animation, no layout effect. Any interference with the
+   blurred canvas dots is a mark-colour question, not a new pattern — tune
+   `--motif-color-surface`. */
+@utility bg-dotted-surface {
+  background-repeat: repeat;
+  background-image: radial-gradient(
+    var(--motif-color-surface) var(--motif-scale),
+    transparent var(--motif-scale)
+  );
+  background-size: var(--motif-spacing) var(--motif-spacing);
+
+  [data-motif="grid"] & {
+    background-image:
+      linear-gradient(to right, var(--motif-color-surface) var(--motif-scale), transparent var(--motif-scale)),
+      linear-gradient(to bottom, var(--motif-color-surface) var(--motif-scale), transparent var(--motif-scale));
+    background-size: var(--motif-spacing) var(--motif-spacing);
+  }
+
+  [data-motif="diagonal"] & {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent 0,
+      transparent calc(var(--motif-spacing) - var(--motif-scale)),
+      var(--motif-color-surface) calc(var(--motif-spacing) - var(--motif-scale)),
+      var(--motif-color-surface) var(--motif-spacing)
     );
     background-size: auto;
   }

@@ -104,7 +104,7 @@ export function QuickStats({ index, stats }: QuickStatsProps) {
       data-enter
       style={motionIndex(index)}
       variant="compact"
-      className="grid min-w-0 grid-cols-1 divide-y divide-border bg-glass sm:grid-cols-3 sm:divide-x sm:divide-y-0"
+      className="grid min-w-0 grid-cols-1 divide-y divide-border bg-glass backdrop-blur-md sm:grid-cols-3 sm:divide-x sm:divide-y-0"
     >
       {CELLS.map((cell, position) => {
         const stat = stats?.[cell.id];

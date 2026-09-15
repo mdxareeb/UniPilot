@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { DURATION, popoverVariants, scrimVariants } from "@/components/motion/presets";
+import { DURATION, EASE_OUT, popoverVariants, scrimVariants } from "@/components/motion/presets";
 import { IconButton } from "./IconButton";
 
 type ModalProps = {
@@ -16,6 +16,31 @@ type ModalProps = {
   className?: string;
   showClose?: boolean;
   closeOnBackdropClick?: boolean;
+  /**
+   * Extra header controls, rendered just before the close button. Used by the
+   * document preview's expand/collapse toggle.
+   */
+  headerActions?: ReactNode;
+  /**
+   * The panel fills the viewport — no outer padding, no radius, no border and a
+   * single tight content gutter — instead of the compact centred dialog. The
+   * caller toggles this (the document preview's expand state); everything else
+   * stays the same, including focus trapping and the scrim.
+   */
+  fullscreen?: boolean;
+  /**
+   * Layout-animate the panel when its geometry changes (the expand/collapse
+   * toggle). Uses Motion's shared layout transition; instant under reduced
+   * motion. Off by default so other dialogs keep their exact behaviour.
+   */
+  animateLayout?: boolean;
+  /**
+   * When provided, the dialog's cancel (Escape) runs this instead of closing —
+   * the preview collapses first and closes on a second press. The caller owns
+   * the close decision; the native `close` path still reports through
+   * `onOpenChange`.
+   */
+  onEscape?: () => void;
 };
 
 /**
@@ -54,6 +79,10 @@ export function Modal({
   className,
   showClose = true,
   closeOnBackdropClick = true,
+  headerActions,
+  fullscreen = false,
+  animateLayout = false,
+  onEscape,
 }: ModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -104,27 +133,46 @@ export function Modal({
       aria-describedby={description ? descriptionId : undefined}
       onCancel={(event) => {
         event.preventDefault();
-        onOpenChange(false);
+        if (onEscape) onEscape();
+        else onOpenChange(false);
       }}
       onClose={() => onOpenChange(false)}
-      className="fixed inset-0 z-50 m-0 h-full max-h-none w-full max-w-none items-start justify-center overflow-hidden border-none bg-transparent p-5 sm:px-6 sm:py-8 open:flex"
+      className={`fixed inset-0 z-50 m-0 h-full max-h-none w-full max-w-none items-start justify-center overflow-hidden border-none bg-transparent open:flex ${
+        fullscreen ? "p-0" : "p-5 sm:px-6 sm:py-8"
+      }`}
     >
       <motion.div
         aria-hidden="true"
         initial={false}
         animate={visible ? "visible" : "hidden"}
         variants={scrimVariants(reduced)}
-        className="bg-foreground/40 absolute inset-0"
+        className="bg-scrim absolute inset-0 backdrop-blur-md"
         onClick={closeOnBackdropClick ? () => onOpenChange(false) : undefined}
       />
       <motion.div
         initial={false}
         animate={visible ? "visible" : "hidden"}
         variants={popoverVariants("center", reduced)}
+        layout={animateLayout && !reduced}
+        transition={
+          animateLayout && !reduced
+            ? { layout: { duration: DURATION.panel, ease: EASE_OUT } }
+            : undefined
+        }
         style={{ transformOrigin: "center" }}
-        className={`relative z-10 my-auto flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-card border border-border bg-card text-card-foreground shadow-overlay${className ? ` ${className}` : ""}`}
+        className={`relative z-10 flex flex-col overflow-hidden bg-glass bg-dotted-surface text-card-foreground shadow-overlay backdrop-blur-md ${
+          fullscreen
+            ? "h-full max-h-none w-full max-w-none rounded-none border-0"
+            : "my-auto max-h-full w-full max-w-lg rounded-card border border-border"
+        }${className ? ` ${className}` : ""}`}
       >
-        <div className="flex items-start justify-between gap-4 p-8 pb-0">
+        <div
+          className={`flex justify-between gap-4 ${
+            fullscreen
+              ? "items-center p-4 pb-0 sm:px-5"
+              : "items-start p-8 pb-0"
+          }`}
+        >
           <div className="flex min-w-0 flex-col gap-2">
             <h2 id={titleId} className="text-headline-md">
               {title}
@@ -138,17 +186,27 @@ export function Modal({
               </p>
             )}
           </div>
-          {showClose && (
-            <IconButton
-              aria-label="Close dialog"
-              onClick={() => onOpenChange(false)}
-              className="shrink-0"
-            >
-              <X aria-hidden="true" className="size-4" />
-            </IconButton>
-          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {headerActions}
+            {showClose && (
+              <IconButton
+                aria-label="Close dialog"
+                onClick={() => onOpenChange(false)}
+              >
+                <X aria-hidden="true" className="size-4" />
+              </IconButton>
+            )}
+          </div>
         </div>
-        <div className="overflow-y-auto p-8">{children}</div>
+        <div
+          className={
+            fullscreen
+              ? "flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4"
+              : "overflow-y-auto p-8"
+          }
+        >
+          {children}
+        </div>
       </motion.div>
     </dialog>
   );

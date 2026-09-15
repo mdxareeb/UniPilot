@@ -65,7 +65,7 @@ function ToolCard({
   const card = (
     <Card
       variant="compact"
-      className="flex h-full min-w-0 flex-col gap-2 bg-glass p-4 hover-lift hover:border-foreground"
+      className="flex h-full min-w-0 flex-col gap-2 bg-glass p-4 backdrop-blur-md hover-lift hover:border-foreground"
     >
       <tool.icon
         aria-hidden="true"

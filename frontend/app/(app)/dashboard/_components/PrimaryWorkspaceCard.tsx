@@ -49,7 +49,7 @@ export function PrimaryWorkspaceCard({
       style={motionIndex(index)}
       className="min-w-0 lg:col-span-2"
     >
-      <Card className="flex h-full min-w-0 flex-col gap-3 bg-glass p-5 md:p-6">
+      <Card className="flex h-full min-w-0 flex-col gap-3 bg-glass p-5 backdrop-blur-md md:p-6">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <span className="flex items-center gap-1.5 font-mono text-label-caps uppercase text-muted-foreground">
             <Upload aria-hidden="true" className="size-3.5 shrink-0" />

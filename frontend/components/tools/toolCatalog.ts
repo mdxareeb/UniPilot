@@ -186,9 +186,12 @@ const CATALOGUE = [
       "Give UniPilot a topic and get a structured deck back, in a style you pick.",
     icon: Presentation,
     group: "create",
-    status: "planned",
+    // Live since 2026-09-14: a configured Presenton service produces a real
+    // deck (worker → stored in Documents with preview/download; the wrapper
+    // editor opens it). `href` is the tool's own workspace.
+    status: "live",
     tier: 2,
-    href: "/features#presentation",
+    href: "/tools/presentation",
   },
   {
     id: "document-maker",
@@ -396,6 +399,11 @@ type ToolId = (typeof CATALOGUE)[number]["id"];
  * new route, that route is added here (and, if it is gated, to the proxy) in
  * the same change — which is the point of the invariant: a `live` status
  * cannot be flipped in the registry without a real destination beside it.
+ *
+ * `/tools` covers the tool workspaces under the hub (`/tools/presentation`,
+ * 31.x) — real routes since the presentation generator's page shipped; the
+ * registry entry itself stays `planned` until a configured environment
+ * produces a real deck, so no surface links to it as live yet.
  */
 const LIVE_TOOL_ROUTE_PREFIXES: readonly string[] = [
   "/dashboard",
@@ -403,6 +411,7 @@ const LIVE_TOOL_ROUTE_PREFIXES: readonly string[] = [
   "/calendar",
   "/documents",
   "/assistant",
+  "/tools",
 ];
 
 function isRealToolRoute(href: string): boolean {

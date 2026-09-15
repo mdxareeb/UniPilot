@@ -37,7 +37,7 @@ export async function FinishSetupAffordance({ index = 3 }: { index?: number }) {
     <div data-enter style={motionIndex(index)} className="min-w-0">
       <Card
         variant="compact"
-        className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3 bg-glass p-4"
+        className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3 bg-glass p-4 backdrop-blur-md"
       >
         <div className="flex min-w-[16rem] flex-1 flex-col gap-1">
           <p className="flex items-center gap-1.5 font-mono text-label-caps uppercase text-muted-foreground">

@@ -33,7 +33,7 @@ export function GuestCallout({ index }: { index: number }) {
     <div data-enter style={motionIndex(index)} className="min-w-0">
       <Card
         variant="compact"
-        className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3 bg-glass p-4"
+        className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3 bg-glass p-4 backdrop-blur-md"
       >
         {/* `min-w-[16rem]` on a `flex-1` column: the copy claims the row up to
             the point where the buttons would have to wrap mid-word, then hands

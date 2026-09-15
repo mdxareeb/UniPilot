@@ -294,7 +294,7 @@ const parts: Part[] = [
     label: "Create",
     title: "Make the thing you have to hand in.",
     description:
-      "Organising a term is half the job. The other half is producing the slides, the report, the submission and the sheet — from a topic or a brief rather than a blank file. None of this part is built yet, and each tool below says so.",
+      "Organising a term is half the job. The other half is producing the slides, the report, the submission and the sheet — from a topic or a brief rather than a blank file. The presentation generator is live; every other tool in this part says what it will do.",
     entries: [
       {
         kind: "detail",
@@ -316,19 +316,19 @@ const parts: Part[] = [
             {
               term: "Generate from a topic or prompt",
               detail: "A subject and a rough length is enough to start from.",
-              status: TOOL_STATUS_LABEL.planned,
+              status: TOOL_STATUS_LABEL.live,
             },
             {
               term: "Automatic slide structure",
               detail:
                 "UniPilot decides the sections and what goes on each slide.",
-              status: TOOL_STATUS_LABEL.planned,
+              status: TOOL_STATUS_LABEL.live,
             },
             {
               term: "Choose a style or theme",
               detail:
                 "Pick the look before it generates, rather than restyling afterwards.",
-              status: TOOL_STATUS_LABEL.planned,
+              status: TOOL_STATUS_LABEL.live,
             },
             {
               term: "Recreate a presentation from a template",
@@ -337,14 +337,15 @@ const parts: Part[] = [
               status: TOOL_STATUS_LABEL.planned,
             },
           ],
-          meta: TOOL_STATUS_LABEL.planned,
+          meta: TOOL_STATUS_LABEL.live,
           preview: <PresentationPreview />,
           footnote: (
             <MotionRevealItem className="mt-3 rounded-base border border-dashed border-secondary p-3">
               <p className="text-label-sm text-muted-foreground">
-                The generator isn&rsquo;t built yet, and recreating a deck from
-                an uploaded template is the part furthest from done. Nothing
-                here produces a presentation today.
+                The generator works today: describe a topic, pick a template and
+                a length, and the finished deck lands in Documents — open, edit
+                and download it from there. Recreating a deck from an uploaded
+                department template is the part still to come.
               </p>
             </MotionRevealItem>
           ),

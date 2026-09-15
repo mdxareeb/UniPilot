@@ -86,7 +86,7 @@ export function QuickActions({ index, guest = false }: QuickActionsProps) {
     <div data-enter style={motionIndex(index)} className="min-w-0">
       <Card
         variant="compact"
-        className="flex min-w-0 flex-col gap-3 bg-glass p-4 hover-lift hover:border-foreground"
+        className="flex min-w-0 flex-col gap-3 bg-glass p-4 backdrop-blur-md hover-lift hover:border-foreground"
       >
         <div className="flex min-w-0 flex-col gap-2">
           <span className="flex items-center gap-1.5 font-mono text-label-caps uppercase text-muted-foreground">

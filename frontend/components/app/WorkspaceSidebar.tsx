@@ -46,7 +46,7 @@ export function WorkspaceSidebar() {
          `border-r` and no corner radius; a frame radius belongs to a
          freestanding panel, and reshaping the rail's edges is per-surface
          adoption work, not token adoption. */
-      className="sticky top-0 z-10 hidden h-dvh w-[280px] shrink-0 border-r border-border bg-glass shadow-floating lg:block"
+      className="sticky top-0 z-10 hidden h-dvh w-[280px] shrink-0 border-r border-border bg-glass shadow-floating backdrop-blur-md lg:block"
     >
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex items-center justify-between gap-2 p-4">

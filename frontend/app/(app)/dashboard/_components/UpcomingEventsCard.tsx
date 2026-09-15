@@ -94,7 +94,7 @@ export function UpcomingEventsCard({
     <div data-enter="right" style={motionIndex(index)} className="min-w-0">
       <Card
         variant="compact"
-        className="flex h-full min-w-0 flex-col gap-2 bg-glass p-4 hover-lift hover:border-foreground"
+        className="flex h-full min-w-0 flex-col gap-2 bg-glass p-4 backdrop-blur-md hover-lift hover:border-foreground"
       >
         <span className="flex items-center gap-1.5 font-mono text-label-caps uppercase text-muted-foreground">
           <CalendarDays aria-hidden="true" className="size-3.5 shrink-0" />

@@ -66,11 +66,11 @@ export function QuickAccessRow({ guest = false }: { guest?: boolean }) {
         >
           <Card
             variant="compact"
-            className="flex h-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-glass p-3 hover-lift hover:border-foreground"
+            className="flex h-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-glass p-3 backdrop-blur-md hover-lift hover:border-foreground"
           >
             <span
               aria-hidden="true"
-              className="flex size-9 shrink-0 items-center justify-center rounded-base border border-border bg-card text-foreground"
+              className="flex size-9 shrink-0 items-center justify-center rounded-base border border-border bg-glass-subtle text-foreground"
             >
               <item.icon className="size-4" />
             </span>

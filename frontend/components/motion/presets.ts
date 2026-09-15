@@ -428,3 +428,31 @@ export const listItemIn: Transition = {
   duration: DURATION.panel,
   ease: EASE_OUT,
 };
+
+/* --- Status dissolve ----------------------------------------------------------
+   Task 18.13's parsing → indexed change: the status word dissolves out and
+   resolves back in at the same spot. A monochrome system has no dither
+   palette to animate, so the honest analogue of a pixel dissolve is blur +
+   opacity at a hair of scale — the word is always content (present in the
+   DOM regardless of animation), and only its arrival is animated. Reduced
+   motion zeroes both legs. */
+
+export function dissolveVariants(reduced = false): Variants {
+  const blurred = reduced ? "blur(0px)" : "blur(5px)";
+  const scratched = reduced ? 1 : 0.98;
+  return {
+    initial: { opacity: 0, filter: blurred, scale: scratched },
+    animate: {
+      opacity: 1,
+      filter: "blur(0px)",
+      scale: 1,
+      transition: { duration: reduced ? 0 : DURATION.panel, ease: EASE_OUT },
+    },
+    exit: {
+      opacity: 0,
+      filter: blurred,
+      scale: scratched,
+      transition: { duration: reduced ? 0 : DURATION.panelExit, ease: EASE_OUT },
+    },
+  };
+}

@@ -53,8 +53,8 @@ export function ThemeToggle() {
 
   return (
     <IconButton
-      variant="outline"
-      size="sm"
+      variant="glass"
+      size="xs"
       aria-label={
         theme === "dark" ? "Switch to light theme" : "Switch to dark theme"
       }
@@ -62,9 +62,9 @@ export function ThemeToggle() {
       onClick={toggle}
     >
       {theme === "dark" ? (
-        <Moon aria-hidden="true" className="size-4" />
+        <Moon aria-hidden="true" className="size-3.5" />
       ) : (
-        <Sun aria-hidden="true" className="size-4" />
+        <Sun aria-hidden="true" className="size-3.5" />
       )}
     </IconButton>
   );

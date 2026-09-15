@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { usePathname } from "next/navigation";
 import { Bell } from "lucide-react";
 import { MotionPopover } from "@/components/motion/MotionPopover";
 import { IconButton } from "@/components/ui/IconButton";
+
+/** The desktop panel width (22rem); phones span the viewport minus margins. */
+const NOTIFICATIONS_PANEL_WIDTH = 352;
 
 /**
  * Notification entry point — the bell that will own the later notification
@@ -29,6 +39,14 @@ import { IconButton } from "@/components/ui/IconButton";
  * - `direction="down"` because the panel drops from a top-bar trigger, so it
  *   grows from the default `top right` origin (ProfileMenu is `bottom`,
  *   Assistant is `bottom right`)
+ *
+ * The panel is portalled to `body` and positioned from the trigger rect
+ * (`fixed`, top/left/width, recomputed on resize and on any scroll). It cannot
+ * stay absolutely positioned inside the rail: the rail is itself a
+ * `backdrop-blur-md` element, and a backdrop filter nested inside another one
+ * samples the parent's painted output instead of the page, so the panel's blur
+ * would be defeated. Portalling puts it in the page's own backdrop root, where
+ * the page genuinely blurs behind it.
  */
 export function NotificationCenter() {
   const pathname = usePathname();
@@ -37,6 +55,31 @@ export function NotificationCenter() {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const open = openedFor === pathname;
+
+  /* Placement for the portalled panel, computed from the trigger rect before
+     the open state flips so it renders in place on the first frame. */
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({
+    visibility: "hidden",
+  });
+
+  const positionPanel = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const margin = 16;
+    const width = Math.min(
+      NOTIFICATIONS_PANEL_WIDTH,
+      window.innerWidth - margin * 2,
+    );
+    const left = Math.max(
+      margin,
+      Math.min(rect.left, window.innerWidth - width - margin),
+    );
+    setPanelStyle({
+      top: Math.round(rect.bottom + 8),
+      left: Math.round(left),
+      width: Math.round(width),
+    });
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -48,7 +91,10 @@ export function NotificationCenter() {
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current?.contains(event.target as Node)) return;
+      const target = event.target as Element | null;
+      if (target && rootRef.current?.contains(target)) return;
+      /* The panel is portalled into `body`, so containment is by its own id. */
+      if (target?.closest?.("[data-popover]")?.id === panelId) return;
       setOpenedFor(null);
     };
 
@@ -58,49 +104,58 @@ export function NotificationCenter() {
       window.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open]);
+  }, [open, panelId]);
+
+  /* Keep the portalled panel anchored while the page moves under it. */
+  useEffect(() => {
+    if (!open) return;
+    positionPanel();
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
+    return () => {
+      window.removeEventListener("resize", positionPanel);
+      window.removeEventListener("scroll", positionPanel, true);
+    };
+  }, [open, positionPanel]);
 
   return (
-    <div ref={rootRef} className="lg:relative">
+    <div ref={rootRef}>
       <IconButton
         ref={triggerRef}
-        variant="outline"
-        size="sm"
+        variant="glass"
+        size="xs"
         aria-label="Notifications"
         aria-expanded={open}
         aria-controls={panelId}
         className="rounded-pill"
-        onClick={() => setOpenedFor(open ? null : pathname)}
+        onClick={() => {
+          if (open) {
+            setOpenedFor(null);
+          } else {
+            positionPanel();
+            setOpenedFor(pathname);
+          }
+        }}
       >
-        <Bell aria-hidden="true" className="size-4" />
+        <Bell aria-hidden="true" className="size-3.5" />
       </IconButton>
 
       {/* `MotionPopover` unmounts the panel once its exit finishes, which is
           what keeps it out of the tab order and the accessibility tree while
           closed. `max-h` mirrors ProfileMenu's insurance: on a short viewport
           the panel scrolls inside itself instead of running off the screen.
-
-          Mobile is `absolute inset-x-4` relative to the sticky header root
-          (`WorkspaceMobileNav`'s `sticky z-30` container), so the panel sits
-          below the bar and spans the viewport minus 2rem — the same inset the
-          mobile drawer uses. That keeps it inside the isolated `bg-dotted-grid`
-          stacking context and lets the fixed dotted canvas show through the
-          translucent `bg-glass` + `backdrop-blur-md` surface. `bg-glass` (60%
-          Muted) is one step more transparent than `bg-glass-strong` (80% + blur)
-          used for `ProfileMenu`/`Assistant` — inspection showed `bg-glass-strong`
-          hid the 1.1px dots, while `bg-glass` with blur keeps them faintly
-          readable and heavily softens the dashboard text behind the panel,
-          giving a premium frosted hierarchy without a second dot layer. The
-          single global `bg-dotted-grid::before` remains the only dot source.
-          Desktop is `lg:absolute lg:left-0` relative to this wrapper, so the
-          22rem panel drops from the bell inside the sidebar rail. */}
+          The panel is portalled (`fixed` from the trigger rect) so its
+          `backdrop-blur-md` samples the page rather than the rail's own blurred
+          output; it stays anchored through resize and scroll. */}
       <MotionPopover
         open={open}
         id={panelId}
         role="region"
         aria-label="Notifications"
         direction="down"
-        className="absolute inset-x-4 top-full z-10 mt-2 flex max-h-[min(20rem,calc(100dvh-10rem))] flex-col overflow-y-auto overscroll-contain rounded-card border border-border bg-glass p-4 shadow-overlay backdrop-blur-md lg:inset-x-auto lg:left-0 lg:right-auto lg:w-[22rem] lg:max-w-[22rem]"
+        portal
+        style={panelStyle}
+        className="fixed z-40 flex max-h-[min(20rem,calc(100dvh-10rem))] flex-col overflow-y-auto overscroll-contain rounded-card border border-border bg-glass p-4 shadow-overlay backdrop-blur-md"
       >
         <div className="flex flex-col gap-1">
           <h2 className="text-body-md font-semibold text-foreground">
