@@ -5,21 +5,25 @@ import { ExternalLink } from "lucide-react";
 import { MotionNotice } from "@/components/motion/MotionNotice";
 
 /**
- * The Presenton editor frame (Task 31.x, GATE 2).
+ * The presentation editor frame (Task 31.x, GATE 2; the themed fork surfaced
+ * per the 2026-09-15 fork-theme spec).
  *
- * Presenton's drag-edit UI is a separate Next.js app on its own origin; it is
- * embedded here as-is. The wrapper around it — header, actions, frame, loading
- * and empty states — is UniPilot's and built from the shared system. The
- * editor's interior deliberately keeps Presenton's own look: cross-origin CSS
- * injection is impossible, and restyling it to UniPilot's design is a later,
- * separate fork task (recorded in TASK.md 31.x), not something this wrapper
- * attempts.
+ * The frame loads the UniPilot-themed presentation editor — the forked
+ * Presenton UI on its own origin (`PRESENTON_UI_URL` when it is reachable), or
+ * the engine's own editor as the honest fallback (`resolveEditorUrl` in the
+ * adapter). UniPilot's chrome around it — header, label, frame, loading state —
+ * is built from the shared design system and the themed fork matches it.
  *
- * Auth bridge: Presenton authenticates against its own service. The frame
- * loads whatever the browser's Presenton session allows; when that session is
- * missing or expired the iframe shows Presenton's own sign-in screen, which
- * the labelled line above the frame explains. Opening the editor in its own
- * tab is offered for any flow the embedded frame cannot complete.
+ * One scope note: the slide stage *inside* the editor renders the deck's own
+ * fonts and colors. That is deck content, not UniPilot chrome, and it is
+ * deliberately left alone (see presenton-ui/DIVERGENCE.md, "Frozen content
+ * scope").
+ *
+ * Auth bridge: the editor authenticates against the presentation service. The
+ * frame loads whatever the browser's session allows; when that session is
+ * missing or expired the editor shows its own sign-in screen, which the
+ * labelled line above the frame explains. Opening the editor in its own tab is
+ * offered for any flow the embedded frame cannot complete.
  */
 export function EditDeckFrame({
   src,
@@ -34,10 +38,10 @@ export function EditDeckFrame({
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="max-w-[72ch] text-label-sm text-muted-foreground">
-          The editor is Presenton&rsquo;s own interface, served by your
-          presentation service, so its look differs from UniPilot&rsquo;s. If it
-          asks you to sign in first, sign in to the presentation service once in
-          this browser.
+          The editor is UniPilot&rsquo;s themed presentation editor, surfaced
+          here from your presentation service. Slides keep the deck&rsquo;s own
+          fonts and colors. If it asks you to sign in first, sign in to the
+          presentation service once in this browser.
         </p>
         <a
           href={src}

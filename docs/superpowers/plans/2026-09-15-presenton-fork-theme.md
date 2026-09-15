@@ -1141,3 +1141,37 @@ the new spec/plan docs. No app behaviour touched, nothing committed.
   editors, template/custom previews, SlideContent/V1ContentRender/PresentationMode
   stage, pdf-maker/runtime, slide-theme deck cards); `syne`/`manrope` bridge
   retained for those files only.
+
+### P4 — completed and page-verified (2026-09-15)
+
+- Resolver proven at the code level (4/4): fork reachable → fork URL;
+  fork unreachable → engine URL; unset → engine URL; engine unconfigured → null.
+- **Page-level verification (authenticated QA fixture, real Chromium)** — the
+  previously open leg:
+  - **Branch A (fork live on :5002):** `/tools/presentation/f0fc0ab9-…/edit`
+    rendered `iframe src=http://localhost:5002/presentation?id=125ce20e-…`
+    (frameCount 1, no unavailable state, 0 console errors) — screenshot
+    `frontend/screenshots/p4-editlink-fork.png`.
+  - **Branch B (fork stopped):** the same page rendered
+    `iframe src=http://127.0.0.1:5001/presentation?id=125ce20e-…` — the engine
+    editor via `PRESENTON_PUBLIC_URL` (frameCount 1, no unavailable state,
+    0 console errors) — screenshot `p4-editlink-engine.png`.
+  - The QA deck row used for the check was seeded via the service role and
+    deleted id-scoped afterwards (QA1 `presentations` back to 0 rows).
+- Fork spot-check (Chromium): generate + editor chrome are themed (Geist body,
+  Bricolage chrome on dark, 0 console errors) and the **slide stage keeps the
+  deck's own theme** — `#presentation-slides-wrapper` carries deck vars
+  (`--heading-font-family: "Poppins"`, `--primary-color: #3b82f6`), so the
+  content-scope freeze holds.
+- Follow-up observed (not changed): the edit page's description copy still says
+  the editor's "look differs from UniPilot" — stale now that the fork is themed.
+
+### P5 — completed (2026-09-15)
+
+- Optional orchestrator service (`ensurePresentonUi`, warn-only, never fails
+  `npm run dev`) verified live; README documents the service and the manual
+  command.
+- Upstream update drill: sparse clone of `presenton/presenton` at `bd4bd503`
+  vs the fork baseline → `added=20 removed=1 changed=21`, all vendor font
+  files, **zero code drift**, no intersection with the fork's changed files
+  (recorded in `presenton-ui/DIVERGENCE.md`).

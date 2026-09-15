@@ -2282,20 +2282,24 @@ These can be post-launch and should be marked Planned until genuinely implemente
 - [x] 31.8 Slide editing
   - GATE 2 decision: **embed Presenton's own editor in a UniPilot-styled
     wrapper** (`/tools/presentation/[id]/edit`): page chrome, labels, loading
-    and unavailable states are UniPilot's (shared system + MotionNotice);
-    the editor interior keeps Presenton's look — a separate Next.js app on
-    its own origin, so no cross-origin CSS injection is attempted. Auth
-    bridge: the frame loads the browser's Presenton session; the labelled
+    and unavailable states are UniPilot's (shared system + MotionNotice).
+    Auth bridge: the frame loads the browser's Presenton session; the labelled
     line explains Presenton's sign-in and offers open-in-new-tab. Verified:
     the wrapper loaded the real deck's editor (frame URL
     `/presentation?id=…`, HTTP 200, 5 slide thumbnails rendered); the result
-    card links to the wrapper route, and guests/unknown ids 404. Restyling
-    the editor interior is a later, separate fork task (recorded, not
-    attempted).
+    card links to the wrapper route, and guests/unknown ids 404.
+  - Follow-up closed (2026-09-15): the editor interior is now **UniPilot-
+    themed** — the git-ignored fork at `presenton-ui/` (its own repo; see
+    `docs/superpowers/specs/2026-09-15-presenton-fork-theme-design.md`) is
+    surfaced through `resolveEditorUrl` (`PRESENTON_UI_URL` when reachable,
+    the engine's own editor as the honest fallback; both branches verified on
+    the rendered page). The slide stage keeps the deck's own fonts/colors —
+    deck content, not chrome (frozen scope in `presenton-ui/DIVERGENCE.md`).
 - [~] 31.9 Reordering
-  - Reordering is available inside the embedded Presenton editor (its own
-    sortable slides); no UniPilot-native reordering surface is built. The
-    wrapper covers the flow per GATE 2.
+  - Reordering is available inside the surfaced editor (the themed fork, or
+    the engine editor as fallback — its own sortable slides); no UniPilot-
+    native reordering surface is built. The wrapper covers the flow per
+    GATE 2.
 - [x] 31.10 Export
   - PPTX/PDF chosen per request (`export_as`), fetched from Presenton's
     static export route and stored as a `documents` row; PDFs preview inline

@@ -232,6 +232,12 @@ middleware proxy; the engine is unchanged.
 `/api/v1/auth/status`), otherwise the engine's own editor
 (`PRESENTON_PUBLIC_URL ?? PRESENTON_URL`). Unset or down never yields a dead
 link. `PRESENTON_UI_URL` is server-only, like the other Presenton variables.
+Both branches are verified on the rendered page (fork URL when it answers,
+engine editor when it does not).
+
+Scope note: the slide stage *inside* the editor renders the deck's own fonts
+and colors — deck content, not UniPilot chrome; the re-theme covers the
+editor's chrome only (frozen scope in `presenton-ui/DIVERGENCE.md`).
 
 ## 4. Switching the LLM provider (config-only, never a UniPilot code change)
 
