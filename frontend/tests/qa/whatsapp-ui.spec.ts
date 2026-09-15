@@ -542,7 +542,17 @@ test.describe("integrations page states", () => {
     await expect(gmail.getByText("Coming soon")).toBeVisible();
     await expect(gmail.getByText("Not connected")).toBeVisible();
 
-    await expect(main.getByRole("button", { name: /connect/i })).toHaveCount(0);
+    /* Gmail is a coming-soon card with no control in every environment; the
+       page-wide sweep only holds on the canonical unconfigured-Google render.
+       With the OAuth pair present the GoogleCalendarPanel honestly renders its
+       one live control ("Connect Google Calendar"), so the sweep is scoped to
+       the shape where a /connect/i control could only ever be a dead one. The
+       dedicated Google test below asserts the unconfigured state and skips
+       when the pair is set. */
+    await expect(gmail.getByRole("button", { name: /connect/i })).toHaveCount(0);
+    if (!GOOGLE_CONFIGURED) {
+      await expect(main.getByRole("button", { name: /connect/i })).toHaveCount(0);
+    }
   });
 
   test("the card blurb names the review choice instead of promising review", async ({
