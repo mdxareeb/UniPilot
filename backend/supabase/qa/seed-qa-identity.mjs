@@ -31,7 +31,7 @@
  *
  * Or from the repo root: `npm run seed:qa`.
  *
- * Reset (destroys and recreates both identities):
+ * Reset (re-writes both identities' passwords and confirmation in place):
  *
  *   node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs --reset
  *
@@ -49,9 +49,10 @@
  */
 
 /**
- * The two QA identities. `emailHistory` lists every address this project has
- * ever used for the identity, so `--reset` purges stale variants too and the
- * local stack is left with exactly the current pair.
+ * The two QA identities. `emailHistory` records every address this project has
+ * ever used for the identity. It is documentation only: the identities carry
+ * no application data, so `--reset` updates them in place and never deletes.
+ * A stale historical variant must be removed by hand if one is ever found.
  */
 const IDENTITIES = [
   {
@@ -70,7 +71,12 @@ const IDENTITIES = [
   },
 ];
 
-const isReset = process.argv.includes("--reset");
+// `--reset` can arrive as an argv flag (direct `node ... --reset`) or as npm
+// config env (`npm run seed:qa -- --reset` from the repo root: the root script
+// forwards through `npm run seed:qa -w backend`, where npm turns the unknown
+// flag into npm_config_reset instead of passing argv through).
+const isReset =
+  process.argv.includes("--reset") || process.env.npm_config_reset === "true";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -196,11 +202,27 @@ async function createUser(identity) {
   return response.json();
 }
 
-async function deleteUser(user) {
-  const response = await adminApi(`/users/${user.id}`, { method: "DELETE" });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Admin delete failed: HTTP ${response.status}`);
+/**
+ * Reset path: update the existing identity in place through the supported
+ * Admin API. The identities carry no application data, so deleting them adds
+ * risk without value. The password is re-written from the environment and is
+ * never logged.
+ */
+async function syncIdentity(user, identity) {
+  const response = await adminApi(`/users/${user.id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      password: identity.password,
+      email_confirm: true,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Admin update failed for ${identity.email}: HTTP ${response.status} ${text}`,
+    );
   }
+  return response.json();
 }
 
 async function ensureConfirmed(user) {
@@ -220,34 +242,33 @@ function describe(user) {
   return `id=${user.id} confirmed=${confirmed}`;
 }
 
-let users = await listUsers();
+/**
+ * Identity sync: idempotent create-or-update. `--reset` re-writes each
+ * identity's password and confirmation in place instead of deleting and
+ * recreating: the identities carry no application data, so deletion adds
+ * risk without value.
+ */
+async function seedIdentities() {
+  const users = await listUsers();
 
-if (isReset) {
   for (const identity of IDENTITIES) {
-    const historical = users.filter((user) =>
-      identity.emailHistory.includes(user.email.toLowerCase()),
+    const existing = users.find(
+      (user) => user.email.toLowerCase() === identity.email.toLowerCase(),
     );
-    for (const user of historical) {
-      await deleteUser(user);
-      console.log(`reset: deleted ${identity.email} (${describe(user)})`);
+
+    if (existing) {
+      const synced = isReset
+        ? await syncIdentity(existing, identity)
+        : await ensureConfirmed(existing);
+      console.log(
+        isReset
+          ? `${identity.email}: reset in place — password and confirmation synced (${describe(synced)})`
+          : `${identity.email}: already present — no duplicate created (${describe(synced)})`,
+      );
+    } else {
+      const created = await createUser(identity);
+      console.log(`${identity.email}: created (${describe(created)})`);
     }
-  }
-  users = await listUsers();
-}
-
-for (const identity of IDENTITIES) {
-  const existing = users.find(
-    (user) => user.email.toLowerCase() === identity.email.toLowerCase(),
-  );
-
-  if (existing) {
-    const ensured = await ensureConfirmed(existing);
-    console.log(
-      `${identity.email}: already present â€” no duplicate created (${describe(ensured)})`,
-    );
-  } else {
-    const created = await createUser(identity);
-    console.log(`${identity.email}: created (${describe(created)})`);
   }
 }
 
@@ -336,14 +357,45 @@ async function ensureQa1Onboarded(userId, accessToken) {
   console.log("QA1 onboarding: completed (standard fixture written)");
 }
 
-const qa1Session = await signInWithPassword(QA1);
-await ensureQa1Onboarded(qa1Session.user.id, qa1Session.access_token);
+/**
+ * Top-level flow. The process exits explicitly and cleanly once every await
+ * has settled: on Windows/Node >= 23, process.exit() called immediately after
+ * fetch requests can race the runtime's own teardown and abort with
+ * `Assertion failed: ... UV_HANDLE_CLOSING` (nodejs/node#56645, #58091; the
+ * upstream fix #61999 has not shipped in Node 24.x). A short settle before
+ * the explicit exit lets that teardown finish; the exit stays explicit, last,
+ * and non-zero on failure.
+ */
+const EXIT_SETTLE_MS = 250;
 
-console.log("");
-console.log("QA identities ready:");
-console.log(
-  `  ${IDENTITIES[0].email}  "${IDENTITIES[0].displayName}" â€” onboarded (standard fixture)`,
-);
-console.log(
-  `  ${IDENTITIES[1].email}  "${IDENTITIES[1].displayName}" â€” no application data`,
-);
+async function exitWith(code) {
+  await new Promise((resolve) => setTimeout(resolve, EXIT_SETTLE_MS));
+  process.exit(code);
+}
+
+async function main() {
+  await seedIdentities();
+
+  const qa1Session = await signInWithPassword(QA1);
+  await ensureQa1Onboarded(qa1Session.user.id, qa1Session.access_token);
+
+  console.log("");
+  console.log("QA identities ready:");
+  console.log(
+    `  ${IDENTITIES[0].email}  "${IDENTITIES[0].displayName}" — onboarded (standard fixture)`,
+  );
+  console.log(
+    `  ${IDENTITIES[1].email}  "${IDENTITIES[1].displayName}" — no application data`,
+  );
+
+  return 0;
+}
+
+main()
+  .then((code) => exitWith(code))
+  .catch((error) => {
+    console.error(
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    );
+    return exitWith(1);
+  });
