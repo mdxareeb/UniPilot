@@ -1,0 +1,4868 @@
+/**
+ * tests/qa/presentations-ui.spec.ts — Task B2's owner-gated asset proxy proof,
+ * Task B4's viewer proof, and Task C4's native editor proof.
+ *
+ * The proxy is the only path by which Presenton bytes (slide images, template
+ * static assets, engine fonts) reach a browser: `GET
+ * /api/presentation/{id}/asset?src=<path>` (spec §6.9). This spec proves the
+ * HTTP contract end to end against the real route, the real local stack and
+ * the live engine:
+ *
+ * - no session → 401 (a fresh request context without the stored session);
+ * - a deck-referenced path → 200 with the private cache header and the
+ *   extension's content type;
+ * - a user-data path the deck does not reference → 404 (membership, not just
+ *   the prefix allowlist);
+ * - another template's `/app_data/templates/<id>/…` path → 404 (deck template
+ *   mismatch);
+ * - another user's presentation requested with QA1's session → 404 (the
+ *   owner-RLS read is the gate; no existence oracle);
+ * - traversal/encoding variants and a missing `src` → 400 before any engine
+ *   call (these cases never skip);
+ * - fixtures return the `presentations` table to its pre-run count.
+ *
+ * Live cases discover a real v2-standard deck from the engine
+ * (`GET /api/v1/ppt/presentation/all`, then the full deck) and skip with a
+ * recorded reason when the engine or a suitable deck is unavailable — the
+ * unsafe-src, missing-src, cross-owner and unauthenticated cases never skip.
+ *
+ * The Task C4 editor cases (below the viewer ones) drive the real edit route
+ * in Chromium: text edits reach `Saved`, reloads read the engine's stored
+ * slide back, the rename/notes/theme writes persist, the structural controls
+ * render according to the adapter's `isStructuralEditingEnabled()` (disabled
+ * with the honest reason while the flag is off; enabled while it is on —
+ * Task D0), and an Export click enqueues the worker job whose mirror settles
+ * through the real worker and the live engine. Edits are made on a real
+ * engine deck and restored through the engine's own `slide_update`/`update`
+ * routes in a `finally` — the deck is never left modified.
+ *
+ * Task C5 adds the export → document replacement proof (spec §7.7, §10-C): the
+ * same edit-route Export click is driven through the real worker and the live
+ * engine, and the seeded `documents` row is asserted replaced in place — same
+ * row id and bucket key, new `size_bytes`, moved `updated_at`, the re-exported
+ * PPTX bytes under it. The structural gate now ships on (`PRESENTON_STRUCTURAL_EDITS=1`,
+ * engine auth plus an owner-scoped API key), so Task D0 asserts the editor
+ * renders its structural controls enabled but performs no live structural
+ * edit — that proof belongs to Task D1. No fake reorder test is written; the
+ * pure gate test at the bottom still pins the off branch by clearing the flag
+ * in-process (the adapter refuses the structural write before any fetch).
+ *
+ * Both export tests own their job rows: the worker lock is held from before
+ * the Export click through the settle (a foreign worker run in that window
+ * would claim the due job — `claim_jobs` is global, and the full suite runs
+ * other worker-driving projects concurrently), the job id is captured only
+ * from rows created inside that click's enqueue window, and every
+ * `presentation.export` row is deleted before the lock is released — the
+ * WhatsApp projects assert absolute zero QA1 job residue in their own
+ * afterAll, so an export row must not outlive its test.
+ *
+ * `PRESENTON_URL` (and its optional key) are loaded into this process by
+ * `playwright.config.ts` (`process.loadEnvFile`), so no secret is ever read,
+ * printed or asserted here beyond a bearer header on the direct engine probes.
+ * Every direct engine request goes through `engineApi()`, which attaches
+ * `Authorization: Bearer ${process.env.PRESENTON_API_KEY}` whenever that key
+ * is non-empty; without a key the engine answers 401 and discovery records
+ * the honest skip — never a silent pass.
+ */
+import { test, expect, request as playwrightRequest } from "@playwright/test";
+import type { Page as TestPage } from "@playwright/test";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import path from "node:path";
+import { collectAssetPaths } from "../../lib/presentation/elements";
+import { getElementAtPath } from "../../lib/presentation/editorOps";
+import { classifyAssetPath } from "../../lib/presentation/assets";
+import { IMAGE_UPLOAD_MAX_BYTES } from "../../lib/presentation/imageLimits";
+import { isSmartDeck } from "../../lib/presentation/smart";
+import type {
+  DeckSlide,
+  DeckTheme,
+  DeckThemePackage,
+  PresentationDeck,
+  SlideComponent,
+} from "../../lib/presentation/types";
+import { acquireWorkerLock } from "./workerLock";
+
+const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+const engineUrl = (process.env.PRESENTON_URL ?? "").trim();
+
+const QA1 = "qa.unipilot@unipilot.test";
+const QA2 = "qa2.unipilot@unipilot.test";
+
+/** The worker driver lives at the repo root's backend workspace. */
+const REPO_ROOT = path.resolve(process.cwd(), "..");
+
+/** The export seed's deliberately stale document bytes (PK header). */
+const SEEDED_DECK_BYTES = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]);
+
+/** A real 1×1 PNG (the engine validates bytes with PIL; this one passes). */
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+const TEMPLATE_PREFIX = "/app_data/templates/";
+
+/** The content types the proxy must answer for a path's extension (spec §6.9). */
+const KNOWN_CONTENT_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  ttf: "font/ttf",
+  otf: "font/otf",
+  woff: "font/woff",
+  woff2: "font/woff2",
+};
+
+/** A live deck + referenced path the proxy must serve, discovered in beforeAll. */
+type LiveAsset = {
+  deckId: string;
+  src: string;
+  templateId: string;
+  contentType: string;
+};
+
+let service: SupabaseClient;
+let qa1Id = "";
+let qa2Id = "";
+
+let presentationsCountBefore = 0;
+const createdPresentationIds: string[] = [];
+const everCreatedPresentationIds: string[] = [];
+
+/**
+ * `presentation.export` job rows the export tests enqueue through the UI.
+ * Tracked per test for deletion (asserted) and in `everCreatedExportJobIds`
+ * for the afterAll residue read — the full suite's WhatsApp projects assert
+ * absolute zero QA1 job residue, so none of these rows may survive.
+ */
+const createdExportJobIds: string[] = [];
+const everCreatedExportJobIds: string[] = [];
+
+/** Enqueue-window slack: Node and Postgres clocks may differ by a little. */
+const ENQUEUE_WINDOW_SLACK_MS = 5_000;
+
+let liveAsset: LiveAsset | null = null;
+let liveTemplateAsset: LiveAsset | null = null;
+let liveSkipReason: string | null = null;
+let liveTemplateSkipReason: string | null = null;
+
+/** The engine deck the B4 viewer cases render, with the facts the rail asserts. */
+type LiveViewerDeck = {
+  deckId: string;
+  templateId: string;
+  slideCount: number;
+};
+
+let liveViewerDeck: LiveViewerDeck | null = null;
+let liveViewerSkipReason: string | null = null;
+let liveSmartDeckId: string | null = null;
+let liveSmartSkipReason: string | null = null;
+
+function assetUrl(presentationId: string, src: string): string {
+  return `/api/presentation/${presentationId}/asset?src=${encodeURIComponent(src)}`;
+}
+
+/**
+ * The route answers every refusal with a sanitized JSON body, never Next's
+ * HTML 404 — asserting the shape also proves the request reached the route.
+ */
+async function expectJsonError(
+  res: { status(): number; headers(): Record<string, string>; json(): Promise<unknown> },
+  status: number,
+): Promise<void> {
+  expect(res.status()).toBe(status);
+  expect(res.headers()["content-type"]).toContain("application/json");
+  const body = (await res.json()) as { error?: unknown };
+  expect(typeof body.error).toBe("string");
+}
+
+/** The expectation the proxy's extension mapping must meet, stated locally. */
+function expectedContentType(path: string): string {
+  const dot = path.lastIndexOf(".");
+  const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : "";
+  return KNOWN_CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The route only serves `/app_data/templates/<deck template>/…` for deck
+ * template paths; discovery must not pick a path the proxy would (correctly)
+ * answer 404.
+ */
+function templateIdOf(path: string): string | null {
+  if (!path.startsWith(TEMPLATE_PREFIX)) return null;
+  return path.slice(TEMPLATE_PREFIX.length).split("/", 1)[0] ?? "";
+}
+
+/**
+ * Discover real deck paths the proxy can serve: a v2-standard, non-Smart deck
+ * whose full read references at least one path the engine actually answers
+ * with non-empty bytes. `primary` is the first fetchable referenced path;
+ * `template` is the first fetchable `/app_data/templates/<deck template>/…`
+ * path (the rule-3 positive branch). Paths with a known extension are probed
+ * first so the 200 cases also prove the content-type mapping for a real type.
+ */
+async function discoverDeckAssets(): Promise<
+  { primary: LiveAsset; template: LiveAsset | null } | { reason: string }
+> {
+  if (engineUrl === "") {
+    return { reason: "PRESENTON_URL is not set in the spec environment." };
+  }
+
+  const api = await engineApi();
+
+  try {
+    const list = await api.get("/api/v1/ppt/presentation/all?page=1&page_size=50", {
+      timeout: 15_000,
+    });
+    if (!list.ok()) {
+      return { reason: `the engine deck list answered ${list.status()}.` };
+    }
+
+    const body: unknown = await list.json();
+    const items: unknown[] = Array.isArray(body)
+      ? body
+      : isRecord(body) && Array.isArray(body.items)
+        ? body.items
+        : [];
+
+    let primaryAsset: LiveAsset | null = null;
+    let templateAsset: LiveAsset | null = null;
+
+    for (const item of items) {
+      if (!isRecord(item) || item.version !== "v2-standard") continue;
+      if (item.generation_mode === "smart") continue;
+      const deckId = typeof item.id === "string" ? item.id : "";
+      if (deckId === "") continue;
+
+      const full = await api.get(`/api/v1/ppt/presentation/${deckId}`, {
+        timeout: 30_000,
+      });
+      if (!full.ok()) continue;
+
+      const deck = (await full.json()) as PresentationDeck;
+      const templateId = deck.slides[0]?.layout_group ?? "";
+      const candidates = collectAssetPaths(deck).filter((src) => {
+        const pathTemplate = templateIdOf(src);
+        return pathTemplate === null || pathTemplate === templateId;
+      });
+      candidates.sort((a, b) => {
+        const extensionOf = (path: string) => path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+        const knownA = KNOWN_CONTENT_TYPES[extensionOf(a)] !== undefined ? 1 : 0;
+        const knownB = KNOWN_CONTENT_TYPES[extensionOf(b)] !== undefined ? 1 : 0;
+        return knownB - knownA;
+      });
+
+      for (const src of candidates) {
+        const probe = await api.get(src, { timeout: 30_000 });
+        if (!probe.ok()) continue;
+        const bytes = await probe.body();
+        if (bytes.byteLength === 0) continue;
+
+        const asset: LiveAsset = {
+          deckId,
+          src,
+          templateId,
+          contentType: expectedContentType(src),
+        };
+        if (src.startsWith(TEMPLATE_PREFIX)) {
+          if (templateAsset === null) templateAsset = asset;
+        } else if (primaryAsset === null) {
+          primaryAsset = asset;
+        }
+        if (primaryAsset !== null && templateAsset !== null) {
+          return { primary: primaryAsset, template: templateAsset };
+        }
+      }
+    }
+
+    const primary = primaryAsset ?? templateAsset;
+    if (primary === null) {
+      return { reason: "no v2-standard deck with an engine-fetchable asset was found." };
+    }
+    return { primary, template: templateAsset };
+  } catch (error) {
+    return {
+      reason: `engine discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** Public font services a deck may reference; their loads are not spec failures. */
+const REACHABLE_EXTERNAL_HOSTS = new Set([
+  "fonts.googleapis.com",
+  "fonts.gstatic.com",
+]);
+
+/** Every absolute http(s) URL anywhere in the deck JSON (browser-loaded resources). */
+function collectExternalAssetUrls(value: unknown): string[] {
+  const found = new Set<string>();
+  const walk = (node: unknown, depth: number): void => {
+    if (depth > 40 || node === null || node === undefined) return;
+    if (typeof node === "string") {
+      if (/^https?:\/\//i.test(node)) found.add(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+    if (typeof node === "object") {
+      for (const item of Object.values(node)) walk(item, depth + 1);
+    }
+  };
+  walk(value, 0);
+  return [...found];
+}
+
+/**
+ * Discover the decks the B4 viewer cases render, probed so the browser's own
+ * loads stay console-clean: a multi-slide standard deck whose every referenced
+ * mount path the proxy will allow and the engine answers 200 for (and whose
+ * only external URLs are public font services), plus one Smart deck for the
+ * labelled-fallback case. Absence records a skip reason; access-guard cases
+ * never call this.
+ */
+async function discoverViewerDecks(): Promise<
+  { viewer: LiveViewerDeck; smartDeckId: string | null } | { reason: string }
+> {
+  if (engineUrl === "") {
+    return { reason: "PRESENTON_URL is not set in the spec environment." };
+  }
+
+  const api = await engineApi();
+
+  try {
+    const list = await api.get("/api/v1/ppt/presentation/all?page=1&page_size=50", {
+      timeout: 15_000,
+    });
+    if (!list.ok()) {
+      return { reason: `the engine deck list answered ${list.status()}.` };
+    }
+
+    const body: unknown = await list.json();
+    const items: unknown[] = Array.isArray(body)
+      ? body
+      : isRecord(body) && Array.isArray(body.items)
+        ? body.items
+        : [];
+
+    let viewer: LiveViewerDeck | null = null;
+    let smartDeckId: string | null = null;
+
+    for (const item of items) {
+      if (!isRecord(item) || item.version !== "v2-standard") continue;
+      const deckId = typeof item.id === "string" ? item.id : "";
+      if (deckId === "") continue;
+
+      const full = await api.get(`/api/v1/ppt/presentation/${deckId}`, {
+        timeout: 30_000,
+      });
+      if (!full.ok()) continue;
+      const deck = (await full.json()) as PresentationDeck;
+
+      if (smartDeckId === null && isSmartDeck(deck)) {
+        smartDeckId = deckId;
+        continue;
+      }
+      if (viewer !== null) continue;
+      if (!Array.isArray(deck.slides) || deck.slides.length < 2) continue;
+
+      const templateId = deck.slides[0]?.layout_group ?? "";
+      const paths = collectAssetPaths(deck);
+      if (paths.length === 0) continue;
+
+      let usable = true;
+      for (const src of paths) {
+        if (classifyAssetPath(src, deck, templateId) !== "allowed") {
+          usable = false;
+          break;
+        }
+        const probe = await api.get(src, { timeout: 30_000 });
+        if (!probe.ok() || (await probe.body()).byteLength === 0) {
+          usable = false;
+          break;
+        }
+      }
+      if (!usable) continue;
+
+      const external = collectExternalAssetUrls(deck);
+      const allReachable = external.every((url) => {
+        try {
+          return REACHABLE_EXTERNAL_HOSTS.has(new URL(url).hostname);
+        } catch {
+          return false;
+        }
+      });
+      if (!allReachable) continue;
+
+      viewer = { deckId, templateId, slideCount: deck.slides.length };
+    }
+
+    if (viewer === null) {
+      return {
+        reason: "no multi-slide v2-standard deck with browser-reachable assets was found.",
+      };
+    }
+    return { viewer, smartDeckId };
+  } catch (error) {
+    return {
+      reason: `engine discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** The live viewer cases skip with a recorded reason when no deck qualifies. */
+function requireLiveViewerDeck(): LiveViewerDeck {
+  if (liveViewerDeck !== null) return liveViewerDeck;
+  test.skip(
+    true,
+    liveViewerSkipReason ?? "No engine deck available for the viewer cases.",
+  );
+  throw new Error("unreachable");
+}
+
+/** The Smart-fallback case skips with a recorded reason when no Smart deck exists. */
+function requireLiveSmartDeck(): string {
+  if (liveSmartDeckId !== null) return liveSmartDeckId;
+  test.skip(true, liveSmartSkipReason ?? "No Smart deck is available on the engine.");
+  throw new Error("unreachable");
+}
+
+/**
+ * The live deck the C4 editor cases mutate: the discovered viewer deck plus
+ * the exact first editable text element (a top-level `text` element with a
+ * real frame) and the original slide/theme/title the tests restore afterwards.
+ */
+type EditorTarget = {
+  deckId: string;
+  templateId: string;
+  slideCount: number;
+  /** `[data-editor-element-hit]` key of the first top-level text element. */
+  hitKey: string;
+  originalSlide: DeckSlide;
+  originalTitle: string | null;
+  originalTheme: DeckTheme | DeckThemePackage | null;
+};
+
+let editorTarget: EditorTarget | null = null;
+let editorSkipReason: string | null = null;
+
+/** A live custom theme the picker case can assert (label + engine id). */
+let liveCustomTheme: { id: string; label: string } | null = null;
+let liveCustomThemeSkipReason: string | null = null;
+
+/** Reads the engine's custom themes; absence records a skip reason. */
+async function discoverCustomTheme(): Promise<
+  { id: string; label: string } | { reason: string }
+> {
+  if (engineUrl === "") {
+    return { reason: "PRESENTON_URL is not set in the spec environment." };
+  }
+  const api = await engineApi();
+  try {
+    const response = await api.get("/api/v1/ppt/themes/all", {
+      timeout: 15_000,
+    });
+    if (!response.ok()) {
+      return { reason: `the engine themes list answered ${response.status()}.` };
+    }
+    const body: unknown = await response.json();
+    const entries = Array.isArray(body) ? body : [];
+    const named = entries.find(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.id === "string" &&
+        entry.id !== "" &&
+        typeof entry.name === "string" &&
+        entry.name.trim() !== "",
+    );
+    if (!isRecord(named) || typeof named.id !== "string") {
+      return { reason: "the engine serves no named custom theme." };
+    }
+    return { id: named.id, label: (named.name as string).trim() };
+  } catch (error) {
+    return {
+      reason: `custom theme discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** The custom-theme picker case skips when the engine serves none. */
+function requireLiveCustomTheme(): { id: string; label: string } {
+  if (liveCustomTheme !== null) return liveCustomTheme;
+  test.skip(
+    true,
+    liveCustomThemeSkipReason ?? "No custom theme is available on the engine.",
+  );
+  throw new Error("unreachable");
+}
+
+/**
+ * Finds the editor's first click target on the discovered deck's first slide:
+ * a top-level `text` element (component element or root element) with a
+ * non-zero frame. No such element anywhere in the deck records a skip reason.
+ */
+async function discoverEditorTarget(
+  deckId: string,
+): Promise<EditorTarget | { reason: string }> {
+  const api = await engineApi();
+
+  try {
+    const full = await api.get(`/api/v1/ppt/presentation/${deckId}`, {
+      timeout: 30_000,
+    });
+    if (!full.ok()) {
+      return { reason: `the engine deck read answered ${full.status()}.` };
+    }
+    const deck = (await full.json()) as PresentationDeck;
+    const slides = Array.isArray(deck.slides) ? deck.slides : [];
+    const slide = slides[0];
+    if (slide === undefined) {
+      return { reason: "the discovered deck has no first slide." };
+    }
+
+    const ui = slide.ui;
+    if (typeof ui === "object" && ui !== null) {
+      const components = Array.isArray(ui.components) ? ui.components : [];
+      for (let ci = 0; ci < components.length; ci += 1) {
+        const elements = Array.isArray(components[ci].elements)
+          ? components[ci].elements
+          : [];
+        for (let ei = 0; ei < elements.length; ei += 1) {
+          const element = elements[ei];
+          if (
+            element.type === "text" &&
+            (element.size?.width ?? 0) > 0 &&
+            (element.size?.height ?? 0) > 0
+          ) {
+            return {
+              deckId,
+              templateId: slide.layout_group || "general",
+              slideCount: slides.length,
+              hitKey: `components:${ci}/${ei}`,
+              originalSlide: slide,
+              originalTitle:
+                typeof deck.title === "string" ? deck.title : null,
+              originalTheme: deck.theme ?? null,
+            };
+          }
+        }
+      }
+    }
+    return {
+      reason:
+        "the first slide has no top-level text element with a frame to edit.",
+    };
+  } catch (error) {
+    return {
+      reason: `editor target discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** The editor cases skip with a recorded reason when no target exists. */
+function requireEditorTarget(): EditorTarget {
+  if (editorTarget !== null) return editorTarget;
+  test.skip(
+    true,
+    editorSkipReason ?? "No engine deck with an editable text element was discovered.",
+  );
+  throw new Error("unreachable");
+}
+
+/**
+ * The live deck's image element the D3 cases mutate: the first top-level
+ * `image` element with a real frame, on whatever slide it lives (the editor
+ * navigates to that slide by its thumbnail index).
+ */
+type EditorImageTarget = {
+  deckId: string;
+  templateId: string;
+  slideIndex: number;
+  /** `[data-editor-element-hit]` key of the image element. */
+  hitKey: string;
+  originalSlide: DeckSlide;
+};
+
+let editorImageTarget: EditorImageTarget | null = null;
+let editorImageSkipReason: string | null = null;
+
+/** Finds the first framed top-level image element in the discovered deck. */
+async function discoverEditorImageTarget(
+  deckId: string,
+): Promise<EditorImageTarget | { reason: string }> {
+  const api = await engineApi();
+
+  try {
+    const full = await api.get(`/api/v1/ppt/presentation/${deckId}`, {
+      timeout: 30_000,
+    });
+    if (!full.ok()) {
+      return { reason: `the engine deck read answered ${full.status()}.` };
+    }
+    const deck = (await full.json()) as PresentationDeck;
+    const slides = Array.isArray(deck.slides) ? deck.slides : [];
+
+    for (let slideIndex = 0; slideIndex < slides.length; slideIndex += 1) {
+      const slide = slides[slideIndex];
+      const ui = slide.ui;
+      if (typeof ui !== "object" || ui === null) continue;
+      const components = Array.isArray(ui.components) ? ui.components : [];
+      for (let ci = 0; ci < components.length; ci += 1) {
+        const elements = Array.isArray(components[ci].elements)
+          ? components[ci].elements
+          : [];
+        for (let ei = 0; ei < elements.length; ei += 1) {
+          const element = elements[ei];
+          if (
+            element.type === "image" &&
+            (element.size?.width ?? 0) > 0 &&
+            (element.size?.height ?? 0) > 0
+          ) {
+            return {
+              deckId,
+              templateId: slide.layout_group || "general",
+              slideIndex,
+              hitKey: `components:${ci}/${ei}`,
+              originalSlide: slide,
+            };
+          }
+        }
+      }
+    }
+    return { reason: "the deck has no top-level image element with a frame." };
+  } catch (error) {
+    return {
+      reason: `image target discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** The D3 live cases skip with a recorded reason when no image target exists. */
+function requireEditorImageTarget(): EditorImageTarget {
+  if (editorImageTarget !== null) return editorImageTarget;
+  test.skip(
+    true,
+    editorImageSkipReason ??
+      "No engine deck with an editable image element was discovered.",
+  );
+  throw new Error("unreachable");
+}
+
+/** Reads one component/element from a stored slide by its editor hit key. */
+function elementAtHitKey(
+  deck: PresentationDeck,
+  slideIndex: number,
+  hitKey: string,
+): Record<string, unknown> | null {
+  const [componentIndex, elementIndex] = hitKey
+    .replace("components:", "")
+    .split("/")
+    .map((part) => Number(part));
+  const slide = deck.slides[slideIndex];
+  if (typeof slide !== "object" || slide === null) return null;
+  const ui = slide.ui;
+  if (typeof ui !== "object" || ui === null) return null;
+  const components = Array.isArray(ui.components) ? ui.components : [];
+  const element = components[componentIndex]?.elements?.[elementIndex];
+  return typeof element === "object" && element !== null
+    ? (element as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * The one direct engine context this spec uses — discovery probes, the theme
+ * list, the editor fixtures/restores and every engine re-read. The bearer is
+ * read from `process.env.PRESENTON_API_KEY` at call time (the key
+ * `playwright.config.ts` loaded into this process) and sent whenever it is
+ * non-empty; a missing key sends no header, so the engine answers 401 and
+ * discovery records its honest skip rather than passing silently.
+ */
+async function engineApi() {
+  const key = (process.env.PRESENTON_API_KEY ?? "").trim();
+  return playwrightRequest.newContext({
+    baseURL: engineUrl,
+    ...(key !== ""
+      ? { extraHTTPHeaders: { Authorization: `Bearer ${key}` } }
+      : {}),
+  });
+}
+
+/** One engine slide restore; a no-op failure is tolerated (best effort). */
+async function restoreEngineSlide(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  slide: DeckSlide,
+): Promise<void> {
+  await api.patch("/api/v1/ppt/presentation/slide_update", {
+    data: { slide },
+    timeout: 30_000,
+  });
+}
+
+/** One engine metadata restore; the theme must always travel (upstream bug). */
+async function restoreEngineDeck(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  deckId: string,
+  title: string | null,
+  theme: DeckTheme | DeckThemePackage | null,
+): Promise<void> {
+  if (theme === null || theme === undefined) return;
+  await api.patch("/api/v1/ppt/presentation/update", {
+    data: {
+      id: deckId,
+      ...(title !== null && title !== "" ? { title } : {}),
+      theme,
+    },
+    timeout: 30_000,
+  });
+}
+
+/** Reads the live deck back through the engine (authoritative persistence). */
+async function readEngineDeck(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  deckId: string,
+): Promise<PresentationDeck> {
+  const response = await api.get(`/api/v1/ppt/presentation/${deckId}`, {
+    timeout: 30_000,
+  });
+  expect(response.ok(), `engine deck read: ${response.status()}`).toBe(true);
+  return (await response.json()) as PresentationDeck;
+}
+
+/** Runs the worker once against the live engine (worker-lock serialized). */
+function runWorkerOnceLive(workerId = "spec-presentation-editor"): string {
+  return execFileSync(
+    "node",
+    ["worker/run.mjs", "--once", `--worker-id=${workerId}`],
+    {
+      cwd: path.join(REPO_ROOT, "backend"),
+      env: { ...process.env },
+      encoding: "utf8",
+      timeout: 120_000,
+    },
+  );
+}
+
+/** QA1/QA2 user ids from the local Admin API — no QA password needed to seed rows. */
+async function resolveQaIds(): Promise<[string, string]> {
+  const { data, error } = await service.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  expect(error, `admin user list: ${error?.message}`).toBeNull();
+
+  const byEmail = new Map<string, string>();
+  for (const user of data?.users ?? []) {
+    if (typeof user.email === "string") byEmail.set(user.email.toLowerCase(), user.id);
+  }
+
+  const first = byEmail.get(QA1);
+  const second = byEmail.get(QA2);
+  if (!first || !second) {
+    throw new Error("Missing QA identities; run `npm run seed:qa` (see QA_SESSION.md).");
+  }
+  return [first, second];
+}
+
+/** Seed one owned `presentations` row; registered for afterEach/afterAll cleanup. */
+async function seedOwnedPresentation(
+  userId: string,
+  presentonPresentationId: string | null,
+  template = "general",
+  extra: { documentId?: string } = {},
+): Promise<string> {
+  const id = randomUUID();
+  const { error } = await service.from("presentations").insert({
+    id,
+    user_id: userId,
+    prompt: "Asset proxy fixture",
+    template,
+    format: "pptx",
+    status: "succeeded",
+    presenton_presentation_id: presentonPresentationId,
+    ...(extra.documentId !== undefined ? { document_id: extra.documentId } : {}),
+  });
+  expect(error, `seed presentation: ${error?.message}`).toBeNull();
+  createdPresentationIds.push(id);
+  everCreatedPresentationIds.push(id);
+  return id;
+}
+
+const createdDocumentIds: string[] = [];
+const createdDocumentPaths: string[] = [];
+const everCreatedDocumentIds: string[] = [];
+const everCreatedDocumentPaths: string[] = [];
+
+/**
+ * One owned deck document (row + storage object) the export worker replaces
+ * in place: the same shape the C1 job spec seeds, with deliberately stale
+ * bytes/mime so the replace is observable. Registered for cleanup.
+ */
+async function seedDeckDocument(
+  userId: string,
+): Promise<{ id: string; storagePath: string }> {
+  const id = randomUUID();
+  const storagePath = `${userId}/${id}/Deck.pptx`;
+
+  const uploaded = await service.storage
+    .from("documents")
+    .upload(storagePath, SEEDED_DECK_BYTES, {
+      contentType: "application/pdf",
+      upsert: false,
+    });
+  expect(uploaded.error, `seed deck object: ${uploaded.error?.message}`).toBeNull();
+  createdDocumentPaths.push(storagePath);
+  everCreatedDocumentPaths.push(storagePath);
+
+  const inserted = await service.from("documents").insert({
+    id,
+    user_id: userId,
+    name: "Deck.pptx",
+    storage_path: storagePath,
+    mime_type: "application/pdf",
+    size_bytes: SEEDED_DECK_BYTES.byteLength,
+    status: "uploaded",
+    source: "presentation",
+  });
+  expect(inserted.error, `seed deck row: ${inserted.error?.message}`).toBeNull();
+  createdDocumentIds.push(id);
+  everCreatedDocumentIds.push(id);
+
+  return { id, storagePath };
+}
+
+/**
+ * Waits for the `presentation.export` job the Export click enqueues for
+ * `presentationId`, scoped to rows created inside this click's enqueue window
+ * (`sinceIso`, which is backdated by {@link ENQUEUE_WINDOW_SLACK_MS} for clock
+ * skew) so a pre-existing row can never be captured. The captured id is
+ * registered for per-test teardown. Fails with the honest message when the
+ * enqueue never lands instead of running the worker against nothing.
+ */
+async function awaitEnqueuedExportJob(
+  presentationId: string,
+  sinceIso: string,
+): Promise<string> {
+  let jobId = "";
+  await expect
+    .poll(
+      async () => {
+        const { data, error } = await service
+          .from("jobs")
+          .select("id")
+          .eq("kind", "presentation.export")
+          .contains("payload", { presentationId })
+          .gte("created_at", sinceIso)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        expect(error, `export job read: ${error?.message}`).toBeNull();
+        jobId = data?.[0]?.id ?? "";
+        return jobId;
+      },
+      {
+        timeout: 15_000,
+        message: `the Export click must enqueue a presentation.export job for ${presentationId} at/after ${sinceIso}`,
+      },
+    )
+    .not.toBe("");
+
+  createdExportJobIds.push(jobId);
+  everCreatedExportJobIds.push(jobId);
+  return jobId;
+}
+
+/**
+ * Deletes every `presentation.export` job row belonging to the given fixture
+ * presentations (`user_id` is QA1's because the UI action enqueues with the
+ * session user). Called under the worker lock right after the settle and
+ * again in `afterEach`; the payload sweep also catches a click whose enqueue
+ * landed after a failed capture.
+ */
+async function deleteExportJobsFor(presentationIds: string[]): Promise<void> {
+  for (const presentationId of presentationIds) {
+    const { error } = await service
+      .from("jobs")
+      .delete()
+      .eq("kind", "presentation.export")
+      .contains("payload", { presentationId });
+    expect(
+      error,
+      `teardown export jobs for ${presentationId}: ${error?.message}`,
+    ).toBeNull();
+  }
+}
+
+/**
+ * The live cases skip with a recorded reason when no suitable engine deck was
+ * discovered; the unsafe/missing-src/cross-owner/401 cases never call this.
+ */
+function requireLiveAsset(): LiveAsset {
+  if (liveAsset !== null) return liveAsset;
+  test.skip(true, liveSkipReason ?? "No engine deck available for the live cases.");
+  throw new Error("unreachable");
+}
+
+/** The rule-3 positive case: the deck's own `/app_data/templates/<id>/…` path. */
+function requireLiveTemplateAsset(): LiveAsset {
+  if (liveTemplateAsset !== null) return liveTemplateAsset;
+  test.skip(
+    true,
+    liveTemplateSkipReason ??
+      liveSkipReason ??
+      "No deck-referenced template static asset was discovered.",
+  );
+  throw new Error("unreachable");
+}
+
+test.beforeAll(async () => {
+  if (!LOCAL_TARGET.test(url)) {
+    throw new Error(
+      `presentations-ui is local-only; refusing target "${url || "(unset)"}"`,
+    );
+  }
+  if (!anonKey || !serviceKey) {
+    throw new Error(
+      "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY (frontend/.env.development.local)",
+    );
+  }
+
+  service = createClient(url, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const count = await service
+    .from("presentations")
+    .select("id", { count: "exact", head: true });
+  expect(count.error, `pre-run presentations count: ${count.error?.message}`).toBeNull();
+  presentationsCountBefore = count.count ?? 0;
+
+  [qa1Id, qa2Id] = await resolveQaIds();
+
+  const discovered = await discoverDeckAssets();
+  if ("reason" in discovered) {
+    liveSkipReason = discovered.reason;
+    liveTemplateSkipReason = discovered.reason;
+  } else {
+    liveAsset = discovered.primary;
+    liveTemplateAsset = discovered.template;
+    // Evidence: which real deck/path the live cases exercise (no secret).
+    console.log(
+      `[qa-presentations-ui] live deck ${discovered.primary.deckId} asset ${discovered.primary.src}`,
+    );
+    if (discovered.template === null) {
+      liveTemplateSkipReason = "no deck-referenced template static asset was discovered.";
+    } else {
+      console.log(
+        `[qa-presentations-ui] live template deck ${discovered.template.deckId} asset ${discovered.template.src}`,
+      );
+    }
+  }
+
+  const viewerDiscovery = await discoverViewerDecks();
+  if ("reason" in viewerDiscovery) {
+    liveViewerSkipReason = viewerDiscovery.reason;
+    liveSmartSkipReason = viewerDiscovery.reason;
+    editorSkipReason = viewerDiscovery.reason;
+    editorImageSkipReason = viewerDiscovery.reason;
+  } else {
+    liveViewerDeck = viewerDiscovery.viewer;
+    console.log(
+      `[qa-presentations-ui] viewer deck ${viewerDiscovery.viewer.deckId} slides ${viewerDiscovery.viewer.slideCount}`,
+    );
+    if (viewerDiscovery.smartDeckId === null) {
+      liveSmartSkipReason = "no Smart deck was discovered on the engine.";
+    } else {
+      liveSmartDeckId = viewerDiscovery.smartDeckId;
+      console.log(`[qa-presentations-ui] smart deck ${viewerDiscovery.smartDeckId}`);
+    }
+
+    const editorDiscovery = await discoverEditorTarget(
+      viewerDiscovery.viewer.deckId,
+    );
+    if ("reason" in editorDiscovery) {
+      editorSkipReason = editorDiscovery.reason;
+    } else {
+      editorTarget = editorDiscovery;
+      console.log(
+        `[qa-presentations-ui] editor deck ${editorDiscovery.deckId} hit ${editorDiscovery.hitKey} slides ${editorDiscovery.slideCount}`,
+      );
+    }
+
+    const imageDiscovery = await discoverEditorImageTarget(
+      viewerDiscovery.viewer.deckId,
+    );
+    if ("reason" in imageDiscovery) {
+      editorImageSkipReason = imageDiscovery.reason;
+    } else {
+      editorImageTarget = imageDiscovery;
+      console.log(
+        `[qa-presentations-ui] image deck ${imageDiscovery.deckId} slide ${imageDiscovery.slideIndex} hit ${imageDiscovery.hitKey}`,
+      );
+    }
+  }
+
+  const customThemeDiscovery = await discoverCustomTheme();
+  if ("reason" in customThemeDiscovery) {
+    liveCustomThemeSkipReason = customThemeDiscovery.reason;
+  } else {
+    liveCustomTheme = customThemeDiscovery;
+    console.log(
+      `[qa-presentations-ui] custom theme ${customThemeDiscovery.label}`,
+    );
+  }
+});
+
+test.afterEach(async () => {
+  // Export jobs first, while the presentation ids that identify their payloads
+  // are still tracked: the WhatsApp projects assert absolute zero QA1 job
+  // residue, so a row must not survive even a test that failed mid-flow.
+  if (createdExportJobIds.length > 0) {
+    const { error } = await service
+      .from("jobs")
+      .delete()
+      .in("id", [...createdExportJobIds]);
+    expect(error, `teardown export jobs: ${error?.message}`).toBeNull();
+    createdExportJobIds.length = 0;
+  }
+  await deleteExportJobsFor([...createdPresentationIds]);
+
+  if (createdPresentationIds.length > 0) {
+    const { error } = await service
+      .from("presentations")
+      .delete()
+      .in("id", createdPresentationIds);
+    expect(error, `teardown presentations: ${error?.message}`).toBeNull();
+    createdPresentationIds.length = 0;
+  }
+
+  if (createdDocumentPaths.length > 0) {
+    const removedObjects = await service.storage
+      .from("documents")
+      .remove([...createdDocumentPaths]);
+    expect(removedObjects.error, `teardown objects: ${removedObjects.error?.message}`).toBeNull();
+    createdDocumentPaths.length = 0;
+  }
+
+  if (createdDocumentIds.length > 0) {
+    const { error } = await service
+      .from("documents")
+      .delete()
+      .in("id", createdDocumentIds);
+    expect(error, `teardown documents: ${error?.message}`).toBeNull();
+    createdDocumentIds.length = 0;
+  }
+});
+
+test.afterAll(async () => {
+  // Sweep first (a click whose enqueue landed after a failed capture), then
+  // assert no tracked export job row survives.
+  await deleteExportJobsFor([...everCreatedPresentationIds]);
+
+  const count = await service
+    .from("presentations")
+    .select("id", { count: "exact", head: true });
+  expect(count.error, `residue presentations count: ${count.error?.message}`).toBeNull();
+  expect(
+    count.count,
+    "the spec must return the presentations table to its pre-run count",
+  ).toBe(presentationsCountBefore);
+
+  if (everCreatedExportJobIds.length > 0) {
+    const { data, error } = await service
+      .from("jobs")
+      .select("id")
+      .in("id", [...everCreatedExportJobIds]);
+    expect(error, `own export job residue read: ${error?.message}`).toBeNull();
+    expect(data ?? [], "no export job this spec created may survive").toHaveLength(0);
+  }
+
+  if (everCreatedPresentationIds.length > 0) {
+    const { data, error } = await service
+      .from("presentations")
+      .select("id")
+      .in("id", [...everCreatedPresentationIds]);
+    expect(error, `own presentation residue read: ${error?.message}`).toBeNull();
+    expect(data ?? [], "no presentation this spec created may survive").toHaveLength(0);
+  }
+
+  if (everCreatedDocumentIds.length > 0) {
+    const { data, error } = await service
+      .from("documents")
+      .select("id")
+      .in("id", [...everCreatedDocumentIds]);
+    expect(error, `own document residue read: ${error?.message}`).toBeNull();
+    expect(data ?? [], "no document this spec created may survive").toHaveLength(0);
+  }
+});
+
+test.describe("no session (fresh request context without storage state)", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("answers 401 before any owner read", async ({ request }) => {
+    const res = await request.get(
+      `/api/presentation/${randomUUID()}/asset?src=/static/images/placeholder.jpg`,
+    );
+    await expectJsonError(res, 401);
+  });
+
+  test("image upload answers 401 before parsing any file", async ({ request }) => {
+    const res = await request.post(
+      `/api/presentation/${randomUUID()}/images`,
+      {
+        multipart: {
+          file: { name: "x.png", mimeType: "image/png", buffer: TINY_PNG },
+        },
+      },
+    );
+    await expectJsonError(res, 401);
+  });
+});
+
+test.describe("owner-gated asset proxy", () => {
+  test("serves a deck-referenced asset with the private cache header and its content type", async ({
+    request,
+  }) => {
+    const live = requireLiveAsset();
+    const presentationId = await seedOwnedPresentation(qa1Id, live.deckId, live.templateId || "general");
+
+    const res = await request.get(assetUrl(presentationId, live.src));
+
+    expect(res.status()).toBe(200);
+    const headers = res.headers();
+    expect(headers["cache-control"]).toContain("private");
+    expect(headers["cache-control"]).toContain("max-age=300");
+    expect(headers["content-type"]).toBe(live.contentType);
+
+    const bytes = await res.body();
+    expect(bytes.byteLength).toBeGreaterThan(0);
+  });
+
+  test("serves the deck's own template static asset (engine-public, deck-matched)", async ({
+    request,
+  }) => {
+    const live = requireLiveTemplateAsset();
+    const presentationId = await seedOwnedPresentation(qa1Id, live.deckId, live.templateId || "general");
+
+    const res = await request.get(assetUrl(presentationId, live.src));
+
+    expect(res.status()).toBe(200);
+    const headers = res.headers();
+    expect(headers["cache-control"]).toContain("private");
+    expect(headers["content-type"]).toBe(live.contentType);
+
+    const bytes = await res.body();
+    expect(bytes.byteLength).toBeGreaterThan(0);
+  });
+
+  test("404s a user-data path the deck does not reference", async ({ request }) => {
+    const live = requireLiveAsset();
+    const presentationId = await seedOwnedPresentation(qa1Id, live.deckId, live.templateId || "general");
+
+    const res = await request.get(
+      assetUrl(presentationId, "/app_data/images/definitely-not-referenced.png"),
+    );
+
+    await expectJsonError(res, 404);
+  });
+
+  test("404s another template's static asset", async ({ request }) => {
+    const live = requireLiveAsset();
+    const presentationId = await seedOwnedPresentation(qa1Id, live.deckId, live.templateId || "general");
+    const otherTemplate = `not-${live.templateId || "this-deck"}`;
+
+    const res = await request.get(
+      assetUrl(presentationId, `/app_data/templates/${otherTemplate}/static/x.ttf`),
+    );
+
+    await expectJsonError(res, 404);
+  });
+
+  test("404s another user's presentation without an existence oracle", async ({
+    request,
+  }) => {
+    const presentationId = await seedOwnedPresentation(qa2Id, randomUUID());
+
+    const res = await request.get(
+      assetUrl(presentationId, "/static/images/placeholder.jpg"),
+    );
+
+    await expectJsonError(res, 404);
+  });
+
+  test("400s a missing src before any deck read", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, randomUUID());
+
+    const res = await request.get(`/api/presentation/${presentationId}/asset`);
+
+    await expectJsonError(res, 400);
+  });
+
+  test("404s a padded presentation id without a 500", async ({ request }) => {
+    // `isPresentationUuid` trims, so the row read must receive the trimmed id;
+    // the untrimmed value used to make PostgREST reject the uuid and 500.
+    const res = await request.get(
+      `/api/presentation/%20${randomUUID()}%20/asset?src=/static/images/placeholder.jpg`,
+    );
+
+    await expectJsonError(res, 404);
+  });
+
+  const unsafeQueries: Array<[string, string]> = [
+    ["parent traversal", `src=${encodeURIComponent("/app_data/../../etc/passwd")}`],
+    [
+      "interior traversal",
+      `src=${encodeURIComponent("/app_data/images/../../../secret.png")}`,
+    ],
+    ["percent-encoded traversal", "src=/app_data/%2e%2e/%2e%2e/secret.png"],
+    [
+      "double-encoded traversal",
+      "src=/app_data/fonts/%252e%252e/%252e%252e/api/v1/ppt/presentation/all",
+    ],
+    ["double-encoded backslash", "src=/app_data/images/%255ccover.png"],
+    ["double-encoded null byte", "src=/app_data/images/%2500.png"],
+    ["query delimiter", `src=${encodeURIComponent("/app_data/images/cover.png?x=1")}`],
+    ["fragment delimiter", `src=${encodeURIComponent("/app_data/images/cover.png#x")}`],
+    ["backslash", `src=${encodeURIComponent("/app_data/images\\cover.png")}`],
+    ["double slash", `src=${encodeURIComponent("//app_data/images/cover.png")}`],
+    ["not rooted", `src=${encodeURIComponent("app_data/images/cover.png")}`],
+    ["absolute URL", `src=${encodeURIComponent("https://evil.example/cover.png")}`],
+    ["outside the mounts", `src=${encodeURIComponent("/etc/passwd")}`],
+    ["empty", "src="],
+  ];
+
+  for (const [label, query] of unsafeQueries) {
+    test(`400s an unsafe src (${label})`, async ({ request }) => {
+      const presentationId = await seedOwnedPresentation(qa1Id, randomUUID());
+
+      const res = await request.get(`/api/presentation/${presentationId}/asset?${query}`);
+
+      await expectJsonError(res, 400);
+    });
+  }
+});
+
+/**
+ * Task D3 — the owner-gated image upload route's HTTP contract. Every case
+ * here is settled before any engine call (gate, id, file shape, media type,
+ * extension, size), so none of them skip: the owner-gate 401/404 rows and the
+ * validation 400/413/415 rows are provable without a reachable engine.
+ */
+test.describe("owner-gated image upload route (never skip)", () => {
+  const uploadUrl = (id: string) => `/api/presentation/${id}/images`;
+
+  test("404s an unknown presentation id before parsing the file", async ({
+    request,
+  }) => {
+    const res = await request.post(uploadUrl(randomUUID()), {
+      multipart: {
+        file: { name: "x.png", mimeType: "image/png", buffer: TINY_PNG },
+      },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("404s a malformed id with no 500", async ({ request }) => {
+    const res = await request.post(uploadUrl("not-a-uuid"), {
+      multipart: {
+        file: { name: "x.png", mimeType: "image/png", buffer: TINY_PNG },
+      },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("404s a row with no stored engine deck", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, null);
+    const res = await request.post(uploadUrl(presentationId), {
+      multipart: {
+        file: { name: "x.png", mimeType: "image/png", buffer: TINY_PNG },
+      },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("404s another user's presentation for QA1", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa2Id, randomUUID());
+    const res = await request.post(uploadUrl(presentationId), {
+      multipart: {
+        file: { name: "x.png", mimeType: "image/png", buffer: TINY_PNG },
+      },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("400s a multipart request without a file part", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, randomUUID());
+    const res = await request.post(uploadUrl(presentationId), {
+      multipart: { note: "hello" },
+    });
+    await expectJsonError(res, 400);
+  });
+
+  test("415s a non-image media type", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, randomUUID());
+    const res = await request.post(uploadUrl(presentationId), {
+      multipart: {
+        file: {
+          name: "notes.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("not an image"),
+        },
+      },
+    });
+    await expectJsonError(res, 415);
+  });
+
+  test("415s a disallowed extension", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, randomUUID());
+    const res = await request.post(uploadUrl(presentationId), {
+      multipart: {
+        file: {
+          name: "image.heic",
+          mimeType: "image/heic",
+          buffer: TINY_PNG,
+        },
+      },
+    });
+    await expectJsonError(res, 415);
+  });
+
+  test("413s a file over UniPilot's upload bound", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, randomUUID());
+    const res = await request.post(uploadUrl(presentationId), {
+      multipart: {
+        file: {
+          name: "huge.png",
+          mimeType: "image/png",
+          buffer: Buffer.alloc(IMAGE_UPLOAD_MAX_BYTES + 1),
+        },
+      },
+    });
+    await expectJsonError(res, 413);
+  });
+});
+
+/**
+ * The policy table (assets.ts) exercised directly — no route, no engine. These
+ * are the branches the HTTP cases cannot reach honestly: a deck with no slides,
+ * a caller-supplied template id that disagrees with the deck, and the fonts /
+ * static / vendor allowlist with a deck that references nothing.
+ */
+test.describe("classifyAssetPath (pure policy)", () => {
+  function policyDeck(
+    layoutGroups: string[],
+    referenced: string[] = [],
+  ): PresentationDeck {
+    return {
+      id: "policy-deck",
+      version: "v2-standard",
+      content: "",
+      n_slides: layoutGroups.length,
+      language: "English",
+      title: null,
+      created_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      tone: null,
+      verbosity: null,
+      slides: layoutGroups.map((group, index) => ({
+        id: `slide-${index}`,
+        presentation: "policy-deck",
+        layout_group: group,
+        layout: "layout",
+        index,
+        content: referenced.length > 0 ? { assets: referenced } : {},
+        ui: null,
+      })),
+      fonts: null,
+      theme: null,
+      generation_mode: "standard",
+      type: "standard",
+    };
+  }
+
+  const deck = policyDeck(["verdant"], ["/app_data/images/cover.png"]);
+
+  test("allows the engine-public prefixes with the traversal guard alone", () => {
+    expect(classifyAssetPath("/app_data/fonts/Inter-Regular.ttf", deck, "verdant")).toBe(
+      "allowed",
+    );
+    expect(classifyAssetPath("/static/images/placeholder.jpg", deck, "verdant")).toBe(
+      "allowed",
+    );
+    expect(
+      classifyAssetPath("/vendor/fonts/sans_serif/poppins/Poppins-Regular.ttf", deck, "verdant"),
+    ).toBe("allowed");
+  });
+
+  test("allows a user-data path only when the deck references it", () => {
+    expect(classifyAssetPath("/app_data/images/cover.png", deck, "verdant")).toBe("allowed");
+    expect(classifyAssetPath("/app_data/images/other.png", deck, "verdant")).toBe(
+      "not-referenced",
+    );
+    expect(classifyAssetPath("/app_data/exports/deck.pptx", deck, "verdant")).toBe(
+      "not-referenced",
+    );
+  });
+
+  test("allows the deck's template and rejects every other template", () => {
+    expect(
+      classifyAssetPath("/app_data/templates/verdant/static/logo.svg", deck, "verdant"),
+    ).toBe("allowed");
+    expect(
+      classifyAssetPath("/app_data/templates/general/static/logo.svg", deck, "verdant"),
+    ).toBe("not-referenced");
+    // A caller id the deck does not carry can never widen access.
+    expect(
+      classifyAssetPath("/app_data/templates/general/static/logo.svg", deck, "general"),
+    ).toBe("not-referenced");
+  });
+
+  test("never allows template assets for a deck with no slides", () => {
+    const empty = policyDeck([]);
+    expect(
+      classifyAssetPath("/app_data/templates/verdant/static/logo.svg", empty, null),
+    ).toBe("not-referenced");
+    expect(
+      classifyAssetPath("/app_data/templates/verdant/static/logo.svg", empty, "verdant"),
+    ).toBe("not-referenced");
+  });
+
+  test("flags every traversal or non-mount shape as unsafe", () => {
+    const unsafe = [
+      "/app_data/../../etc/passwd",
+      "/app_data/images\\cover.png",
+      "//app_data/images/cover.png",
+      "app_data/images/cover.png",
+      "https://evil.example/cover.png",
+      "/etc/passwd",
+      // Percent-encoding of any kind is rejected: fetch() would canonicalize
+      // `%2e%2e` as dot segments, so an encoded traversal here would become an
+      // authenticated GET to an arbitrary engine path with the shared bearer.
+      "/app_data/%2e%2e/%2e%2e/api/v1/ppt/presentation/all",
+      "/app_data/%252e%252e/%252e%252e/api/v1/ppt/presentation/all",
+      "/app_data%2Fimages%2Fcover.png",
+      "/app_data/images/%5ccover.png",
+      "/app_data/images/%00.png",
+      "/app_data/images/cover.png?x=1",
+      "/app_data/images/cover.png#x",
+      "",
+    ];
+    for (const src of unsafe) {
+      expect(classifyAssetPath(src, deck, "verdant"), src).toBe("unsafe");
+    }
+    expect(classifyAssetPath(null, deck, "verdant")).toBe("unsafe");
+  });
+});
+
+/**
+ * The Smart detector (spec §5.7, §6.10, D7) exercised directly: the
+ * deck-level flags and the per-slide `html_content` signal, including the
+ * payload shapes the engine stores unvalidated. The viewer routes and this
+ * spec's discovery both run this module, so these cases pin the semantics
+ * both sides rely on.
+ */
+test.describe("isSmartDeck (pure policy)", () => {
+  function deckSlide(overrides: Partial<DeckSlide> = {}): DeckSlide {
+    return {
+      id: "slide-0",
+      presentation: "policy-deck",
+      layout_group: "general",
+      layout: "title_intro",
+      index: 0,
+      content: {},
+      ...overrides,
+    };
+  }
+
+  function policyDeck(overrides: Partial<PresentationDeck> = {}): PresentationDeck {
+    return {
+      id: "policy-deck",
+      version: "v2-standard",
+      content: "",
+      n_slides: 1,
+      language: "English",
+      title: null,
+      created_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      tone: null,
+      verbosity: null,
+      slides: [deckSlide()],
+      fonts: null,
+      theme: null,
+      generation_mode: "standard",
+      type: "standard",
+      ...overrides,
+    };
+  }
+
+  test("flags a deck whose generation_mode is smart", () => {
+    expect(isSmartDeck(policyDeck({ generation_mode: "smart" }))).toBe(true);
+  });
+
+  test("flags a deck whose type is smart", () => {
+    expect(isSmartDeck(policyDeck({ type: "smart" }))).toBe(true);
+  });
+
+  test("flags any slide carrying non-empty html_content", () => {
+    const smart = policyDeck({
+      slides: [deckSlide(), deckSlide({ id: "slide-1", index: 1, html_content: "<div>hi</div>" })],
+    });
+    expect(isSmartDeck(smart)).toBe(true);
+  });
+
+  test("does not flag whitespace-only, empty or non-string html_content", () => {
+    expect(isSmartDeck(policyDeck({ slides: [deckSlide({ html_content: "  \n\t " })] }))).toBe(false);
+    expect(isSmartDeck(policyDeck({ slides: [deckSlide({ html_content: "" })] }))).toBe(false);
+    expect(isSmartDeck(policyDeck({ slides: [deckSlide({ html_content: null })] }))).toBe(false);
+    expect(
+      isSmartDeck(
+        policyDeck({
+          slides: [deckSlide({ html_content: 42 as unknown as string })],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("does not flag a standard deck without html_content", () => {
+    expect(isSmartDeck(policyDeck())).toBe(false);
+  });
+
+  test("honours only `slides` when the read omits the array", () => {
+    const malformed = policyDeck({ slides: undefined as unknown as DeckSlide[] });
+    expect(isSmartDeck(malformed)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task B4 — the native viewer route: access guards, rail, counter, keyboard
+//
+// Page-level `notFound()` under the `(app)` shell is a streamed soft 404: the
+// `loading.tsx` boundary flushes a 200 before the page resolves, then the
+// default 404 page arrives in the stream (the same behavior `/edit` has — a
+// hard 404 for pages would need a `proxy.ts` rule). The refused-visitor cases
+// therefore assert the 404 page by navigation; the route-handler cases above
+// still assert real 404 statuses.
+// ---------------------------------------------------------------------------
+
+test.describe("viewer route access (never skip)", () => {
+  test.describe("no session", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
+    test("404s a guest without redirecting to sign-in", async ({ page }) => {
+      const response = await page.goto(`/tools/presentation/${randomUUID()}`);
+
+      expect(response?.status()).toBe(200);
+      await expect(page.getByText("This page could not be found.")).toBeVisible();
+      await expect(page).not.toHaveURL(/\/login/);
+    });
+  });
+
+  test("404s an unknown presentation id for QA1", async ({ page }) => {
+    const response = await page.goto(`/tools/presentation/${randomUUID()}`);
+
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+    await expect(page.locator("[data-viewer-stage]")).toHaveCount(0);
+  });
+
+  test("404s a malformed id without a 500", async ({ page }) => {
+    const response = await page.goto("/tools/presentation/not-a-presentation-id");
+
+    expect(response?.status()).not.toBe(500);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+  });
+
+  test("404s another user's presentation for QA1", async ({ page }) => {
+    const presentationId = await seedOwnedPresentation(qa2Id, randomUUID());
+
+    const response = await page.goto(`/tools/presentation/${presentationId}`);
+
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+    await expect(page.locator("[data-viewer-stage]")).toHaveCount(0);
+  });
+
+  test("renders the honest not-ready panel when no engine id is stored", async ({
+    page,
+  }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, null);
+
+    const response = await page.goto(`/tools/presentation/${presentationId}`);
+
+    expect(response?.status()).toBe(200);
+    await expect(page.locator("[data-viewer-not-ready]")).toBeVisible();
+  });
+});
+
+test.describe("viewer route (live deck)", () => {
+  test("renders the rail, counter and keyboard navigation for a real deck", async ({
+    page,
+  }) => {
+    const deck = requireLiveViewerDeck();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      deck.deckId,
+      deck.templateId || "general",
+    );
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto(`/tools/presentation/${presentationId}`);
+    await page.waitForSelector('[data-viewer-ready="true"]');
+
+    await expect(page.locator("[data-deck-thumb]")).toHaveCount(deck.slideCount);
+
+    const counter = page.locator("[data-slide-counter]");
+    await expect(counter).toHaveText(`1 / ${deck.slideCount}`);
+    await expect(
+      page.locator("[data-viewer-stage] [data-deck-stage]"),
+    ).toHaveAttribute("aria-label", "Slide 1");
+
+    await page.keyboard.press("ArrowRight");
+    await expect(counter).toHaveText(`2 / ${deck.slideCount}`);
+    await expect(
+      page.locator("[data-viewer-stage] [data-deck-stage]"),
+    ).toHaveAttribute("aria-label", "Slide 2");
+
+    await page.keyboard.press("Home");
+    await expect(counter).toHaveText(`1 / ${deck.slideCount}`);
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual([]);
+  });
+
+  test("enters and exits present mode with keyboard navigation", async ({ page }) => {
+    const deck = requireLiveViewerDeck();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      deck.deckId,
+      deck.templateId || "general",
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}`);
+    await page.waitForSelector('[data-viewer-ready="true"]');
+
+    await page.getByRole("button", { name: "Present" }).click();
+    const present = page.locator("[data-present-mode]");
+    await expect(present).toBeVisible();
+    await expect(page.locator("[data-present-counter]")).toHaveText(
+      `1 / ${deck.slideCount}`,
+    );
+
+    await page.keyboard.press("ArrowRight");
+    await expect(page.locator("[data-present-counter]")).toHaveText(
+      `2 / ${deck.slideCount}`,
+    );
+
+    await page.keyboard.press("Escape");
+    await expect(present).toHaveCount(0);
+  });
+
+  test("traps focus inside present mode from the first Shift+Tab", async ({ page }) => {
+    const deck = requireLiveViewerDeck();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      deck.deckId,
+      deck.templateId || "general",
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}`);
+    await page.waitForSelector('[data-viewer-ready="true"]');
+
+    await page.getByRole("button", { name: "Present" }).click();
+    const present = page.locator("[data-present-mode]");
+    await expect(present).toBeVisible();
+
+    // Entry focus lands on the overlay itself (tabIndex -1), before any Tab.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.activeElement?.hasAttribute("data-present-mode") ?? false,
+        ),
+      )
+      .toBe(true);
+
+    await page.keyboard.press("Shift+Tab");
+
+    const trap = await page.evaluate(() => {
+      const overlay = document.querySelector("[data-present-mode]");
+      const active = document.activeElement;
+      return {
+        inside:
+          overlay !== null &&
+          active !== null &&
+          overlay.contains(active) &&
+          active !== overlay,
+        label:
+          active instanceof HTMLElement
+            ? (active.getAttribute("aria-label") ?? active.tagName)
+            : "none",
+      };
+    });
+    expect(trap.inside, `active element after Shift+Tab: ${trap.label}`).toBe(true);
+
+    await page.keyboard.press("Escape");
+    await expect(present).toHaveCount(0);
+  });
+
+  test("Space on a focused button activates it instead of advancing the deck", async ({
+    page,
+  }) => {
+    const deck = requireLiveViewerDeck();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      deck.deckId,
+      deck.templateId || "general",
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}`);
+    await page.waitForSelector('[data-viewer-ready="true"]');
+
+    await page.getByRole("button", { name: "Present" }).focus();
+    await page.keyboard.press("Space");
+
+    await expect(page.locator("[data-present-mode]")).toBeVisible();
+    await expect(page.locator("[data-slide-counter]")).toHaveText(
+      `1 / ${deck.slideCount}`,
+    );
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-present-mode]")).toHaveCount(0);
+  });
+
+  test("shows the labelled Smart fallback instead of faking HTML", async ({ page }) => {
+    const smartDeckId = requireLiveSmartDeck();
+    const presentationId = await seedOwnedPresentation(qa1Id, smartDeckId, "smart-html");
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto(`/tools/presentation/${presentationId}`);
+
+    const fallback = page.locator("[data-smart-fallback]");
+    await expect(fallback).toBeVisible();
+    await expect(page.locator("[data-smart-label]")).toHaveText("Smart HTML deck");
+    await expect(fallback).toContainText("This deck isn't rendered natively");
+    await expect(fallback).toContainText("nothing is faked into the stage");
+
+    // Both affordances point at the wrapper editor route for this row.
+    const editHref = `/tools/presentation/${presentationId}/edit`;
+    await expect(page.getByRole("link", { name: "Open in the editor" })).toHaveAttribute(
+      "href",
+      editHref,
+    );
+    const newTab = page.getByRole("link", { name: /open in a new tab/i });
+    await expect(newTab).toHaveAttribute("href", editHref);
+    await expect(newTab).toHaveAttribute("target", "_blank");
+    expect(await newTab.getAttribute("rel")).toContain("noopener");
+
+    // Honest state: no stage, no rail, no imitation HTML surface.
+    await expect(page.locator("[data-viewer-stage]")).toHaveCount(0);
+    await expect(page.locator("[data-deck-stage]")).toHaveCount(0);
+    await expect(page.locator("[data-deck-thumb]")).toHaveCount(0);
+    await expect(page.locator("iframe")).toHaveCount(0);
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task C4 — the native editor route: access guards, the gated structural
+// toolbar, autosaved text/notes/rename/theme writes (persisted through the
+// live engine), and the export button's job + mirror flow.
+// ---------------------------------------------------------------------------
+
+test.describe("editor route access (never skip)", () => {
+  test.describe("no session", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
+    test("404s a guest without redirecting to sign-in", async ({ page }) => {
+      const response = await page.goto(
+        `/tools/presentation/${randomUUID()}/edit`,
+      );
+
+      expect(response?.status()).toBe(200);
+      await expect(page.getByText("This page could not be found.")).toBeVisible();
+      await expect(page).not.toHaveURL(/\/login/);
+    });
+  });
+
+  test("404s an unknown presentation id for QA1", async ({ page }) => {
+    const response = await page.goto(
+      `/tools/presentation/${randomUUID()}/edit`,
+    );
+
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+    await expect(page.locator("[data-deck-editor]")).toHaveCount(0);
+  });
+
+  test("404s a malformed id without a 500", async ({ page }) => {
+    const response = await page.goto(
+      "/tools/presentation/not-a-presentation-id/edit",
+    );
+
+    expect(response?.status()).not.toBe(500);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+  });
+
+  test("404s another user's presentation for QA1", async ({ page }) => {
+    const presentationId = await seedOwnedPresentation(qa2Id, randomUUID());
+
+    const response = await page.goto(
+      `/tools/presentation/${presentationId}/edit`,
+    );
+
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+    await expect(page.locator("[data-deck-editor]")).toHaveCount(0);
+  });
+
+  test("renders the honest not-ready panel when no engine id is stored", async ({
+    page,
+  }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, null);
+
+    const response = await page.goto(
+      `/tools/presentation/${presentationId}/edit`,
+    );
+
+    expect(response?.status()).toBe(200);
+    await expect(page.locator("[data-editor-unavailable]")).toBeVisible();
+  });
+});
+
+test.describe("editor route (live deck)", () => {
+  test("renders the native editor with the structural gate's honest state", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+
+    // Native surface: the stage and rail, never an iframe.
+    await expect(page.locator("[data-deck-editor]")).toBeVisible();
+    await expect(page.locator("iframe")).toHaveCount(0);
+    await expect(page.locator("[data-deck-thumb]")).toHaveCount(
+      target.slideCount,
+    );
+    await expect(page.locator("[data-slide-counter]")).toHaveText(
+      `1 / ${target.slideCount}`,
+    );
+    await expect(page.locator("[data-save-status]")).toHaveAttribute(
+      "data-save-status",
+      "idle",
+    );
+
+    /*
+     * Structural gate branch table (Task D0). The flag is read from the
+     * adapter the page itself calls, so each row is the honest runtime state:
+     *
+     * | flag | toolbar                           | note              | layout picker                        |
+     * | off  | all five controls disabled        | `[!]` gate reason | disabled + gate reason              |
+     * | on   | enabled (the boundary move apart) | absent            | enabled when the template carried    |
+     * |      |                                   |                   | layouts, else the layouts-unavailable |
+     * |      |                                   |                   | reason — never the gate's           |
+     *
+     * A boundary move is the control's own state, not the gate: on slide 1
+     * "move up" is disabled because no earlier slide exists, and it enables
+     * once slide 2 is selected (asserted below). Live structural edits are
+     * Task D1's proof; this case only pins the gate's rendered state.
+     */
+    const { isStructuralEditingEnabled } = await import(
+      "../../lib/integrations/presenton"
+    );
+    if (!isStructuralEditingEnabled()) {
+      // Gate off: disabled controls with the recorded reason, not faked.
+      const note = page.locator("[data-editor-structural-note]");
+      await expect(note).toBeVisible();
+      await expect(note).toContainText("[!]");
+      await expect(note).toContainText("matching owner scope");
+      for (const selector of [
+        "[data-editor-add-slide]",
+        "[data-editor-duplicate-slide]",
+        "[data-editor-delete-slide]",
+        "[data-editor-move-up]",
+        "[data-editor-move-down]",
+      ]) {
+        await expect(page.locator(selector)).toBeDisabled();
+      }
+      await expect(page.locator("#editor-slide-layout")).toBeDisabled();
+      await expect(page.locator("[data-editor-layout-note]")).toContainText(
+        "matching owner scope",
+      );
+    } else {
+      // Gate on: the controls are enabled unless their own state says
+      // otherwise (slide boundaries, a template without layouts).
+      await expect(page.locator("[data-editor-structural-note]")).toHaveCount(0);
+      await expect(page.locator("[data-editor-add-slide]")).toBeEnabled();
+      await expect(page.locator("[data-editor-duplicate-slide]")).toBeEnabled();
+      await expect(page.locator("[data-editor-delete-slide]")).toBeEnabled();
+
+      // Slide 1 of a multi-slide deck: down is possible, up is not.
+      await expect(page.locator("[data-editor-move-down]")).toBeEnabled();
+      const moveUp = page.locator("[data-editor-move-up]");
+      await expect(moveUp).toBeDisabled();
+      await expect(moveUp).toHaveAttribute("title", "Move slide up");
+      // Selecting slide 2 proves the gate is open, not the slide boundary.
+      await page.locator('[data-deck-thumb="1"]').click();
+      await expect(page.locator("[data-slide-counter]")).toHaveText(
+        `2 / ${target.slideCount}`,
+      );
+      await expect(moveUp).toBeEnabled();
+
+      const layout = page.locator("#editor-slide-layout");
+      const layoutNote = page.locator("[data-editor-layout-note]");
+      if (await layout.isEnabled()) {
+        await expect(layoutNote).toHaveCount(0);
+      } else {
+        await expect(layoutNote).toContainText(
+          "template layouts weren't available",
+        );
+      }
+    }
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual([]);
+  });
+
+  test("edits a text element, reaches Saved, and the engine stores it", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      const hit = page.locator(
+        `[data-editor-element-hit="${target.hitKey}"]`,
+      );
+      await expect(hit).toBeVisible();
+      await hit.click({ force: true });
+
+      const inline = page.locator("[data-editor-inline-text]");
+      await expect(inline).toBeVisible();
+      const marker = `QA-C4 text ${Date.now()}`;
+      // Typed one character at a time after a select-all: a contenteditable
+      // that re-renders its children per keystroke would scramble the order
+      // (the MCP evidence caught that), so the exact stored string is the
+      // assertion.
+      await inline.click();
+      await page.keyboard.press("Control+a");
+      await inline.pressSequentially(marker);
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      // The engine stores the run-preserving plain-text write, in order.
+      const stored = await readEngineDeck(api, target.deckId);
+      const [componentIndex, elementIndex] = target.hitKey
+        .replace("components:", "")
+        .split("/")
+        .map((part) => Number(part));
+      const storedElements = stored.slides[0]?.ui?.components?.[componentIndex]
+        ?.elements as Array<{ runs?: Array<{ text?: string }> }> | undefined;
+      expect(
+        storedElements?.[elementIndex]?.runs?.[0]?.text,
+        "the saved text must be the engine's stored first run",
+      ).toBe(marker);
+
+      // A reload reads the stored deck back and renders the marker again.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page
+        .locator(`[data-editor-element-hit="${target.hitKey}"]`)
+        .click({ force: true });
+      await expect(page.locator("[data-editor-inline-text]")).toHaveText(
+        marker,
+      );
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("renames the deck and the engine stores it", async ({ page }) => {
+    const target = requireEditorTarget();
+    test.skip(
+      target.originalTheme === null,
+      "the discovered deck has no stored theme to carry through a rename.",
+    );
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      const newTitle = `QA-C4 rename ${Date.now()}`;
+      await page.locator("[data-editor-title]").fill(newTitle);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      expect(stored.title).toBe(newTitle);
+
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(page.locator("[data-editor-title]")).toHaveValue(newTitle);
+    } finally {
+      await restoreEngineDeck(
+        api,
+        target.deckId,
+        target.originalTitle,
+        target.originalTheme,
+      );
+      await api.dispose();
+    }
+  });
+
+  test("edits speaker notes and the engine stores them", async ({ page }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      const marker = `QA-C4 notes ${Date.now()}`;
+      await page.locator("[data-editor-notes-text]").fill(marker);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      expect(stored.slides[0]?.speaker_note).toBe(marker);
+
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(page.locator("[data-editor-notes-text]")).toHaveValue(
+        marker,
+      );
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("changes the theme to the template theme and the engine stores it", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    try {
+      // The template's own theme is the comparison target (the option the
+      // picker offers is that exact object, read server-side).
+      const templateResponse = await api.get(
+        `/api/v1/ppt/template/${target.templateId}`,
+        { timeout: 30_000 },
+      );
+      expect(
+        templateResponse.ok(),
+        `engine template read: ${templateResponse.status()}`,
+      ).toBe(true);
+      const template = (await templateResponse.json()) as {
+        theme?: DeckTheme | null;
+      };
+      const templateTheme = template.theme ?? null;
+      if (templateTheme === null) {
+        test.skip(true, "the deck's template carries no theme to apply.");
+        return;
+      }
+      const templatePrimary = templateTheme.colors.primary;
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      await page.locator("#editor-deck-theme").click();
+      const option = page.getByRole("option", { name: /^Template theme/ });
+      if ((await option.count()) === 0) {
+        test.skip(
+          true,
+          "the deck's stored theme already matches the template theme.",
+        );
+      }
+      await option.click();
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      await expect(page.locator("#editor-deck-theme")).toContainText(
+        "Template theme",
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      expect(stored.theme, "the engine must store a theme").toBeTruthy();
+      expect(
+        (stored.theme as DeckTheme).colors?.primary,
+        "the engine stores the template theme's colors",
+      ).toBe(templatePrimary);
+
+      // After a reload the editor reads the stored theme back and renders
+      // its first swatch from it.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(
+        page.locator('[data-editor-theme-swatch="0"]'),
+      ).toHaveAttribute("title", templatePrimary);
+    } finally {
+      await restoreEngineDeck(
+        api,
+        target.deckId,
+        target.originalTitle,
+        target.originalTheme,
+      );
+      await api.dispose();
+    }
+  });
+
+  test("offers the engine's custom themes in the deck theme picker", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const custom = requireLiveCustomTheme();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+
+    await page.locator("#editor-deck-theme").click();
+    await expect(
+      page.getByRole("option", { name: custom.label, exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+  });
+
+  test("requests an export, disables the control while exporting, and the worker settles the mirror", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const document = await seedDeckDocument(qa1Id);
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+      { documentId: document.id },
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+
+    const exportButton = page.locator("[data-editor-export]");
+    await expect(exportButton).toBeEnabled();
+
+    // The worker lock is held from before the enqueue through the settle (and
+    // the job-row cleanup): the full suite runs other worker-driving projects
+    // concurrently, and a foreign worker run in that window would claim the
+    // due job — `claim_jobs` is global, so the export must own its claim.
+    const release = await acquireWorkerLock();
+    try {
+      const enqueueWindowStart = new Date(
+        Date.now() - ENQUEUE_WINDOW_SLACK_MS,
+      ).toISOString();
+      await exportButton.click();
+      await expect(exportButton).toBeDisabled({ timeout: 10_000 });
+
+      // The click enqueued a real `presentation.export` job for this row;
+      // only a row created inside this click's window may be captured.
+      const jobId = await awaitEnqueuedExportJob(
+        presentationId,
+        enqueueWindowStart,
+      );
+
+      const output = runWorkerOnceLive();
+      expect(output).toContain(`settled job=${jobId}`);
+      expect(output).toContain("status=succeeded");
+    } finally {
+      // Delete under the lock: the WhatsApp residue guards run only while
+      // holding it, so this row cannot be observed after this release.
+      try {
+        await deleteExportJobsFor([presentationId]);
+      } finally {
+        release();
+      }
+    }
+
+    await expect
+      .poll(
+        async () => {
+          const { data, error } = await service
+            .from("presentations")
+            .select("export_status, exported_at")
+            .eq("id", presentationId)
+            .single();
+          expect(error, `export mirror read: ${error?.message}`).toBeNull();
+          return data?.export_status ?? null;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe("succeeded");
+
+    // The editor's row poll re-enables the control and shows the settled state.
+    await expect(page.locator("[data-editor-export-status]")).toHaveText(
+      "Exported",
+      { timeout: 30_000 },
+    );
+    await expect(exportButton).toBeEnabled();
+  });
+
+  test("replaces the deck's document in place through the live worker", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const document = await seedDeckDocument(qa1Id);
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+      { documentId: document.id },
+    );
+
+    // The in-place proof needs the seeded row's own size and timestamp.
+    const seeded = await service
+      .from("documents")
+      .select("size_bytes, updated_at")
+      .eq("id", document.id)
+      .single();
+    expect(seeded.error, `seeded document read: ${seeded.error?.message}`).toBeNull();
+    expect(seeded.data?.size_bytes).toBe(SEEDED_DECK_BYTES.byteLength);
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+
+    const exportButton = page.locator("[data-editor-export]");
+    await expect(exportButton).toBeEnabled();
+
+    // Same claim-window contract as the C4 export case: the lock covers the
+    // enqueue, the settle and the job-row cleanup.
+    const release = await acquireWorkerLock();
+    try {
+      const enqueueWindowStart = new Date(
+        Date.now() - ENQUEUE_WINDOW_SLACK_MS,
+      ).toISOString();
+      await exportButton.click();
+      await expect(exportButton).toBeDisabled({ timeout: 10_000 });
+
+      const jobId = await awaitEnqueuedExportJob(
+        presentationId,
+        enqueueWindowStart,
+      );
+
+      const output = runWorkerOnceLive("spec-c5-export");
+      expect(output).toContain(`settled job=${jobId}`);
+      expect(output).toContain("status=succeeded");
+    } finally {
+      try {
+        await deleteExportJobsFor([presentationId]);
+      } finally {
+        release();
+      }
+    }
+
+    await expect
+      .poll(
+        async () => {
+          const { data, error } = await service
+            .from("presentations")
+            .select("export_status")
+            .eq("id", presentationId)
+            .single();
+          expect(error, `export mirror read: ${error?.message}`).toBeNull();
+          return data?.export_status ?? null;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe("succeeded");
+
+    // One deck → one document (spec §7.7): the same row id and bucket key
+    // survive, with the re-export's bytes and a fresh `updated_at`.
+    const { data: replaced, error: replacedError } = await service
+      .from("documents")
+      .select("id, storage_path, size_bytes, updated_at")
+      .eq("id", document.id)
+      .single();
+    expect(replacedError, `replaced document read: ${replacedError?.message}`).toBeNull();
+    expect(replaced).not.toBeNull();
+    expect(replaced!.id).toBe(document.id);
+    expect(replaced!.storage_path).toBe(document.storagePath);
+    expect(replaced!.size_bytes).not.toBe(seeded.data!.size_bytes);
+    expect(
+      new Date(replaced!.updated_at).getTime(),
+      "the re-export must move the document's updated_at",
+    ).toBeGreaterThan(new Date(seeded.data!.updated_at).getTime());
+
+    // The bucket object under the same key is the re-exported PPTX (a real
+    // ZIP archive), not the seeded placeholder.
+    const stored = await service.storage
+      .from("documents")
+      .download(document.storagePath);
+    expect(stored.error, `stored object read: ${stored.error?.message}`).toBeNull();
+    const bytes = Buffer.from(await stored.data!.arrayBuffer());
+    expect(bytes.byteLength).toBe(replaced!.size_bytes);
+    expect(bytes.subarray(0, 2).toString("latin1")).toBe("PK");
+  });
+
+  /*
+   * Task D1 — selection, drag/resize/rotate, z-order, group/ungroup (spec
+   * §5.4, §6.3, §8.5).
+   *
+   * Every case edits the discovered engine deck and restores it in a `finally`
+   * through the engine's own `slide_update` route. The drag gesture is a real
+   * pointer sequence (`page.mouse`), the keyboard cases use the stage's
+   * focusable canvas, and each persistence assertion re-reads the engine.
+   */
+
+  /**
+   * The selected element's live stage frame in **screen** pixels: the overlay
+   * renders inside a `scale(fit)` box, so the DOM rect is already on screen.
+   */
+  async function selectionFrame(page: TestPage, key: string) {
+    const frame = page.locator(`[data-editor-selection-frame="${key}"]`);
+    await expect(frame).toBeVisible();
+    const box = await frame.boundingBox();
+    if (box === null) throw new Error(`no frame for ${key}`);
+    return box;
+  }
+
+  /** `components:0/1` → the path object `getElementAtPath` consumes. */
+  function pathFromKey(
+    key: string,
+  ): { root: "components" | "elements"; indexes: number[] } | null {
+    const [root, chain] = key.split(":", 2);
+    if (root !== "components" && root !== "elements") return null;
+    const indexes = (chain ?? "")
+      .split("/")
+      .filter((part) => part !== "")
+      .map((part) => Number(part));
+    if (indexes.some((index) => !Number.isInteger(index) || index < 0)) {
+      return null;
+    }
+    return { root, indexes };
+  }
+
+  /** The editor stage box's screen rect at the current scroll position. */
+  async function stageBoxRect(page: TestPage) {
+    const rect = await page.evaluate(() => {
+      const stage = document.querySelector<HTMLElement>("[data-editor-stage]");
+      if (stage === null) return null;
+      const box = stage.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    });
+    if (rect === null) throw new Error("stage box missing");
+    return rect;
+  }
+
+  /** The engine's stored position for one element on the target deck. */
+  function storedElementPosition(
+    stored: PresentationDeck,
+    slideIndex: number,
+    key: string,
+  ): { x: number; y: number } | null {
+    const parsed = pathFromKey(key);
+    if (parsed === null) return null;
+    const slide = stored.slides[slideIndex];
+    if (slide === undefined) return null;
+    const element = getElementAtPath(slide, parsed);
+    if (element === null) return null;
+    return element.position ?? null;
+  }
+
+  test("drags a selected element, saves, and the engine stores the new position", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    /* A scratch component with one positioned target element gives the drag
+       a deterministic frame away from every edge and every auto-derived
+       layout (the bundled deck's elements sit at canvas edges). It is
+       appended to the working slide on the engine and removed again by the
+       `finally` restore. */
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const origin = { x: 100, y: 100 };
+    const startPosition = { x: 0, y: 0 };
+    const dragComponent: SlideComponent = {
+      id: "qa-d1-drag-target",
+      description: "QA D1 drag target",
+      position: origin,
+      elements: [
+        {
+          type: "text",
+          name: "qa_d1_drag_target",
+          position: startPosition,
+          size: { width: 400, height: 120 },
+          runs: [{ text: "Drag me" }],
+        },
+      ],
+    };
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, dragComponent],
+          }
+        : target.originalSlide.ui,
+    };
+    const targetKey = `components:${componentCount}/0`;
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${targetKey}"]`).click({
+        force: true,
+      });
+
+      /* Selecting a text element autofocuses its inline editor, which can
+         scroll the page; settle that before measuring so the frame rect and
+         the stage scale describe the same moment. */
+      await page.waitForTimeout(300);
+      await page.locator("[data-editor-stage]").focus();
+      await page.waitForTimeout(100);
+      const before = await selectionFrame(page, targetKey);
+      const beforeStage = await stageBoxRect(page);
+      const screenDx = 120;
+      const screenDy = 60;
+      /* The gesture starts on the labelled grab handle: a text element being
+         edited is covered by its contenteditable, so the handle is the one
+         drag affordance every element type shares. */
+      const grab = page.locator("[data-editor-drag-handle]");
+      await expect(grab).toBeVisible();
+      const grabBox = (await grab.boundingBox())!;
+      await page.mouse.move(
+        grabBox.x + grabBox.width / 2,
+        grabBox.y + grabBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        grabBox.x + grabBox.width / 2 + screenDx,
+        grabBox.y + grabBox.height / 2 + screenDy,
+        { steps: 8 },
+      );
+      await page.mouse.up();
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      const position = storedElementPosition(stored, 0, targetKey);
+      expect(position).not.toBeNull();
+
+      /* The stored delta is the pointer delta divided by the overlay's live
+         scale (spec §6.3). The frame's own width is 400 stage px × that
+         scale, so it measures the scale exactly; the stage box's width
+         additionally carries its 1px border and must not be used. */
+      const scale = before.width / 400;
+      const expectedX = Math.round(screenDx / scale);
+      const expectedY = Math.round(screenDy / scale);
+      expect(position!.x - startPosition.x).toBeGreaterThanOrEqual(
+        expectedX - 1,
+      );
+      expect(position!.x - startPosition.x).toBeLessThanOrEqual(expectedX + 1);
+      expect(position!.y - startPosition.y).toBeGreaterThanOrEqual(
+        expectedY - 1,
+      );
+      expect(position!.y - startPosition.y).toBeLessThanOrEqual(expectedY + 1);
+
+      // A reload renders the stored position back: the frame's position
+      // *within the stage* moved by the same screen delta.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${targetKey}"]`).click({
+        force: true,
+      });
+      await page.waitForTimeout(300);
+      await page.locator("[data-editor-stage]").focus();
+      await page.waitForTimeout(100);
+      const after = await selectionFrame(page, targetKey);
+      const afterStage = await stageBoxRect(page);
+      const deltaX = after.x - afterStage.x - (before.x - beforeStage.x);
+      const deltaY = after.y - afterStage.y - (before.y - beforeStage.y);
+      expect(deltaX).toBeCloseTo(screenDx, 0);
+      expect(deltaY).toBeCloseTo(screenDy, 0);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("Escape cancels an in-progress drag without saving", async ({ page }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${target.hitKey}"]`).click({
+        force: true,
+      });
+      const before = await selectionFrame(page, target.hitKey);
+
+      const grab = page.locator("[data-editor-drag-handle]");
+      const grabBox = (await grab.boundingBox())!;
+      await page.mouse.move(
+        grabBox.x + grabBox.width / 2,
+        grabBox.y + grabBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        grabBox.x + grabBox.width / 2 + 90,
+        grabBox.y + grabBox.height / 2 + 45,
+        { steps: 6 },
+      );
+
+      // The live preview follows the pointer (a smaller stage-space move on
+      // the fitted stage, so any visible offset proves the drag is live).
+      const during = await selectionFrame(page, target.hitKey);
+      expect(during.x).toBeGreaterThan(before.x + 5);
+      expect(during.y).toBeGreaterThan(before.y + 2);
+
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+
+      // The frame snaps back to the stored position and no save is scheduled.
+      await page.waitForTimeout(2_500);
+      const after = await selectionFrame(page, target.hitKey);
+      expect(after.x).toBeCloseTo(before.x, 0);
+      expect(after.y).toBeCloseTo(before.y, 0);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "idle",
+      );
+      const stored = await readEngineDeck(api, target.deckId);
+      const parsed = pathFromKey(target.hitKey);
+      const storedElement =
+        parsed === null ? null : getElementAtPath(stored.slides[0], parsed);
+      const originalElement =
+        parsed === null
+          ? null
+          : getElementAtPath(target.originalSlide, parsed);
+      expect(storedElement?.position ?? null).toEqual(
+        originalElement?.position ?? null,
+      );
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+
+
+  test("arrow keys move the selected element by 1px and Shift by 10px, and the engine stores it", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${target.hitKey}"]`).click({
+        force: true,
+      });
+
+      /* While a text element's inline editor owns focus, the arrow keys are
+         the caret's; the stage's own arrow commands run when the stage holds
+         focus (spec §8.5). Focusing it is the keyboard-only path. */
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Shift+ArrowDown");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      const parsed = pathFromKey(target.hitKey);
+      const originalElement =
+        parsed === null ? null : getElementAtPath(target.originalSlide, parsed);
+      const originalPosition = originalElement?.position ?? { x: 0, y: 0 };
+      const position = storedElementPosition(stored, 0, target.hitKey);
+      expect(position).not.toBeNull();
+      expect(position!.x - originalPosition.x).toBe(1);
+      expect(position!.y - originalPosition.y).toBe(10);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("Alt+K sends the selected element forward and Alt+J back, both persisting", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    // A scratch component with two positioned text siblings gives the layer
+    // commands a deterministic pair (the bundled deck's components are
+    // single-element); it is appended to the working slide on the engine and
+    // removed again by the `finally` restore.
+    const stack: SlideComponent = {
+      id: "qa-d1-zorder-stack",
+      description: "QA D1 z-order stack",
+      position: { x: 200, y: 240 },
+      elements: [
+        {
+          type: "text",
+          name: "qa_d1_back",
+          position: { x: 0, y: 0 },
+          size: { width: 300, height: 80 },
+          runs: [{ text: "Back" }],
+        },
+        {
+          type: "text",
+          name: "qa_d1_front",
+          // Deliberately not overlapping the back element: a forced click
+          // hits the topmost hit target, so an overlapping pair would select
+          // the front element and Alt+K (already front-most) would no-op.
+          position: { x: 0, y: 120 },
+          size: { width: 300, height: 80 },
+          runs: [{ text: "Front" }],
+        },
+      ],
+    };
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, stack],
+          }
+        : target.originalSlide.ui,
+    };
+    const backKey = `components:${componentCount}/0`;
+    const storedNames = async (): Promise<Array<string | undefined>> => {
+      const stored = await readEngineDeck(api, target.deckId);
+      return (
+        stored.slides[0].ui?.components?.[componentCount]?.elements.map(
+          (element) => (element as { name?: string }).name,
+        ) ?? []
+      );
+    };
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${backKey}"]`).click({
+        force: true,
+      });
+
+      /* The layer commands are keyboard-only (per the brief) and need the
+         stage armed: while a text element's inline editor owns focus, keys
+         belong to the caret. */
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Alt+K");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      expect(await storedNames()).toEqual(["qa_d1_front", "qa_d1_back"]);
+
+      // The selection follows the moved element, so Alt+J sends it back and
+      // the original order is restored. `data-save-status` is already "saved"
+      // from the first command, so the engine read is the wait condition.
+      await page.keyboard.press("Alt+J");
+      await expect
+        .poll(storedNames, { timeout: 20_000 })
+        .toEqual(["qa_d1_back", "qa_d1_front"]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  /**
+   * The scratch frame the resize/rotate cases share: a short, explicitly
+   * sized text element (20 stage px tall ≈ 6 screen px, so its corner and
+   * edge handles overlap on screen — the corner must stay the topmost).
+   */
+  function transformScratchComponent(): SlideComponent {
+    return {
+      id: "qa-d1-transform-target",
+      description: "QA D1 transform target",
+      position: { x: 240, y: 300 },
+      elements: [
+        {
+          type: "text",
+          name: "qa_d1_transform_target",
+          position: { x: 0, y: 0 },
+          size: { width: 300, height: 20 },
+          runs: [{ text: "Transform me" }],
+        },
+      ],
+    };
+  }
+
+  test("resizes a selected element from its corner handle and persists", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const scratch = transformScratchComponent();
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, scratch],
+          }
+        : target.originalSlide.ui,
+    };
+    const key = `components:${componentCount}/0`;
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${key}"]`).click({
+        force: true,
+      });
+      /* The caret owns the arrow keys, not the handles: blur into the stage
+         so the element is selected but not being typed into. */
+      await page.locator("[data-editor-stage]").focus();
+      const before = await selectionFrame(page, key);
+
+      const se = page.locator('[data-editor-transform-handle="se"]');
+      await expect(se).toBeVisible();
+      const seBox = (await se.boundingBox())!;
+      const screenDx = 60;
+      const screenDy = 20;
+      await page.mouse.move(
+        seBox.x + seBox.width / 2,
+        seBox.y + seBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        seBox.x + seBox.width / 2 + screenDx,
+        seBox.y + seBox.height / 2 + screenDy,
+        { steps: 8 },
+      );
+      await page.mouse.up();
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      const parsed = pathFromKey(key);
+      const storedElement =
+        parsed === null ? null : getElementAtPath(stored.slides[0], parsed);
+      if (storedElement === null || storedElement.type !== "text") {
+        throw new Error("expected the stored scratch text element");
+      }
+      const scale = before.width / 300;
+      const expectedWidth = Math.round(screenDx / scale);
+      const expectedHeight = Math.round(screenDy / scale);
+      expect(storedElement.size?.width ?? 0).toBeGreaterThanOrEqual(
+        300 + expectedWidth - 2,
+      );
+      expect(storedElement.size?.width ?? 0).toBeLessThanOrEqual(
+        300 + expectedWidth + 2,
+      );
+      // The corner resizes both axes; if the edge handle had captured the
+      // gesture this stays at the original height (the pinned regression).
+      expect(storedElement.size?.height ?? 0).toBeGreaterThanOrEqual(
+        20 + expectedHeight - 2,
+      );
+      expect(storedElement.size?.height ?? 0).toBeLessThanOrEqual(
+        20 + expectedHeight + 2,
+      );
+      // A corner resize anchors the opposite corner (the position holds).
+      expect(storedElement.position ?? { x: 0, y: 0 }).toEqual({
+        x: 0,
+        y: 0,
+      });
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("rotates a selected element with the rotate handle and persists", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const scratch = transformScratchComponent();
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, scratch],
+          }
+        : target.originalSlide.ui,
+    };
+    const key = `components:${componentCount}/0`;
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${key}"]`).click({
+        force: true,
+      });
+      await page.locator("[data-editor-stage]").focus();
+      const frame = await selectionFrame(page, key);
+
+      const rotate = page.locator("[data-editor-rotate-handle]");
+      await expect(rotate).toBeVisible();
+      const rotateBox = (await rotate.boundingBox())!;
+      const centerX = frame.x + frame.width / 2;
+      const centerY = frame.y + frame.height / 2;
+      /* The handle starts above the center (-90°); dragging it to the right
+         of the center is a quarter turn clockwise. */
+      await page.mouse.move(
+        rotateBox.x + rotateBox.width / 2,
+        rotateBox.y + rotateBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(centerX + (centerY - (rotateBox.y + rotateBox.height / 2)) * 0.98, centerY, {
+        steps: 8,
+      });
+      await page.mouse.up();
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      const parsed = pathFromKey(key);
+      const storedElement =
+        parsed === null ? null : getElementAtPath(stored.slides[0], parsed);
+      if (storedElement === null) {
+        throw new Error("expected the stored scratch element");
+      }
+      const rotation = storedElement.rotation ?? 0;
+      expect(rotation).toBeGreaterThan(80);
+      expect(rotation).toBeLessThan(100);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("resizes a rotated element in its local axes and persists", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    /* A box large enough that the rotated corner handle is a comfortable
+       target (the D1 transform scratch is 20 stage px tall). */
+    const scratch: SlideComponent = {
+      id: "qa-d1b-rotated-resize-target",
+      description: "QA D1b rotated resize target",
+      position: { x: 240, y: 300 },
+      elements: [
+        {
+          type: "text",
+          name: "qa_d1b_rotated_resize_target",
+          position: { x: 0, y: 0 },
+          size: { width: 300, height: 100 },
+          runs: [{ text: "Rotate then resize" }],
+        },
+      ],
+    };
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, scratch],
+          }
+        : target.originalSlide.ui,
+    };
+    const key = `components:${componentCount}/0`;
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${key}"]`).click({
+        force: true,
+      });
+      await page.locator("[data-editor-stage]").focus();
+
+      /* Place the rotation through the real rotate gesture (not a seeded
+         rotation): the resize must compose whatever value the editor stored. */
+      const frame = await selectionFrame(page, key);
+      const rotate = page.locator("[data-editor-rotate-handle]");
+      await expect(rotate).toBeVisible();
+      const rotateBox = (await rotate.boundingBox())!;
+      const centerX = frame.x + frame.width / 2;
+      const centerY = frame.y + frame.height / 2;
+      await page.mouse.move(
+        rotateBox.x + rotateBox.width / 2,
+        rotateBox.y + rotateBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        centerX + (centerY - (rotateBox.y + rotateBox.height / 2)) * 0.98,
+        centerY,
+        { steps: 8 },
+      );
+      await page.mouse.up();
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const rotatedDeck = await readEngineDeck(api, target.deckId);
+      const rotatedPath = pathFromKey(key);
+      const rotatedElement =
+        rotatedPath === null
+          ? null
+          : getElementAtPath(rotatedDeck.slides[0], rotatedPath);
+      if (rotatedElement === null || rotatedElement.type !== "text") {
+        throw new Error("expected the stored rotated scratch text element");
+      }
+      const rotation = rotatedElement.rotation ?? 0;
+      expect(rotation).toBeGreaterThan(80);
+      expect(rotation).toBeLessThan(100);
+      const beforeSize = {
+        width: rotatedElement.size?.width ?? 0,
+        height: rotatedElement.size?.height ?? 0,
+      };
+      const beforePosition = rotatedElement.position ?? { x: 0, y: 0 };
+
+      /* A rotated frame keeps its resize handles (D1b): the honest disabled
+         label is gone and the corner handle is live. */
+      await expect(page.locator("[data-editor-resize-disabled]")).toHaveCount(
+        0,
+      );
+      const se = page.locator('[data-editor-transform-handle="se"]');
+      await expect(se).toBeVisible();
+      const beforeFrame = await selectionFrame(page, key);
+      const scale = beforeFrame.width / beforeSize.width;
+
+      /* The persisted size is the stage drag converted into the element's
+         local axes; the anchor (the se handle's opposite corner) stays fixed,
+         which moves the origin, so `position` must change as well. */
+      const radians = (rotation * Math.PI) / 180;
+      const screenDx = -40;
+      const screenDy = 60;
+      const stageDx = screenDx / scale;
+      const stageDy = screenDy / scale;
+      const localDx = stageDx * Math.cos(radians) + stageDy * Math.sin(radians);
+      const localDy = -stageDx * Math.sin(radians) + stageDy * Math.cos(radians);
+
+      /* At ~90° the local +x axis points down the stage: a left+down drag
+         grows both local dimensions. */
+      const seBox = (await se.boundingBox())!;
+      await page.mouse.move(
+        seBox.x + seBox.width / 2,
+        seBox.y + seBox.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        seBox.x + seBox.width / 2 + screenDx,
+        seBox.y + seBox.height / 2 + screenDy,
+        { steps: 8 },
+      );
+      await page.mouse.up();
+
+      /* The autosave debounce (2 s) means `saved` can still describe the
+         rotate commit; the engine read is the wait condition for this one. */
+      const parsed = pathFromKey(key);
+      const engineWidth = async (): Promise<number> => {
+        const deck = await readEngineDeck(api, target.deckId);
+        const element =
+          parsed === null ? null : getElementAtPath(deck.slides[0], parsed);
+        return element?.size?.width ?? 0;
+      };
+      await expect
+        .poll(engineWidth, { timeout: 20_000 })
+        .toBeGreaterThanOrEqual(beforeSize.width + localDx - 3);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const stored = await readEngineDeck(api, target.deckId);
+      const storedElement =
+        parsed === null ? null : getElementAtPath(stored.slides[0], parsed);
+      if (storedElement === null || storedElement.type !== "text") {
+        throw new Error("expected the stored resized scratch text element");
+      }
+      expect(storedElement.size?.width ?? 0).toBeLessThanOrEqual(
+        beforeSize.width + localDx + 3,
+      );
+      expect(storedElement.size?.height ?? 0).toBeGreaterThanOrEqual(
+        beforeSize.height + localDy - 3,
+      );
+      expect(storedElement.size?.height ?? 0).toBeLessThanOrEqual(
+        beforeSize.height + localDy + 3,
+      );
+      expect(storedElement.position ?? { x: 0, y: 0 }).not.toEqual(
+        beforePosition,
+      );
+      expect(storedElement.rotation ?? 0).toBeCloseTo(rotation, 6);
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("keeps the rotate handle reachable for a top-edge element", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+    await page.locator(`[data-editor-element-hit="${target.hitKey}"]`).click({
+      force: true,
+    });
+    await page.locator("[data-editor-stage]").focus();
+
+    const frame = await selectionFrame(page, target.hitKey);
+    const rotate = page.locator("[data-editor-rotate-handle]");
+    await expect(rotate).toBeVisible();
+    const rotateBox = (await rotate.boundingBox())!;
+    const stage = await stageBoxRect(page);
+    const handleCenterY = rotateBox.y + rotateBox.height / 2;
+
+    /* The arm lives 22px outside the frame (plus its own 22px), in screen
+       px. When the stage clips that space away the arm must flip below the
+       frame instead of rendering unreachable above it. */
+    const armOutsidePx = 33;
+    if (frame.y - armOutsidePx < stage.y) {
+      expect(handleCenterY).toBeGreaterThan(frame.y + frame.height);
+    } else {
+      expect(handleCenterY).toBeLessThan(frame.y);
+    }
+    // Either way the handle is inside the stage's visible box.
+    expect(handleCenterY).toBeGreaterThanOrEqual(stage.y);
+    expect(handleCenterY).toBeLessThanOrEqual(stage.y + stage.height);
+  });
+
+  /**
+   * A scratch, non-overlapping text pair at the stage's origin, for the
+   * gesture-leak and focus-scope cases (the bundled deck's components are
+   * single-element).
+   */
+  function gestureScratchPair(): {
+    component: SlideComponent;
+    firstKey: (componentCount: number) => string;
+    secondKey: (componentCount: number) => string;
+  } {
+    return {
+      component: {
+        id: "qa-d1-gesture-pair",
+        description: "QA D1 gesture pair",
+        position: { x: 0, y: 0 },
+        elements: [
+          {
+            type: "text",
+            name: "qa_d1_gesture_a",
+            position: { x: 0, y: 0 },
+            size: { width: 300, height: 80 },
+            runs: [{ text: "Gesture A" }],
+          },
+          {
+            type: "text",
+            name: "qa_d1_gesture_b",
+            position: { x: 0, y: 120 },
+            size: { width: 300, height: 80 },
+            runs: [{ text: "Gesture B" }],
+          },
+        ],
+      },
+      firstKey: (componentCount: number) => `components:${componentCount}/0`,
+      secondKey: (componentCount: number) => `components:${componentCount}/1`,
+    };
+  }
+
+  test("an off-stage pointer release keeps its gesture on the element it started on", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const pair = gestureScratchPair();
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, pair.component],
+          }
+        : target.originalSlide.ui,
+    };
+    const aKey = pair.firstKey(componentCount);
+    const bKey = pair.secondKey(componentCount);
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${aKey}"]`).click({
+        force: true,
+      });
+
+      const grab = page.locator("[data-editor-drag-handle]");
+      const grabBox = (await grab.boundingBox())!;
+      const stage = await stageBoxRect(page);
+      const grabCenter = {
+        x: grabBox.x + grabBox.width / 2,
+        y: grabBox.y + grabBox.height / 2,
+      };
+      /* Drag past the stage's right edge and release there: the stage's
+         pointer capture keeps delivering, so the release commits to A
+         instead of stranding the gesture for the next press. */
+      await page.mouse.move(grabCenter.x, grabCenter.y);
+      await page.mouse.down();
+      await page.mouse.move(stage.x + stage.width + 80, grabCenter.y, {
+        steps: 10,
+      });
+      await page.mouse.up();
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      const afterA = await readEngineDeck(api, target.deckId);
+      expect(storedElementPosition(afterA, 0, aKey)?.x).toBe(980);
+
+      // A plain click on B must not inherit A's (now committed) offset.
+      await page.locator(`[data-editor-element-hit="${bKey}"]`).click({
+        force: true,
+      });
+      await page.waitForTimeout(400);
+      const stored = await readEngineDeck(api, target.deckId);
+      expect(storedElementPosition(stored, 0, bKey)).toEqual({ x: 0, y: 120 });
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("does not run stage commands while focus is outside the stage", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const pair = gestureScratchPair();
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, pair.component],
+          }
+        : target.originalSlide.ui,
+    };
+    const aKey = pair.firstKey(componentCount);
+    const bKey = pair.secondKey(componentCount);
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${aKey}"]`).click({
+        force: true,
+      });
+
+      /* Focus a chrome control (the Export button is enabled here; Undo is
+         disabled with no history and cannot take focus): the arrows and
+         layer chords belong to the stage, so nothing may nudge, reorder or
+         schedule a save. */
+      const exportButton = page.locator("[data-editor-export]");
+      await exportButton.focus();
+      await expect(exportButton).toBeFocused();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Alt+K");
+      await page.waitForTimeout(500);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "idle",
+      );
+      const unchanged = await readEngineDeck(api, target.deckId);
+      expect(storedElementPosition(unchanged, 0, aKey)).toEqual({ x: 0, y: 0 });
+      const order = (
+        unchanged.slides[0].ui?.components?.[componentCount]?.elements ?? []
+      ).map((element) => (element as { name?: string }).name);
+      expect(order).toEqual(["qa_d1_gesture_a", "qa_d1_gesture_b"]);
+
+      // The stage's own keyboard path still works once it holds focus.
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      const moved = await readEngineDeck(api, target.deckId);
+      expect(storedElementPosition(moved, 0, aKey)).toEqual({ x: 1, y: 0 });
+      expect(storedElementPosition(moved, 0, bKey)).toEqual({ x: 0, y: 120 });
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("Mod+G groups the selection and Mod+Shift+G ungroups it, both persisting", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    // A scratch component with two positioned text siblings gives the live
+    // group/ungroup path a deterministic element list (the bundled deck's
+    // components are single-element); it is appended to the working slide on
+    // the engine and removed again by the `finally` restore.
+    const pair: SlideComponent = {
+      id: "qa-d1-group-pair",
+      description: "QA D1 group pair",
+      position: { x: 160, y: 420 },
+      elements: [
+        {
+          type: "text",
+          name: "qa_d1_left",
+          position: { x: 0, y: 0 },
+          size: { width: 320, height: 90 },
+          runs: [{ text: "Left card" }],
+        },
+        {
+          type: "text",
+          name: "qa_d1_right",
+          position: { x: 400, y: 0 },
+          size: { width: 320, height: 90 },
+          runs: [{ text: "Right card" }],
+        },
+      ],
+    };
+    const componentCount =
+      target.originalSlide.ui?.components?.length ?? 0;
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, pair],
+          }
+        : target.originalSlide.ui,
+    };
+    const leftKey = `components:${componentCount}/0`;
+    const rightKey = `components:${componentCount}/1`;
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${leftKey}"]`).click({
+        force: true,
+      });
+      await page
+        .locator(`[data-editor-element-hit="${rightKey}"]`)
+        .click({ force: true, modifiers: ["Shift"] });
+      /* The chord belongs to the stage (spec §8.5): a keyboard user arms it
+         by focusing the canvas. */
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+g");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      const storedGroup = await readEngineDeck(api, target.deckId);
+      const groupElements =
+        storedGroup.slides[0].ui?.components?.[componentCount]?.elements ?? [];
+      expect(groupElements.map((element) => element.type)).toEqual(["group"]);
+      const group = groupElements[0];
+      if (group.type !== "group") throw new Error("expected a stored group");
+      expect(
+        group.children.map((child) => (child as { name?: string }).name),
+      ).toEqual(["qa_d1_left", "qa_d1_right"]);
+
+      // Ungroup in the same session: select the group on the stage and
+      // Mod+Shift+G (the group is the component's only element).
+      await page
+        .locator(`[data-editor-element-hit="components:${componentCount}/0"]`)
+        .click({ force: true });
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+Shift+g");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      const storedUngrouped = await readEngineDeck(api, target.deckId);
+      const ungrouped =
+        storedUngrouped.slides[0].ui?.components?.[componentCount]?.elements ??
+        [];
+      expect(ungrouped.map((element) => element.type)).toEqual([
+        "text",
+        "text",
+      ]);
+      expect(
+        ungrouped.map((element) => (element as { name?: string }).name),
+      ).toEqual(["qa_d1_left", "qa_d1_right"]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+});
+
+/*
+ * Task D2 — rich text runs (spec §5.4 "Inline text", §6.4).
+ *
+ * The inline editor now renders the element's runs as styled spans and the
+ * run toolbar (and Mod+B/I/U) formats the current selection: runs split at the
+ * selection boundaries, the property lands only on the selected range, and
+ * identical adjacent runs merge. Each case seeds a deterministic scratch
+ * component ("Alpha Beta") on the discovered engine deck, selects the word
+ * "Beta" with real keyboard word-selection, formats it, and restores the
+ * original slide in a `finally`. Persistence is asserted by re-reading the
+ * engine; undo/redo through the shared history restores the prior runs.
+ */
+test.describe("editor rich text runs (live deck)", () => {
+  /** The engine's stored runs for one `components:c/i` element on slide 0. */
+  function storedRuns(
+    stored: PresentationDeck,
+    key: string,
+  ): unknown {
+    const [componentIndex, elementIndex] = key
+      .replace("components:", "")
+      .split("/")
+      .map((part) => Number(part));
+    const element =
+      stored.slides[0]?.ui?.components?.[componentIndex]?.elements?.[
+        elementIndex
+      ];
+    return element !== undefined && element.type === "text"
+      ? (element as { runs?: unknown }).runs
+      : undefined;
+  }
+
+  /**
+   * Each case appends one deterministic text component to the working slide
+   * on the engine and removes it again through the `finally` restore.
+   */
+  function seedRunsTarget(target: {
+    originalSlide: DeckSlide;
+  }): { seededSlide: DeckSlide; key: string; componentCount: number } {
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const component: SlideComponent = {
+      id: "qa-d2-runs-target",
+      description: "QA D2 runs target",
+      position: { x: 120, y: 120 },
+      elements: [
+        {
+          type: "text",
+          name: "qa_d2_runs_target",
+          position: { x: 0, y: 0 },
+          size: { width: 560, height: 120 },
+          font: { size: 32, color: "#111827" },
+          runs: [{ text: "Alpha Beta" }],
+        },
+      ],
+    };
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, component],
+          }
+        : target.originalSlide.ui,
+    };
+    return {
+      seededSlide,
+      key: `components:${componentCount}/0`,
+      componentCount,
+    };
+  }
+
+  test("bolds a selected word through the run toolbar, reloads bold, and undo restores", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const { seededSlide, key } = seedRunsTarget(target);
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${key}"]`).click({
+        force: true,
+      });
+
+      /* The inline editor autofocuses with the caret at the end; clicking it
+         arms the real caret, and one word selection left covers "Beta"
+         (offsets 6..10). */
+      const inline = page.locator("[data-editor-inline-text]");
+      await expect(inline).toBeVisible();
+      await inline.click();
+      await page.keyboard.press("Control+Shift+ArrowLeft");
+      await page.locator("[data-editor-format-toggle]").click();
+      const toolbar = page.locator("[data-editor-run-toolbar]");
+      await expect(toolbar).toBeVisible();
+      const bold = page.locator("[data-editor-run-bold]");
+      await expect(bold).toBeEnabled();
+      await bold.click();
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      // The engine stores the split: unselected bytes untouched, bold only on
+      // the selected run.
+      expect(storedRuns(await readEngineDeck(api, target.deckId), key)).toEqual([
+        { text: "Alpha " },
+        { text: "Beta", font: { bold: true } },
+      ]);
+
+      // Undo restores the previous runs and autosaves them back.
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+z");
+      await expect
+        .poll(async () => storedRuns(await readEngineDeck(api, target.deckId), key), {
+          timeout: 20_000,
+        })
+        .toEqual([{ text: "Alpha Beta" }]);
+
+      // Redo re-applies it, so the reload below reads a bold deck back.
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+Shift+z");
+      await expect
+        .poll(async () => storedRuns(await readEngineDeck(api, target.deckId), key), {
+          timeout: 20_000,
+        })
+        .toEqual([{ text: "Alpha " }, { text: "Beta", font: { bold: true } }]);
+
+      // A reload renders the stored runs as two spans: only the second is bold.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${key}"]`).click({
+        force: true,
+      });
+      const reloaded = page.locator("[data-editor-inline-text]");
+      await expect(reloaded).toBeVisible();
+      const spans = reloaded.locator("span[data-editor-run]");
+      await expect(spans).toHaveCount(2);
+      expect(
+        await spans.nth(0).evaluate((node) => getComputedStyle(node).fontWeight),
+      ).not.toBe("700");
+      expect(
+        await spans.nth(1).evaluate((node) => getComputedStyle(node).fontWeight),
+      ).toBe("700");
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("Mod+B/I/U format the selection and toggle from the effective font", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const { seededSlide, key } = seedRunsTarget(target);
+
+    const storedBold = [
+      { text: "Alpha " },
+      { text: "Beta", font: { bold: true } },
+    ];
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${key}"]`).click({
+        force: true,
+      });
+
+      const inline = page.locator("[data-editor-inline-text]");
+      await expect(inline).toBeVisible();
+      await inline.click();
+      await page.keyboard.press("Control+Shift+ArrowLeft");
+      await page.keyboard.press("Control+b");
+      await expect
+        .poll(async () => storedRuns(await readEngineDeck(api, target.deckId), key), {
+          timeout: 20_000,
+        })
+        .toEqual(storedBold);
+
+      // The selection survived the commit; italic stacks on bold.
+      await page.keyboard.press("Control+i");
+      await expect
+        .poll(async () => storedRuns(await readEngineDeck(api, target.deckId), key), {
+          timeout: 20_000,
+        })
+        .toEqual([
+          { text: "Alpha " },
+          { text: "Beta", font: { bold: true, italic: true } },
+        ]);
+
+      await page.keyboard.press("Control+u");
+      await expect
+        .poll(async () => storedRuns(await readEngineDeck(api, target.deckId), key), {
+          timeout: 20_000,
+        })
+        .toEqual([
+          { text: "Alpha " },
+          {
+            text: "Beta",
+            font: { bold: true, italic: true, underline: true },
+          },
+        ]);
+
+      // Mod+B toggles the effective bold off (an explicit `false` — the wire
+      // has no "unset"; the run no longer renders bold), leaving the others.
+      await page.keyboard.press("Control+b");
+      await expect
+        .poll(async () => storedRuns(await readEngineDeck(api, target.deckId), key), {
+          timeout: 20_000,
+        })
+        .toEqual([
+          { text: "Alpha " },
+          {
+            text: "Beta",
+            font: { bold: false, italic: true, underline: true },
+          },
+        ]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+});
+
+/**
+ * The C4 editor's element addressing, exercised purely: text elements are
+ * listed in render order (nested ones included), a path resolves back to its
+ * element, an update replaces exactly that element immutably, and the
+ * run-preserving plain-text write keeps the first run's style.
+ */
+test.describe("editor images (live deck)", () => {
+  test("searches stock images in the picker and states provider honesty", async ({
+    page,
+  }) => {
+    const target = requireEditorImageTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+    if (target.slideIndex > 0) {
+      await page.locator(`[data-deck-thumb="${target.slideIndex}"]`).click();
+    }
+    await page
+      .locator(`[data-editor-element-hit="${target.hitKey}"]`)
+      .click({ force: true });
+    await page.locator("[data-editor-image-picker-open]").click();
+    await page.locator('[data-image-tab="search"]').click();
+    await page.locator("[data-image-search-input]").fill("ocean waves");
+    await page.locator("[data-image-search-submit]").click();
+
+    /* Live provider, or the honest unavailable state — never fabricated
+       results. Whichever branch runs is recorded in the run log. */
+    await expect
+      .poll(
+        async () =>
+          (await page.locator("[data-image-tile]").count()) +
+          (await page.locator("[data-image-unavailable]").count()),
+        { timeout: 30_000 },
+      )
+      .toBeGreaterThan(0);
+
+    const results = await page.locator("[data-image-tile]").count();
+    if (results > 0) {
+      console.log(
+        `[qa-presentations-ui] image search exercised: ${results} provider result(s)`,
+      );
+    } else {
+      console.log(
+        "[qa-presentations-ui] image search unavailable on this engine; the honest state was shown",
+      );
+    }
+  });
+
+  test("uploads an image, inserts it, persists fit/crop, and the proxy serves it", async ({
+    page,
+    request,
+  }) => {
+    const target = requireEditorImageTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    let uploadedId: string | null = null;
+    let foreignImageId: string | null = null;
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      if (target.slideIndex > 0) {
+        await page.locator(`[data-deck-thumb="${target.slideIndex}"]`).click();
+      }
+      const hit = page.locator(`[data-editor-element-hit="${target.hitKey}"]`);
+      await expect(hit).toBeVisible();
+      await hit.click({ force: true });
+      await expect(page.locator("[data-editor-image-controls]")).toBeVisible();
+
+      // Upload through the picker → the owner-gated route → the engine store.
+      await page.locator("[data-editor-image-picker-open]").click();
+      await page.locator('[data-image-tab="upload"]').click();
+      await page.locator("[data-image-upload-input]").setInputFiles({
+        name: "qa-d3-fixture.png",
+        mimeType: "image/png",
+        buffer: TINY_PNG,
+      });
+      const [uploadResponse] = await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.url().includes(`/api/presentation/${presentationId}/images`) &&
+            response.request().method() === "POST",
+        ),
+        page.locator("[data-image-upload-submit]").click(),
+      ]);
+      expect(uploadResponse.status()).toBe(201);
+      const uploadBody = (await uploadResponse.json()) as {
+        image?: { id?: string; fileUrl?: string };
+      };
+      const uploaded = uploadBody.image;
+      expect(uploaded?.fileUrl, "the route returns the created image").toBeTruthy();
+      uploadedId = uploaded?.id ?? null;
+
+      const insert = page.locator("[data-image-insert-upload]");
+      await expect(insert).toBeVisible({ timeout: 30_000 });
+      await insert.click();
+      await expect(page.locator("[data-image-picker]")).toBeHidden();
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      // The engine stores the uploaded file URL on the element.
+      const stored = await readEngineDeck(api, target.deckId);
+      const storedElement = elementAtHitKey(
+        stored,
+        target.slideIndex,
+        target.hitKey,
+      );
+      const uploadedUrl =
+        typeof storedElement?.data === "string" ? storedElement.data : "";
+      expect(uploadedUrl, "the persisted data is the uploaded file_url").toBe(
+        uploaded?.fileUrl,
+      );
+      expect(uploadedUrl).toMatch(/^\/app_data\/images\//);
+
+      // The proxy serves the uploaded bytes now that the deck references them.
+      const asset = await request.get(assetUrl(presentationId, uploadedUrl));
+      expect(asset.status()).toBe(200);
+      expect((await asset.body()).byteLength).toBeGreaterThan(0);
+
+      // The stage's <img> resolves without a reload (the bounded retry).
+      const stageImage = page
+        .locator(`img[src*="${encodeURIComponent(uploadedUrl)}"]`)
+        .first();
+      await expect
+        .poll(
+          async () =>
+            stageImage.evaluate((node) =>
+              node instanceof HTMLImageElement ? node.naturalWidth : 0,
+            ),
+          { timeout: 20_000 },
+        )
+        .toBeGreaterThan(0);
+
+      // Fit + crop through the inspector controls (one slide save each).
+      await page.locator("#editor-image-fit").click();
+      await page.getByRole("option", { name: /cover/i }).click();
+      await page.locator('[data-editor-image-field="focus-x"]').fill("25");
+      await page.locator('[data-editor-image-field="focus-y"]').fill("75");
+      await page.locator('[data-editor-image-field="crop-scale"]').fill("2");
+      await page.locator('[data-editor-image-field="crop-scale"]').press("Enter");
+
+      /* The status was already "saved" from the insert, so waiting on it would
+         pass before the debounced crop save lands. Poll the engine instead:
+         the stored focus_x is the proof the write arrived. */
+      await expect
+        .poll(
+          async () => {
+            const deck = await readEngineDeck(api, target.deckId);
+            return elementAtHitKey(deck, target.slideIndex, target.hitKey)
+              ?.focus_x;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe(25);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      const edited = await readEngineDeck(api, target.deckId);
+      const editedElement = elementAtHitKey(
+        edited,
+        target.slideIndex,
+        target.hitKey,
+      );
+      expect(editedElement?.fit, "fit persists").toBe("cover");
+      expect(editedElement?.focus_x, "focus_x persists").toBe(25);
+      expect(editedElement?.focus_y, "focus_y persists").toBe(75);
+      expect(editedElement?.crop_scale, "crop_scale persists").toBe(2);
+
+      // Reload reads the stored style back into the controls.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      if (target.slideIndex > 0) {
+        await page.locator(`[data-deck-thumb="${target.slideIndex}"]`).click();
+      }
+      await page
+        .locator(`[data-editor-element-hit="${target.hitKey}"]`)
+        .click({ force: true });
+      await expect(
+        page.locator('[data-editor-image-field="focus-x"]'),
+      ).toHaveValue("25");
+      await expect(
+        page.locator('[data-editor-image-field="focus-y"]'),
+      ).toHaveValue("75");
+      await expect(
+        page.locator('[data-editor-image-field="crop-scale"]'),
+      ).toHaveValue("2");
+
+      /* The library is scoped to the caller's own referenced images (review
+         fix). The just-saved deck references the uploaded image, so it lists
+         and is deletable; an engine image no QA1 deck references — created
+         directly for the proof — must stay hidden, never previewed and never
+         deletable. */
+      const foreignUpload = await api.post("/api/v1/ppt/images/upload", {
+        multipart: {
+          file: {
+            name: "qa-d3-foreign.png",
+            mimeType: "image/png",
+            buffer: TINY_PNG,
+          },
+        },
+        timeout: 60_000,
+      });
+      expect(foreignUpload.ok()).toBe(true);
+      const foreignBody = (await foreignUpload.json()) as { id?: string };
+      foreignImageId = foreignBody.id ?? null;
+      expect(foreignImageId).toBeTruthy();
+
+      await page.locator("[data-editor-image-picker-open]").click();
+      await page.locator('[data-image-tab="library"]').click();
+      await page.locator('[data-image-library-kind="uploaded"]').click();
+
+      const deleteButton = page.locator(`[data-image-delete="${uploadedId}"]`);
+      await expect(deleteButton).toBeVisible({ timeout: 30_000 });
+      await expect(deleteButton).toBeEnabled();
+      await expect(
+        page.locator(`[data-image-delete="${foreignImageId}"]`),
+        "a foreign engine image must never be listed",
+      ).toHaveCount(0);
+
+      await deleteButton.click();
+      const confirmDialog = page
+        .locator("dialog[open]")
+        .filter({ has: page.locator("[data-image-delete-confirm]") });
+      await expect(confirmDialog).toBeVisible();
+      await expect(confirmDialog).toContainText("This deck uses it");
+      await page.locator("[data-image-delete-confirm]").click();
+      await expect(deleteButton).toHaveCount(0, { timeout: 30_000 });
+      uploadedId = null;
+
+      const library = await api.get("/api/v1/ppt/images/uploaded", {
+        timeout: 30_000,
+      });
+      expect(library.ok()).toBe(true);
+      const entries = (await library.json()) as Array<{ id?: unknown }>;
+      expect(
+        entries.some((entry) => entry.id === uploaded?.id),
+        "the deleted image is gone from the engine library",
+      ).toBe(false);
+      expect(
+        entries.some((entry) => entry.id === foreignImageId),
+        "the foreign image itself was never touched",
+      ).toBe(true);
+    } finally {
+      // The deck is restored even on failure; no engine image this test
+      // created may outlive it (the UI delete already removed the upload).
+      await restoreEngineSlide(api, target.originalSlide);
+      if (uploadedId !== null) {
+        await api
+          .delete(`/api/v1/ppt/images/${uploadedId}`, { timeout: 30_000 })
+          .catch(() => undefined);
+      }
+      if (foreignImageId !== null) {
+        await api
+          .delete(`/api/v1/ppt/images/${foreignImageId}`, { timeout: 30_000 })
+          .catch(() => undefined);
+      }
+      await api.dispose();
+    }
+  });
+});
+
+/*
+ * Task D4 — icon search, insert and recolor (spec §5.4 icons row, §6.5).
+ *
+ * The engine's icon catalog is searched through the editor's picker (a Server
+ * Action → `GET /api/v1/ppt/icons/search`), the chosen path replaces a seeded
+ * icon element's `data`, and the color field recolors the rendered SVG
+ * client-side (fetched through the owner-gated asset proxy — never an engine
+ * recolor route). The case seeds a scratch icon component on the discovered
+ * deck, drives the picker with real clicks/typing, asserts the engine-stored
+ * `data`/`is_icon`/`color`, the proxy's `image/svg+xml` answer and the stage's
+ * recolored data URI, then removes the component in a `finally`. When the
+ * engine's catalog answers nothing the case skips with a recorded reason —
+ * no icon is ever faked.
+ */
+test.describe("editor icons (live deck)", () => {
+  const SEEDED_ICON_PATH = "/static/icons/bold/lightbulb-bold.svg";
+
+  /** One deterministic icon component appended to the target slide. */
+  function seedIconComponent(target: EditorImageTarget): {
+    seededSlide: DeckSlide;
+    key: string;
+  } {
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const component: SlideComponent = {
+      id: "qa-d4-icon-target",
+      description: "QA D4 icon target",
+      position: { x: 320, y: 240 },
+      elements: [
+        {
+          type: "image",
+          name: "qa_d4_icon_target",
+          position: { x: 0, y: 0 },
+          size: { width: 160, height: 160 },
+          data: SEEDED_ICON_PATH,
+          is_icon: true,
+          decorative: false,
+        },
+      ],
+    };
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, component],
+          }
+        : target.originalSlide.ui,
+    };
+    return {
+      seededSlide,
+      key: `components:${componentCount}/0`,
+    };
+  }
+
+  test("searches the catalog, inserts an icon, recolors it and reloads the stored fields", async ({
+    page,
+    request,
+  }) => {
+    const target = requireEditorImageTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const { seededSlide, key } = seedIconComponent(target);
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      if (target.slideIndex > 0) {
+        await page.locator(`[data-deck-thumb="${target.slideIndex}"]`).click();
+      }
+      await page
+        .locator(`[data-editor-element-hit="${key}"]`)
+        .click({ force: true });
+
+      // The seeded element is an icon: its controls offer the catalog picker.
+      await expect(page.locator("[data-editor-icon-controls]")).toBeVisible();
+      await page.locator("[data-editor-icon-picker-open]").click();
+      await page.locator("[data-icon-search-input]").fill("lightbulb");
+      await page.locator("[data-icon-search-submit]").click();
+
+      await expect(
+        page.locator("[data-icon-tile], [data-icon-unavailable]").first(),
+      ).toBeVisible({ timeout: 30_000 });
+
+      const tileCount = await page.locator("[data-icon-tile]").count();
+      if (tileCount === 0) {
+        const reason =
+          (await page.locator("[data-icon-unavailable]").count()) > 0
+            ? "the engine's icon catalog is unavailable on this service."
+            : "the engine's icon catalog answered no results for the query.";
+        console.log(
+          `[qa-presentations-ui] icon search exercised nothing: ${reason}`,
+        );
+        test.skip(true, reason);
+      }
+
+      /* The weight filter re-runs the search; the latest request wins and
+         every result then lives in the requested weight directory. */
+      await page.locator("#icon-search-weight").click();
+      await page.getByRole("option", { name: "Regular", exact: true }).click();
+      await expect
+        .poll(
+          async () =>
+            page.locator('[data-icon-path^="/static/icons/regular/"]').count(),
+          { timeout: 30_000 },
+        )
+        .toBeGreaterThan(0);
+      await expect(
+        page.locator('[data-icon-path]:not([data-icon-path^="/static/icons/regular/"])'),
+      ).toHaveCount(0);
+
+      /* Every tile preview streams through the owner-gated proxy; wait for
+         the bytes before the screenshot (and prove the preview path works). */
+      await expect
+        .poll(
+          async () =>
+            page.evaluate(() => {
+              const images = Array.from(
+                document.querySelectorAll("[data-icon-tile] img"),
+              ) as HTMLImageElement[];
+              return (
+                images.length > 0 &&
+                images.every((image) => image.complete && image.naturalWidth > 0)
+              );
+            }),
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+
+      await page.screenshot({
+        path: "screenshots/phase-d-d4-icon-picker.png",
+      });
+
+      const firstTile = page
+        .locator('[data-icon-path^="/static/icons/regular/"]')
+        .first();
+      const chosenPath = await firstTile.getAttribute("data-icon-path");
+      expect(chosenPath).toBeTruthy();
+      await firstTile.click();
+
+      /* Picking runs the Server Action validation first (the server is the
+         authority), so the modal closes once that round-trip settles — give a
+         live engine room on a cold server rather than assuming a fast one. */
+      await expect(page.locator("[data-icon-picker]")).toBeHidden({
+        timeout: 30_000,
+      });
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      let stored = await readEngineDeck(api, target.deckId);
+      let storedElement = elementAtHitKey(stored, target.slideIndex, key);
+      expect(storedElement?.data, "the picked path persists").toBe(chosenPath);
+      expect(storedElement?.is_icon, "the element stays an icon").toBe(true);
+
+      // The owner-gated proxy serves the icon's SVG bytes.
+      const asset = await request.get(assetUrl(presentationId, chosenPath!));
+      expect(asset.status()).toBe(200);
+      expect(asset.headers()["content-type"]).toContain("image/svg+xml");
+      expect((await asset.body()).byteLength).toBeGreaterThan(0);
+
+      // Recolor through the inspector's color field.
+      await page.locator("[data-editor-icon-color]").fill("#C2410C");
+      await expect
+        .poll(
+          async () =>
+            elementAtHitKey(
+              await readEngineDeck(api, target.deckId),
+              target.slideIndex,
+              key,
+            )?.color,
+          { timeout: 20_000 },
+        )
+        .toBe("#C2410C");
+
+      /* The stage renders the recolored SVG from a data URI produced by the
+         client-side recolor (the proxy/url path is asserted above). */
+      const recolored = page
+        .locator('img[data-deck-icon-recolored="true"]')
+        .first();
+      await expect(recolored).toBeVisible({ timeout: 20_000 });
+      await expect
+        .poll(
+          async () =>
+            recolored.evaluate((node) =>
+              node.getAttribute("src")?.startsWith("data:image/svg+xml") ??
+              false,
+            ),
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      await expect
+        .poll(
+          async () =>
+            recolored.evaluate((node) =>
+              node instanceof HTMLImageElement ? node.naturalWidth : 0,
+            ),
+          { timeout: 20_000 },
+        )
+        .toBeGreaterThan(0);
+
+      /* The rendered bytes are the recolored SVG: the chosen color is in the
+         markup and no `currentColor` survives (spec §6.5's fill/stroke
+         replacement, proved on the live proxy bytes). */
+      const decodedIcon = await recolored.evaluate((node) => {
+        const src = node.getAttribute("src") ?? "";
+        return decodeURIComponent(src.slice(src.indexOf(",") + 1));
+      });
+      expect(decodedIcon).toContain("#C2410C");
+      expect(decodedIcon).not.toContain("currentColor");
+
+      await page.locator("[data-editor-stage]").screenshot({
+        path: "screenshots/phase-d-d4-icon-stage.png",
+      });
+      await page.screenshot({
+        path: "screenshots/phase-d-d4-icon-recolored.png",
+      });
+
+      // Reload reads the stored data/is_icon/color back into the editor.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      if (target.slideIndex > 0) {
+        await page.locator(`[data-deck-thumb="${target.slideIndex}"]`).click();
+      }
+      await page
+        .locator(`[data-editor-element-hit="${key}"]`)
+        .click({ force: true });
+      await expect(page.locator("[data-editor-icon-color]")).toHaveValue(
+        "#C2410C",
+      );
+      await expect
+        .poll(
+          async () =>
+            page
+              .locator('img[data-deck-icon-recolored="true"]')
+              .first()
+              .evaluate((node) =>
+                node instanceof HTMLImageElement ? node.naturalWidth : 0,
+              ),
+          { timeout: 20_000 },
+        )
+        .toBeGreaterThan(0);
+      await page.screenshot({
+        path: "screenshots/phase-d-d4-icon-reload.png",
+      });
+
+      stored = await readEngineDeck(api, target.deckId);
+      storedElement = elementAtHitKey(stored, target.slideIndex, key);
+      expect(storedElement?.data).toBe(chosenPath);
+      expect(storedElement?.is_icon).toBe(true);
+      expect(storedElement?.color).toBe("#C2410C");
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+});
+
+test.describe("editor element paths (pure)", () => {
+  test("lists, resolves and updates nested text elements immutably", async () => {
+    const paths = await import(
+      "../../app/(app)/tools/presentation/[id]/edit/_components/elementPath"
+    );
+    const nestedText = {
+      type: "text" as const,
+      name: "nested",
+      size: { width: 100, height: 20 },
+      position: { x: 0, y: 0 },
+      runs: [{ text: "Nested", font: { size: 12, bold: true } }],
+    };
+    const directText = {
+      type: "text" as const,
+      name: "direct",
+      size: { width: 100, height: 20 },
+      position: { x: 0, y: 0 },
+      runs: [{ text: "Direct", font: { size: 16 } }],
+    };
+    const slide = {
+      id: randomUUID(),
+      presentation: randomUUID(),
+      layout_group: "general",
+      layout: "title_intro",
+      index: 0,
+      content: {},
+      ui: {
+        components: [
+          {
+            id: "component-a",
+            description: "",
+            position: { x: 0, y: 0 },
+            elements: [
+              {
+                type: "group" as const,
+                name: "group",
+                children: [nestedText],
+              },
+              directText,
+            ],
+          },
+        ],
+      },
+    } as unknown as DeckSlide;
+
+    const entries = paths.listTextElements(slide);
+    expect(entries.map((entry) => entry.element.name)).toEqual([
+      "nested",
+      "direct",
+    ]);
+    expect(entries.map((entry) => paths.elementPathKey(entry.path))).toEqual([
+      "components:0/0/0",
+      "components:0/1",
+    ]);
+
+    const resolved = paths.getElementAtPath(
+      slide,
+      paths.parseElementPathKey("components:0/0/0")!,
+    );
+    expect(resolved?.type).toBe("text");
+    expect((resolved as { name?: string } | null)?.name).toBe("nested");
+
+    const updated = paths.updateElementAtPath(
+      slide,
+      paths.parseElementPathKey("components:0/0/0")!,
+      (element) =>
+        element.type === "text"
+          ? paths.setTextOnElement(element, "Replaced")
+          : element,
+    );
+    const group = updated.ui?.components?.[0]?.elements?.[0];
+    expect(group?.type).toBe("group");
+    if (group?.type === "group") {
+      const child = group.children[0];
+      expect(child.type).toBe("text");
+      if (child.type === "text") {
+        expect(child.runs).toEqual([
+          { text: "Replaced", font: { size: 12, bold: true } },
+        ]);
+      }
+    }
+    // The original slide was not mutated.
+    const originalGroup = slide.ui?.components?.[0]?.elements?.[0];
+    if (originalGroup?.type === "group") {
+      const originalChild = originalGroup.children[0];
+      if (originalChild.type === "text") {
+        expect(originalChild.runs?.[0]).toEqual({
+          text: "Nested",
+          font: { size: 12, bold: true },
+        });
+      }
+    }
+  });
+
+  test("degrades a LaTeX first run to the element font when written", async () => {
+    const paths = await import(
+      "../../app/(app)/tools/presentation/[id]/edit/_components/elementPath"
+    );
+    const element = {
+      type: "text" as const,
+      name: "formula",
+      size: { width: 100, height: 20 },
+      runs: [{ type: "latex" as const, latex: "x^2", font: { size: 14 } }],
+      font: { family: "Tinos", size: 18 },
+    };
+    expect(paths.textOfTextElement(element)).toBe("x^2");
+    const written = paths.setTextOnElement(element, "x squared");
+    expect(written.runs).toEqual([
+      { text: "x squared", font: { size: 14 } },
+    ]);
+  });
+
+  test("reads and replaces runs immutably", async () => {
+    const paths = await import(
+      "../../app/(app)/tools/presentation/[id]/edit/_components/elementPath"
+    );
+    const element = {
+      type: "text" as const,
+      name: "runs",
+      runs: [{ text: "a", font: { size: 10 } }],
+    };
+    expect(paths.runsOfTextElement(element)).toEqual([
+      { text: "a", font: { size: 10 } },
+    ]);
+
+    const nextRuns = [{ text: "b" }, { text: " c", font: { bold: true } }];
+    const next = paths.setRunsOnElement(element, nextRuns);
+    expect(next.runs).toEqual(nextRuns);
+    expect(next.name).toBe("runs");
+    // The element was not mutated.
+    expect(element.runs).toEqual([{ text: "a", font: { size: 10 } }]);
+    expect(
+      paths.runsOfTextElement({ ...element, runs: undefined as never }),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The C4 review fix's pure half: the structural acknowledgement merge. A
+ * full-array save rotates every slide id across the network, so edits landing
+ * while it is in flight must be mapped onto the fresh ids and re-saved, never
+ * replaced by the pre-await snapshot; a newer structural edit wins outright.
+ */
+test.describe("structural ack merge (pure)", () => {
+  function slideFixture(id: string, text: string, index: number): DeckSlide {
+    return {
+      id,
+      presentation: "00000000-0000-4000-8000-000000000000",
+      layout_group: "general",
+      layout: "title_intro",
+      index,
+      content: { text },
+      properties: null,
+      ui: null,
+      speaker_note: null,
+    };
+  }
+
+  test("re-applies edits made during the save onto the fresh ids", async () => {
+    const { mergeStructuralAck } = await import(
+      "../../app/(app)/tools/presentation/[id]/edit/_components/structuralMerge"
+    );
+    const snapshot = [
+      slideFixture("old-0", "One", 0),
+      slideFixture("old-1", "Two", 1),
+    ];
+    const acknowledged = [
+      slideFixture("new-0", "One", 0),
+      slideFixture("new-1", "Two", 1),
+    ];
+    const edited = { ...snapshot[0], content: { text: "One edited" } };
+    const latest = [edited, snapshot[1]];
+
+    const merge = mergeStructuralAck({ snapshot, acknowledged, latest });
+
+    expect(merge.diverged).toBe(false);
+    expect(merge.idMap.get("old-0")).toBe("new-0");
+    expect(merge.idMap.get("old-1")).toBe("new-1");
+    expect(merge.resaveSlideIds).toEqual(["new-0"]);
+    expect(merge.slides[0].id).toBe("new-0");
+    expect(merge.slides[0].content).toEqual({ text: "One edited" });
+    expect(merge.slides[1]).toBe(acknowledged[1]);
+
+    // With no edits during the save the acknowledged slides are adopted as-is.
+    const clean = mergeStructuralAck({
+      snapshot,
+      acknowledged,
+      latest: snapshot,
+    });
+    expect(clean.diverged).toBe(false);
+    expect(clean.slides[0]).toBe(acknowledged[0]);
+    expect(clean.slides[1]).toBe(acknowledged[1]);
+    expect(clean.resaveSlideIds).toEqual([]);
+  });
+
+  test("keeps the newer local state when a structural edit landed during the save", async () => {
+    const { mergeStructuralAck } = await import(
+      "../../app/(app)/tools/presentation/[id]/edit/_components/structuralMerge"
+    );
+    const snapshot = [
+      slideFixture("old-0", "One", 0),
+      slideFixture("old-1", "Two", 1),
+    ];
+    const acknowledged = [
+      slideFixture("new-0", "One", 0),
+      slideFixture("new-1", "Two", 1),
+    ];
+    // The user reordered (and appended) while the save was in flight.
+    const latest = [
+      { ...snapshot[1], index: 0 },
+      { ...snapshot[0], index: 1 },
+      slideFixture("old-2", "Three", 2),
+    ];
+
+    const merge = mergeStructuralAck({ snapshot, acknowledged, latest });
+
+    expect(merge.diverged).toBe(true);
+    expect(merge.slides).toBe(latest);
+    expect(merge.resaveSlideIds).toEqual([]);
+  });
+
+  test("re-queues pending slide targets onto the fresh ids after the ack", async () => {
+    const { rebasePendingAfterAck } = await import(
+      "../../app/(app)/tools/presentation/[id]/edit/_components/useDeckAutosave"
+    );
+    type Entry = {
+      target:
+        | { kind: "slide"; slideId: string }
+        | { kind: "meta" }
+        | { kind: "structure" };
+      revision: number;
+    };
+    const pending = new Map<string, Entry>([
+      [
+        "slide:old-0",
+        { target: { kind: "slide", slideId: "old-0" }, revision: 0 },
+      ],
+      ["meta", { target: { kind: "meta" }, revision: 0 }],
+    ]);
+
+    const rebased = rebasePendingAfterAck(pending, {
+      idMap: new Map([["old-0", "new-0"]]),
+      dropSlideTargets: false,
+      revision: 4,
+    });
+    expect([...rebased.keys()].sort()).toEqual(["meta", "slide:new-0"]);
+    expect(rebased.get("slide:new-0")?.target).toEqual({
+      kind: "slide",
+      slideId: "new-0",
+    });
+    expect(rebased.get("slide:new-0")?.revision).toBe(4);
+    expect(rebased.get("meta")?.revision).toBe(4);
+
+    // A diverged ack drops the per-slide writes (superseded by the newer
+    // full-array save); metadata and structural targets always survive.
+    const divergedPending = new Map<string, Entry>([
+      ...pending,
+      ["structure", { target: { kind: "structure" }, revision: 0 }],
+    ]);
+    const diverged = rebasePendingAfterAck(divergedPending, {
+      idMap: new Map(),
+      dropSlideTargets: true,
+      revision: 5,
+    });
+    expect([...diverged.keys()].sort()).toEqual(["meta", "structure"]);
+    expect(diverged.get("meta")?.revision).toBe(5);
+    expect(diverged.get("structure")?.revision).toBe(5);
+  });
+});
+
+/**
+ * The C4 review fix's theme-picker contract, exercised purely: the stored
+ * deck theme, the template's own theme and every engine custom theme are
+ * offered, and a custom entry travels back as the exact object reference
+ * (verbatim, never rebuilt).
+ */
+test.describe("theme choices (pure)", () => {
+  test("offers stored, template and verbatim custom themes", async () => {
+    const { buildThemeChoices, themeChoiceValue, themeForChoice } =
+      await import(
+        "../../app/(app)/tools/presentation/[id]/edit/_components/themeChoices"
+      );
+    const stored = {
+      colors: { primary: "#111111" },
+      fonts: { textFont: { name: "Stored", url: "https://example.test/s.woff2" } },
+    } as unknown as DeckTheme;
+    const template = {
+      colors: { primary: "#222222" },
+      fonts: { textFont: { name: "Templ", url: "https://example.test/t.woff2" } },
+    } as unknown as DeckTheme;
+    const customTheme = {
+      id: "theme-1",
+      name: "Brand",
+      description: "d",
+      user: "local",
+      data: {
+        colors: { primary: "#333333" },
+        fonts: { textFont: { name: "Brand", url: "https://example.test/b.woff2" } },
+      },
+    };
+    const custom = { id: "theme-1", name: "Brand", theme: customTheme };
+    const unnamed = { id: "theme-2", name: null, theme: { id: "theme-2" } };
+    const input = {
+      storedTheme: stored,
+      templateTheme: template,
+      templateName: "Verdant",
+      customThemes: [custom, unnamed],
+    };
+
+    const choices = buildThemeChoices(input);
+    expect(choices.map((choice) => choice.value)).toEqual([
+      "deck",
+      "template",
+      "custom:theme-1",
+      "custom:theme-2",
+    ]);
+    expect(choices.map((choice) => choice.label)).toEqual([
+      "Deck theme (stored)",
+      "Template theme (Verdant)",
+      "Brand",
+      "Custom theme 2",
+    ]);
+
+    // Verbatim: the exact engine entry is the theme value for a custom choice.
+    expect(themeForChoice("custom:theme-1", input)).toBe(customTheme);
+    expect(themeForChoice("template", input)).toBe(template);
+    expect(themeForChoice("deck", input)).toBe(stored);
+
+    // Which choice the applied object corresponds to, by identity.
+    expect(themeChoiceValue(customTheme, input)).toBe("custom:theme-1");
+    expect(themeChoiceValue(template, input)).toBe("template");
+    expect(themeChoiceValue(stored, input)).toBe("deck");
+
+    // An identical stored/template theme collapses the template option.
+    const collapsed = buildThemeChoices({
+      ...input,
+      templateTheme: stored,
+      customThemes: [],
+    });
+    expect(collapsed.map((choice) => choice.value)).toEqual(["deck"]);
+  });
+});
+
+/**
+ * The C4 review fix's custom-theme read, against an in-process stub: entries
+ * are returned verbatim (the whole response entry is the theme value), an
+ * entry without an id is dropped, and an unconfigured service refuses before
+ * any call — the adapter's existing guard vocabulary.
+ */
+test.describe("custom theme read (in-process stub)", () => {
+  test("returns entries verbatim and refuses an unconfigured service", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedKey = process.env.PRESENTON_API_KEY;
+
+    const entry = {
+      id: "theme-1",
+      name: "Brand",
+      description: "A custom theme",
+      user: "local",
+      logo: null,
+      logo_url: null,
+      company_name: null,
+      data: { colors: { primary: "#333333" }, fonts: {} },
+    };
+    const server = createServer((request, response) => {
+      if (request.method === "GET" && request.url === "/api/v1/ppt/themes/all") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify([entry, { name: "no id here" }]));
+        return;
+      }
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+    });
+
+    try {
+      process.env.PRESENTON_URL = "";
+      process.env.PRESENTON_API_KEY = "";
+      await expect(adapter.listPresentationThemes()).rejects.toMatchObject({
+        code: "not-configured",
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      const port =
+        typeof address === "object" && address !== null ? address.port : 0;
+      expect(port).toBeGreaterThan(0);
+      process.env.PRESENTON_URL = `http://127.0.0.1:${port}`;
+      process.env.PRESENTON_API_KEY = "";
+
+      const themes = await adapter.listPresentationThemes();
+      expect(themes).toHaveLength(1);
+      expect(themes[0].id).toBe("theme-1");
+      expect(themes[0].name).toBe("Brand");
+      // Verbatim: the whole response entry is the theme value.
+      expect(themes[0].theme).toEqual(entry);
+    } finally {
+      if (savedUrl === undefined) {
+        delete process.env.PRESENTON_URL;
+      } else {
+        process.env.PRESENTON_URL = savedUrl;
+      }
+      if (savedKey === undefined) {
+        delete process.env.PRESENTON_API_KEY;
+      } else {
+        process.env.PRESENTON_API_KEY = savedKey;
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+/**
+ * The C4 adapter addition, exercised purely: a structural replace may carry
+ * `n_slides` (the engine's route stores it but never recomputes it after a
+ * slide re-insert), and the count must match the array.
+ */
+test.describe("structural replace body (pure)", () => {
+  test("carries n_slides when given and refuses a mismatch", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const deckId = randomUUID();
+    const theme: DeckTheme = {
+      colors: {
+        primary: "#111111",
+        background: "#ffffff",
+        card: "#ffffff",
+        stroke: "#000000",
+        background_text: "#111111",
+        primary_text: "#ffffff",
+        graph_0: "#111111",
+        graph_1: "#222222",
+        graph_2: "#333333",
+        graph_3: "#444444",
+        graph_4: "#555555",
+        graph_5: "#666666",
+        graph_6: "#777777",
+        graph_7: "#888888",
+        graph_8: "#999999",
+        graph_9: "#aaaaaa",
+      },
+      fonts: { textFont: { name: "Inter", url: "https://example.test/inter.woff2" } },
+    };
+    const slide = (index: number): DeckSlide => ({
+      id: randomUUID(),
+      presentation: deckId,
+      layout_group: "general",
+      layout: "title_intro",
+      index,
+      content: {},
+      properties: null,
+      ui: null,
+      speaker_note: null,
+    });
+
+    const body = adapter.buildSlidesReplaceBody({
+      id: deckId,
+      theme,
+      slides: [slide(0), slide(1)],
+      nSlides: 2,
+    });
+    expect(body.n_slides).toBe(2);
+    expect(body.theme).toBe(theme);
+
+    const without = adapter.buildSlidesReplaceBody({
+      id: deckId,
+      theme,
+      slides: [slide(0)],
+    });
+    expect("n_slides" in without).toBe(false);
+
+    expect(() =>
+      adapter.buildSlidesReplaceBody({
+        id: deckId,
+        theme,
+        slides: [slide(0)],
+        nSlides: 2,
+      }),
+    ).toThrow(/Invalid slide count/);
+  });
+});
+
+/**
+ * The structural gate's pure half. Since the flag ships on
+ * (`PRESENTON_STRUCTURAL_EDITS=1`), the editor's structural controls render
+ * enabled (asserted in the live case above) and the live reorder → reload
+ * persists proof is Task D1's scope. No fake reorder test is written.
+ *
+ * This case pins the off branch by clearing the flag in-process — the state
+ * the gate exists for: `isStructuralEditingEnabled` (the same function the
+ * edit page calls server-side) is off unless `PRESENTON_STRUCTURAL_EDITS=1`,
+ * and with it off the adapter refuses the full-array structural write before
+ * any fetch — while the metadata write still goes out, so the refusal is the
+ * gate and not a blanket write refusal. The action-level refusal
+ * (`saveDeckAction`) is not callable outside a request, so this is its
+ * closest real proof.
+ */
+test.describe("structural editing gate (pure)", () => {
+  test("refuses the structural save while the flag is off, and only that save", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedFlag = process.env.PRESENTON_STRUCTURAL_EDITS;
+    // A dead loopback port: a write that actually goes out classifies as
+    // `unreachable`; the structural gate must answer `rejected` before it.
+    process.env.PRESENTON_URL = "http://127.0.0.1:9";
+    delete process.env.PRESENTON_STRUCTURAL_EDITS;
+
+    try {
+      expect(adapter.isStructuralEditingEnabled()).toBe(false);
+
+      const deckId = randomUUID();
+      const theme: DeckTheme = {
+        colors: {
+          primary: "#3b82f6",
+          background: "#ffffff",
+          card: "#f3f4f6",
+          stroke: "#d1d5db",
+          background_text: "#111827",
+          primary_text: "#ffffff",
+          graph_0: "#ef4444",
+          graph_1: "#f97316",
+          graph_2: "#eab308",
+          graph_3: "#22c55e",
+          graph_4: "#14b8a6",
+          graph_5: "#06b6d4",
+          graph_6: "#3b82f6",
+          graph_7: "#6366f1",
+          graph_8: "#8b5cf6",
+          graph_9: "#ec4899",
+        },
+        fonts: {
+          textFont: { name: "Inter", url: "https://example.test/inter.woff2" },
+        },
+      };
+      const slide: DeckSlide = {
+        id: randomUUID(),
+        presentation: deckId,
+        layout_group: "general",
+        layout: "title_intro",
+        index: 0,
+        content: {},
+      };
+
+      await expect(
+        adapter.updatePresentation({ id: deckId, theme, slides: [slide] }),
+      ).rejects.toMatchObject({ code: "rejected" });
+
+      // The same adapter still attempts the metadata write: the refusal above
+      // is the structural gate, not every write being refused.
+      await expect(
+        adapter.updatePresentation({ id: deckId, theme }),
+      ).rejects.toMatchObject({ code: "unreachable" });
+    } finally {
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedFlag === undefined) delete process.env.PRESENTON_STRUCTURAL_EDITS;
+      else process.env.PRESENTON_STRUCTURAL_EDITS = savedFlag;
+    }
+  });
+});

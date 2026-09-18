@@ -394,6 +394,30 @@ export default defineConfig({
       },
     },
     {
+      // Task B1 — the native renderer's pure-helper spec (wire types,
+      // asset-path scan, element frames, infographic/run vocabulary). No
+      // engine, network or browser: it proves the data contracts directly.
+      // It runs after the presentation jobs pass like the other presentation
+      // work, and is the dependency every later viewer task's focused run
+      // starts from.
+      name: "qa-presentation-renderer",
+      testMatch: /presentations-renderer\.spec\.ts/,
+      timeout: 120_000,
+      dependencies: ["qa-presentation-jobs"],
+    },
+    {
+      // Task B4 — the live viewer UI (rail, present mode, asset proxy cases).
+      // Wired here (before B4 exists) so the project list is final: focused
+      // runs of later tasks never touch this config again.
+      name: "qa-presentation-ui",
+      testMatch: /presentations-ui\.spec\.ts/,
+      timeout: 240_000,
+      dependencies: ["qa-presentation-renderer"],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
+    },
+    {
       name: "chromium-authenticated",
       testMatch:
         /(authenticated|structure|fonts|tool-registry|integrations|rls-isolation|finish-setup|auth-guards|guest-browsing)\.spec\.ts/,
@@ -415,6 +439,7 @@ export default defineConfig({
         "qa-whatsapp-jobs",
         "qa-whatsapp-flow",
         "qa-presentation-jobs",
+        "qa-presentation-ui",
       ],
       use: {
         // Start every test already authenticated (real session obtained by
