@@ -612,67 +612,90 @@ export type Database = {
           created_at: string
           document_id: string | null
           error_message: string | null
+          export_error_message: string | null
+          export_status: string | null
+          exported_at: string | null
           format: string
           id: string
+          include_table_of_contents: boolean
+          include_title_slide: boolean
+          instructions: string | null
+          language: string | null
           n_slides: number | null
           presenton_presentation_id: string | null
           presenton_task_id: string | null
           prompt: string
           slides_done: number | null
           slides_total: number | null
-          source_document_id: string | null
+          source_document_ids: string[]
           status: string
           template: string
+          tone: string | null
           updated_at: string
           user_id: string
+          verbosity: string | null
+          web_search: boolean
         }
         Insert: {
           created_at?: string
           document_id?: string | null
           error_message?: string | null
+          export_error_message?: string | null
+          export_status?: string | null
+          exported_at?: string | null
           format?: string
           id?: string
+          include_table_of_contents?: boolean
+          include_title_slide?: boolean
+          instructions?: string | null
+          language?: string | null
           n_slides?: number | null
           presenton_presentation_id?: string | null
           presenton_task_id?: string | null
           prompt: string
           slides_done?: number | null
           slides_total?: number | null
-          source_document_id?: string | null
+          source_document_ids?: string[]
           status?: string
           template?: string
+          tone?: string | null
           updated_at?: string
           user_id: string
+          verbosity?: string | null
+          web_search?: boolean
         }
         Update: {
           created_at?: string
           document_id?: string | null
           error_message?: string | null
+          export_error_message?: string | null
+          export_status?: string | null
+          exported_at?: string | null
           format?: string
           id?: string
+          include_table_of_contents?: boolean
+          include_title_slide?: boolean
+          instructions?: string | null
+          language?: string | null
           n_slides?: number | null
           presenton_presentation_id?: string | null
           presenton_task_id?: string | null
           prompt?: string
           slides_done?: number | null
           slides_total?: number | null
-          source_document_id?: string | null
+          source_document_ids?: string[]
           status?: string
           template?: string
+          tone?: string | null
           updated_at?: string
           user_id?: string
+          verbosity?: string | null
+          web_search?: boolean
         }
         Relationships: [
           {
             foreignKeyName: "presentations_document_id_fkey"
             columns: ["document_id"]
-            isOneToOne: false
-            referencedRelation: "documents"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "presentations_source_document_id_fkey"
-            columns: ["source_document_id"]
             isOneToOne: false
             referencedRelation: "documents"
             referencedColumns: ["id"]

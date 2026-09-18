@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "motion/react";
-import { Presentation as PresentationIcon } from "lucide-react";
+import { ChevronDown, Presentation as PresentationIcon } from "lucide-react";
 import { useSignInPrompt } from "@/components/auth/SignInPromptProvider";
 import { SignInAction } from "@/components/auth/SignInAction";
 import { EASE_OUT } from "@/components/motion/presets";
 import { motionIndex } from "@/components/motion/stagger";
+import { Collapsible } from "@/components/motion/Collapsible";
 import { MotionNotice } from "@/components/motion/MotionNotice";
 import {
   MotionRevealGroup,
@@ -26,7 +27,12 @@ import { previewDocumentAction } from "@/lib/data/documentActions";
 import { PRESENTATION_SAVE_ERROR } from "@/lib/data/presentationErrors";
 import {
   isPresentationInFlight,
+  PRESENTATION_INSTRUCTIONS_MAX_LENGTH,
+  PRESENTATION_LANGUAGE_OPTIONS,
+  PRESENTATION_MAX_SOURCES,
   PRESENTATION_PROMPT_MAX_LENGTH,
+  PRESENTATION_TONES,
+  PRESENTATION_VERBOSITIES,
   type PresentationItem,
 } from "@/lib/data/presentationValues";
 
@@ -48,6 +54,51 @@ const FORMAT_OPTIONS = [
   { value: "pdf", label: "PDF (.pdf)" },
 ];
 
+/* Advanced options are built from the A2 vocabulary, so the control can never
+   offer a value the parser rejects. Language keeps "Auto" as its UI word; the
+   submit maps it to null, which is the draft's "detect from the prompt". */
+const LANGUAGE_OPTIONS = PRESENTATION_LANGUAGE_OPTIONS.map((value) => ({
+  value,
+  label: value,
+}));
+
+const TONE_LABELS: Record<(typeof PRESENTATION_TONES)[number], string> = {
+  default: "Default",
+  casual: "Casual",
+  professional: "Professional",
+  funny: "Funny",
+  educational: "Educational",
+  sales_pitch: "Sales pitch",
+};
+
+const TONE_OPTIONS = PRESENTATION_TONES.map((value) => ({
+  value,
+  label: TONE_LABELS[value],
+}));
+
+const VERBOSITY_LABELS: Record<
+  (typeof PRESENTATION_VERBOSITIES)[number],
+  string
+> = {
+  concise: "Concise",
+  standard: "Standard",
+  "text-heavy": "Text-heavy",
+};
+
+const VERBOSITY_OPTIONS = PRESENTATION_VERBOSITIES.map((value) => ({
+  value,
+  label: VERBOSITY_LABELS[value],
+}));
+
+/** The repo's `aria-pressed` pill (documents filters, calendar views). */
+function togglePillClasses(pressed: boolean): string {
+  return `min-w-0 rounded-pill border px-3 py-2 font-heading text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
+    pressed
+      ? "border-transparent bg-card font-semibold text-foreground shadow-subtle"
+      : "border-border text-muted-foreground hover:border-foreground hover:text-foreground"
+  }`;
+}
+
 type PresentationWorkspaceProps = {
   guest: boolean;
   /** `PRESENTON_URL` is set in this environment (GATE 1 posture). */
@@ -60,6 +111,8 @@ type PresentationWorkspaceProps = {
   sourceDocuments: { id: string; name: string }[];
   /** Phase-2 editor link for the latest presentation, when it exists. */
   editHref: string | null;
+  /** Native viewer link (B4) for the latest presentation, when it exists. */
+  viewerHref: string | null;
 };
 
 /**
@@ -68,9 +121,13 @@ type PresentationWorkspaceProps = {
  * Two movements: the request form (create a row + queue the
  * `presentation.generate` job through a Server Action) and the run panel —
  * real progress mirrored from the async task by the worker, then the result
- * card with download + the link into /documents. There is no fake deck: in an
- * environment without a configured Presenton service the page renders the
- * honest blocked state and the form never appears.
+ * card with download + the link into /documents. The form carries the whole
+ * request draft (A2): a multi-select of the caller's PDF/DOCX documents, and
+ * an advanced group whose controls map 1:1 onto the parser's vocabulary
+ * ("Auto" language → null, instructions trimmed-or-null, two include
+ * toggles). There is no fake deck: in an environment without a configured
+ * Presenton service the page renders the honest blocked state and the form
+ * never appears.
  *
  * Async progress uses the documents hub's proven mechanism — while a request
  * is queued/running the server page is re-rendered on a bounded interval
@@ -90,6 +147,7 @@ export function PresentationWorkspace({
   templates,
   sourceDocuments,
   editHref,
+  viewerHref,
 }: PresentationWorkspaceProps) {
   const { requireAuth } = useSignInPrompt();
   const router = useRouter();
@@ -99,7 +157,15 @@ export function PresentationWorkspace({
   const [template, setTemplate] = useState(templates[0]?.id ?? "general");
   const [nSlides, setNSlides] = useState("auto");
   const [format, setFormat] = useState("pptx");
-  const [sourceDocumentId, setSourceDocumentId] = useState("");
+  const [sourceIds, setSourceIds] = useState<string[]>([]);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [language, setLanguage] = useState("Auto");
+  const [tone, setTone] = useState("default");
+  const [verbosity, setVerbosity] = useState("standard");
+  const [instructions, setInstructions] = useState("");
+  const [includeTableOfContents, setIncludeTableOfContents] = useState(false);
+  const [includeTitleSlide, setIncludeTitleSlide] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -108,6 +174,8 @@ export function PresentationWorkspace({
   const inFlight = presentation
     ? isPresentationInFlight(presentation.statusValue)
     : false;
+  /** At the cap, unselected source rows go disabled — checked ones stay live. */
+  const atSourceCap = sourceIds.length >= PRESENTATION_MAX_SOURCES;
 
   useEffect(() => {
     if (guest || !inFlight) return;
@@ -123,16 +191,15 @@ export function PresentationWorkspace({
     [templates],
   );
 
-  const sourceOptions = useMemo(
-    () => [
-      { value: "", label: "None" },
-      ...sourceDocuments.map((document) => ({
-        value: document.id,
-        label: document.name,
-      })),
-    ],
-    [sourceDocuments],
-  );
+  function toggleSource(id: string) {
+    setSourceIds((current) => {
+      if (current.includes(id)) {
+        return current.filter((item) => item !== id);
+      }
+      if (current.length >= PRESENTATION_MAX_SOURCES) return current;
+      return [...current, id];
+    });
+  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -142,6 +209,8 @@ export function PresentationWorkspace({
     setDownloadError(null);
     setSubmitting(true);
 
+    const trimmedInstructions = instructions.trim();
+
     let result: Awaited<ReturnType<typeof createPresentationAction>>;
     try {
       result = await createPresentationAction({
@@ -149,7 +218,13 @@ export function PresentationWorkspace({
         template,
         nSlides: nSlides === "auto" ? null : Number(nSlides),
         format,
-        sourceDocumentId: sourceDocumentId === "" ? null : sourceDocumentId,
+        language: language === "Auto" ? null : language,
+        instructions: trimmedInstructions === "" ? null : trimmedInstructions,
+        tone,
+        verbosity,
+        includeTableOfContents,
+        includeTitleSlide,
+        sourceDocumentIds: sourceIds,
       });
     } catch {
       result = { error: PRESENTATION_SAVE_ERROR, presentationId: null };
@@ -286,36 +361,217 @@ export function PresentationWorkspace({
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="presentation-source"
-              className="text-label-sm font-medium text-foreground"
+          {/* Sources: the caller's PDF/DOCX documents, multi-select. Every
+              document is listed; the cap lives on selection only — at 8
+              selected the unchecked rows disable rather than disappear, so
+              the list never reflows under the pointer and a ticked source can
+              always be unticked. */}
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              aria-expanded={sourcesOpen}
+              aria-controls="presentation-sources-panel"
+              onClick={() => setSourcesOpen((open) => !open)}
             >
-              Source document <span className="font-normal">(optional)</span>
-            </label>
-            <Select
-              id="presentation-source"
-              value={sourceDocumentId}
-              onChange={setSourceDocumentId}
-              options={sourceOptions}
-              aria-label="Source document"
-            />
-            <p className="text-label-sm text-muted-foreground">
-              {sourceDocuments.length > 0 ? (
-                "Use one of your PDF or DOCX documents as the material."
-              ) : (
-                <>
-                  Upload a PDF or DOCX in{" "}
-                  <Link
-                    href="/documents"
-                    className="underline underline-offset-2 hover:text-foreground"
+              <span className="flex w-full min-w-0 items-center justify-between gap-3">
+                <span className="min-w-0 truncate">
+                  Sources{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (optional)
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span className="font-mono text-label-caps text-muted-foreground">
+                    {sourceIds.length}/{PRESENTATION_MAX_SOURCES}
+                  </span>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`icon-turn size-4${sourcesOpen ? " rotate-180" : ""}`}
+                  />
+                </span>
+              </span>
+            </Button>
+            <Collapsible
+              open={sourcesOpen}
+              variant="scale"
+              id="presentation-sources-panel"
+            >
+              <div className="mt-3 flex flex-col gap-1 rounded-card border border-border bg-glass-subtle p-2">
+                {sourceDocuments.length === 0 ? (
+                  <p className="px-2 py-1.5 text-label-sm text-muted-foreground">
+                    Upload a PDF or DOCX in{" "}
+                    <Link
+                      href="/documents"
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      Documents
+                    </Link>{" "}
+                    to use one as source material.
+                  </p>
+                ) : (
+                  <fieldset className="flex min-w-0 flex-col border-0 p-0">
+                    <legend className="sr-only">Source documents</legend>
+                    {sourceDocuments.map((document) => {
+                      const checked = sourceIds.includes(document.id);
+                      const disabled = !checked && atSourceCap;
+                      return (
+                        <label
+                          key={document.id}
+                          className={`flex min-w-0 items-center gap-2.5 rounded-base px-2 py-2 text-label-sm transition-colors ${
+                            disabled
+                              ? "cursor-not-allowed text-muted-foreground/50"
+                              : "cursor-pointer text-foreground hover:bg-muted/50"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => toggleSource(document.id)}
+                            className="size-4 shrink-0 rounded-xs border-border accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+                          />
+                          <span className="min-w-0 truncate">
+                            {document.name}
+                          </span>
+                        </label>
+                      );
+                    })}
+                    {atSourceCap ? (
+                      <p className="px-2 pt-1.5 text-label-sm text-muted-foreground">
+                        Up to {PRESENTATION_MAX_SOURCES} documents per deck.
+                      </p>
+                    ) : null}
+                  </fieldset>
+                )}
+              </div>
+            </Collapsible>
+          </div>
+
+          {/* Advanced settings. Every control maps 1:1 into the draft: the
+              vocabularies come from A2, Auto becomes null (the parser's "no
+              explicit language"), instructions are trimmed-or-null, and the
+              two extras are the repo's aria-pressed toggles — title slide on
+              by default, matching the column default and today's decks. */}
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              aria-expanded={advancedOpen}
+              aria-controls="presentation-advanced-panel"
+              onClick={() => setAdvancedOpen((open) => !open)}
+            >
+              <span className="flex w-full min-w-0 items-center justify-between gap-3">
+                <span>Advanced settings</span>
+                <ChevronDown
+                  aria-hidden="true"
+                  className={`icon-turn size-4${advancedOpen ? " rotate-180" : ""}`}
+                />
+              </span>
+            </Button>
+            <Collapsible
+              open={advancedOpen}
+              variant="scale"
+              id="presentation-advanced-panel"
+            >
+              <div className="mt-3 flex flex-col gap-4 rounded-card border border-border bg-glass-subtle p-4">
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    htmlFor="presentation-language"
+                    className="text-label-sm font-medium text-foreground"
                   >
-                    Documents
-                  </Link>{" "}
-                  to use one as source material.
-                </>
-              )}
-            </p>
+                    Language
+                  </label>
+                  <Select
+                    id="presentation-language"
+                    value={language}
+                    onChange={setLanguage}
+                    options={LANGUAGE_OPTIONS}
+                    aria-label="Presentation language"
+                  />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor="presentation-tone"
+                      className="text-label-sm font-medium text-foreground"
+                    >
+                      Tone
+                    </label>
+                    <Select
+                      id="presentation-tone"
+                      value={tone}
+                      onChange={setTone}
+                      options={TONE_OPTIONS}
+                      aria-label="Presentation tone"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor="presentation-verbosity"
+                      className="text-label-sm font-medium text-foreground"
+                    >
+                      Verbosity
+                    </label>
+                    <Select
+                      id="presentation-verbosity"
+                      value={verbosity}
+                      onChange={setVerbosity}
+                      options={VERBOSITY_OPTIONS}
+                      aria-label="Presentation verbosity"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    htmlFor="presentation-instructions"
+                    className="text-label-sm font-medium text-foreground"
+                  >
+                    Instructions{" "}
+                    <span className="font-normal">(optional)</span>
+                  </label>
+                  <Textarea
+                    id="presentation-instructions"
+                    name="instructions"
+                    rows={3}
+                    maxLength={PRESENTATION_INSTRUCTIONS_MAX_LENGTH}
+                    value={instructions}
+                    onChange={(event) => setInstructions(event.target.value)}
+                    placeholder="e.g. Keep the language practical, emphasise the exam-relevant parts, and close with a recap."
+                  />
+                  <p className="text-label-sm text-muted-foreground">
+                    Extra direction for the whole deck.
+                  </p>
+                </div>
+
+                <div
+                  role="group"
+                  aria-label="Deck extras"
+                  className="flex min-w-0 flex-wrap items-center gap-1.5"
+                >
+                  <button
+                    type="button"
+                    aria-pressed={includeTableOfContents}
+                    onClick={() => setIncludeTableOfContents((on) => !on)}
+                    className={togglePillClasses(includeTableOfContents)}
+                  >
+                    Include table of contents
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={includeTitleSlide}
+                    onClick={() => setIncludeTitleSlide((on) => !on)}
+                    className={togglePillClasses(includeTitleSlide)}
+                  >
+                    Include title slide
+                  </button>
+                </div>
+              </div>
+            </Collapsible>
           </div>
 
           {error !== null ? (
@@ -346,6 +602,7 @@ export function PresentationWorkspace({
         guest={guest}
         presentation={presentation}
         editHref={editHref}
+        viewerHref={viewerHref}
         downloadError={downloadError}
         reduced={reduced}
         onDownload={onDownload}
@@ -358,6 +615,7 @@ function RunPanel({
   guest,
   presentation,
   editHref,
+  viewerHref,
   downloadError,
   reduced,
   onDownload,
@@ -365,6 +623,7 @@ function RunPanel({
   guest: boolean;
   presentation: PresentationItem | null;
   editHref: string | null;
+  viewerHref: string | null;
   downloadError: string | null;
   reduced: boolean;
   onDownload: (documentId: string) => void;
@@ -510,6 +769,9 @@ function RunPanel({
           <div className="flex flex-wrap items-center gap-3">
             {document ? (
               <Button onClick={() => onDownload(document.id)}>Download</Button>
+            ) : null}
+            {viewerHref !== null ? (
+              <ButtonLink href={viewerHref}>View deck</ButtonLink>
             ) : null}
             {editHref !== null ? (
               <ButtonLink href={editHref} variant="outline">

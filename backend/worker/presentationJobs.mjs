@@ -15,8 +15,8 @@
  * 1. an existing Presenton task is resumed when one is recorded — a retry
  *    after a transport failure polls that task instead of paying for a second
  *    generation; a 404 clears it and starts fresh;
- * 2. otherwise the optional source document is read from the private bucket,
- *    ownership re-checked, and uploaded to Presenton;
+ * 2. otherwise every source document is read from the private bucket,
+ *    ownership re-checked per id, and uploaded to Presenton;
  * 3. the async task is started and polled (touch_job heartbeat; bounded by
  *    `PRESENTON_POLL_TIMEOUT_MS`, default 10 minutes) with real slide progress
  *    mirrored to the row on every change;
@@ -31,6 +31,11 @@
  * `queued` so the UI never claims "Generating…" while nothing is running).
  * Every user-facing string is sanitized copy from this module; the worker
  * logs ids/status only, never prompts, bytes or keys.
+ *
+ * Task C1 adds `exportPresentation` (spec §7.7): re-export an existing deck
+ * through the engine and replace its `documents` row/key in place (one deck →
+ * one document, no version history), settling the `export_status` mirror.
+ * Same failure policy, with export-specific copy.
  */
 import { startJobHeartbeat } from "./heartbeat.mjs";
 
@@ -68,6 +73,16 @@ export const PRESENTATION_COPY = {
     "Your document storage is full. Free up space in Documents and try again.",
   SOURCE_UNREADABLE:
     "The source document couldn't be read. Upload it again and retry.",
+  EXPORT_NOT_READY:
+    "This deck can't be exported yet. It hasn't finished generating.",
+  EXPORT_FAILED:
+    "The presentation service couldn't export this deck. Try again.",
+  EXPORT_TRANSIENT:
+    "We couldn't export this deck. We'll try again shortly.",
+  EXPORT_TERMINAL:
+    "We couldn't export this deck after several attempts. Try again.",
+  EXPORT_DOCUMENT_UNREADABLE:
+    "This deck's stored file couldn't be read, so it can't be replaced. Generate the deck again and retry.",
 };
 
 class PresentationFailure extends Error {
@@ -127,7 +142,13 @@ function authHeaders() {
   return headers;
 }
 
-async function presentonFetch(ctx, url, init, timeoutMs) {
+async function presentonFetch(
+  ctx,
+  url,
+  init,
+  timeoutMs,
+  transientMessage = PRESENTATION_COPY.TRANSIENT,
+) {
   let response;
   try {
     response = await fetch(url, {
@@ -138,19 +159,25 @@ async function presentonFetch(ctx, url, init, timeoutMs) {
     });
   } catch (error) {
     ctx.log(`presenton_unreachable ${error?.name ?? "error"}`);
-    throw transient();
+    throw transient(transientMessage);
   }
   return response;
 }
 
-/** An ok JSON answer, or the classified failure (5xx/429 retryable; 4xx not). */
-async function presentonJson(ctx, url, init = {}, timeoutMs = 30_000) {
-  const response = await presentonFetch(ctx, url, init, timeoutMs);
+/**
+ * An ok JSON answer, or the classified failure (5xx/429 retryable; 4xx not).
+ * `copy` lets a flow answer with its own words (the export mirror uses export
+ * copy); omitted, it keeps the generation copy every original caller expects.
+ */
+async function presentonJson(ctx, url, init = {}, timeoutMs = 30_000, copy = {}) {
+  const response = await presentonFetch(ctx, url, init, timeoutMs, copy.transient);
   if (!response.ok) {
     ctx.log(`presenton_http status=${response.status}`);
-    if (response.status >= 500 || response.status === 429) throw transient();
+    if (response.status >= 500 || response.status === 429) {
+      throw transient(copy.transient);
+    }
     throw permanent(
-      PRESENTATION_COPY.SERVICE_FAILED,
+      copy.permanent ?? PRESENTATION_COPY.SERVICE_FAILED,
       response.status === 404 ? "not-found" : "rejected",
     );
   }
@@ -161,9 +188,10 @@ async function loadPresentation(ctx, presentationId) {
   const { data, error } = await ctx.client
     .from("presentations")
     .select(
-      "id, user_id, prompt, template, n_slides, format, source_document_id, " +
-        "document_id, presenton_task_id, presenton_presentation_id, status, " +
-        "slides_done, slides_total",
+      "id, user_id, prompt, template, n_slides, format, language, instructions, " +
+        "tone, verbosity, include_table_of_contents, include_title_slide, " +
+        "source_document_ids, document_id, presenton_task_id, " +
+        "presenton_presentation_id, status, slides_done, slides_total",
     )
     .eq("id", presentationId)
     .maybeSingle();
@@ -307,12 +335,18 @@ async function pollUntilDone(ctx, row, taskId, state, initialTask = null) {
   }
 }
 
-/** The source document, read from the private bucket and re-uploaded to Presenton. */
-async function uploadSourceDocument(ctx, row) {
+/**
+ * Read one source document from the private bucket and re-upload it to
+ * Presenton, returning the service-side paths. `startGeneration` walks every
+ * id on the row; a document that is missing, not owned, outside the caller's
+ * storage folder or answered 4xx by the upload route is permanently
+ * unreadable (a 5xx/429 answer stays retryable).
+ */
+async function uploadSourceDocument(ctx, row, sourceDocumentId) {
   const { data: document, error } = await ctx.client
     .from("documents")
     .select("id, user_id, name, storage_path, mime_type")
-    .eq("id", row.source_document_id)
+    .eq("id", sourceDocumentId)
     .maybeSingle();
   if (error) throw transient();
 
@@ -349,7 +383,7 @@ async function uploadSourceDocument(ctx, row) {
   if (!response.ok) {
     ctx.log(`presenton_upload_http status=${response.status}`);
     if (response.status >= 500 || response.status === 429) throw transient();
-    throw permanent(PRESENTATION_COPY.SERVICE_FAILED);
+    throw permanent(PRESENTATION_COPY.SOURCE_UNREADABLE);
   }
 
   const paths = await response.json();
@@ -359,18 +393,46 @@ async function uploadSourceDocument(ctx, row) {
   return paths;
 }
 
-/** Start the async generation and persist its task id. */
+/** A non-empty trimmed string, or null when the row's value is absent/blank. */
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+/**
+ * Start the async generation and persist its task id.
+ *
+ * The body mirrors the adapter's `buildGenerationRequestBody`
+ * (`frontend/lib/integrations/presenton.ts`): both booleans are always sent —
+ * Presenton's own defaults differ from the UniPilot request defaults — while
+ * an absent optional is omitted, never sent as null. Every source id is
+ * uploaded first and the returned paths are concatenated into `files`.
+ */
 async function startGeneration(ctx, row) {
   const payload = {
     content: row.prompt,
     template: row.template,
     export_as: row.format,
+    include_table_of_contents: row.include_table_of_contents === true,
+    include_title_slide: row.include_title_slide !== false,
   };
   if (Number.isInteger(row.n_slides)) payload.n_slides = row.n_slides;
+  const language = nonEmpty(row.language);
+  if (language !== null) payload.language = language;
+  const instructions = nonEmpty(row.instructions);
+  if (instructions !== null) payload.instructions = instructions;
+  const tone = nonEmpty(row.tone);
+  if (tone !== null) payload.tone = tone;
+  const verbosity = nonEmpty(row.verbosity);
+  if (verbosity !== null) payload.verbosity = verbosity;
 
-  if (row.source_document_id !== null) {
-    payload.files = await uploadSourceDocument(ctx, row);
+  const sourceIds = Array.isArray(row.source_document_ids)
+    ? row.source_document_ids
+    : [];
+  const files = [];
+  for (const sourceDocumentId of sourceIds) {
+    files.push(...(await uploadSourceDocument(ctx, row, sourceDocumentId)));
   }
+  if (files.length > 0) payload.files = files;
 
   const task = await presentonJson(
     ctx,
@@ -444,10 +506,18 @@ function exportFileName(remotePath, mimeType) {
   return `presentation.${mimeType === PDF_MIME ? "pdf" : "pptx"}`;
 }
 
-/** Download the export and store it as a `documents` row + bucket object. */
-async function storeExport(ctx, row, task) {
-  const remotePath =
-    typeof task.data?.path === "string" ? task.data.path : "";
+/**
+ * Download one engine export and apply the existing guards: the path must be
+ * app-relative under `/app_data/`, the bytes non-empty, ≤ 25 MiB, and the MIME
+ * derived from the extension. Shared by generation (first store) and the
+ * re-export (in-place replace); `transientMessage` lets the caller answer
+ * transport failures in its own words.
+ */
+async function downloadExport(
+  ctx,
+  remotePath,
+  transientMessage = PRESENTATION_COPY.TRANSIENT,
+) {
   if (!remotePath.startsWith("/app_data/") || remotePath.includes("..")) {
     throw permanent(PRESENTATION_COPY.EXPORT_MISSING);
   }
@@ -457,10 +527,13 @@ async function storeExport(ctx, row, task) {
     `${presentonBase()}${remotePath}`,
     { method: "GET" },
     120_000,
+    transientMessage,
   );
   if (!response.ok) {
     ctx.log(`presenton_export_http status=${response.status}`);
-    if (response.status >= 500 || response.status === 429) throw transient();
+    if (response.status >= 500 || response.status === 429) {
+      throw transient(transientMessage);
+    }
     throw permanent(PRESENTATION_COPY.EXPORT_MISSING);
   }
 
@@ -481,6 +554,15 @@ async function storeExport(ctx, row, task) {
   if (mimeType === null) {
     throw permanent(PRESENTATION_COPY.EXPORT_MISSING);
   }
+
+  return { buffer, mimeType };
+}
+
+/** Download the export and store it as a `documents` row + bucket object. */
+async function storeExport(ctx, row, task) {
+  const remotePath =
+    typeof task.data?.path === "string" ? task.data.path : "";
+  const { buffer, mimeType } = await downloadExport(ctx, remotePath);
 
   await assertQuota(ctx, row.user_id, buffer.byteLength);
 
@@ -627,6 +709,170 @@ export async function generatePresentation(payload, ctx) {
       // and a failed status write must not mask the original error.
       try {
         await updateRow(ctx, row.id, { status, error_message: message });
+      } catch {
+        // Ignored deliberately; the runner still reports the failure.
+      }
+    }
+    throw failure;
+  }
+}
+
+/**
+ * The export mirror's row read (Task C1): only what the re-export needs.
+ */
+async function loadExportRow(ctx, presentationId) {
+  const { data, error } = await ctx.client
+    .from("presentations")
+    .select(
+      "id, user_id, format, presenton_presentation_id, document_id, export_status",
+    )
+    .eq("id", presentationId)
+    .maybeSingle();
+  if (error) throw transient(PRESENTATION_COPY.EXPORT_TRANSIENT);
+  return data;
+}
+
+/**
+ * The deck document a re-export replaces. It must exist, belong to the row's
+ * owner, and sit under that owner's storage folder (the same guard
+ * `uploadSourceDocument` applies to sources). A missing or unowned document is
+ * permanent — re-running cannot conjure it, the deck must be regenerated.
+ */
+async function loadExportDocument(ctx, row) {
+  const { data, error } = await ctx.client
+    .from("documents")
+    .select("id, user_id, storage_path")
+    .eq("id", row.document_id)
+    .maybeSingle();
+  if (error) throw transient(PRESENTATION_COPY.EXPORT_TRANSIENT);
+
+  if (
+    data === null ||
+    data.user_id !== row.user_id ||
+    data.storage_path === null ||
+    !data.storage_path.startsWith(`${row.user_id}/`)
+  ) {
+    throw permanent(PRESENTATION_COPY.EXPORT_DOCUMENT_UNREADABLE);
+  }
+  return data;
+}
+
+/**
+ * Task C1 — the `presentation.export` handler (spec §7.7).
+ *
+ * Re-exports an existing deck through the engine and replaces the deck's
+ * document in place: same `documents` row, same bucket key, `upsert: true`.
+ * One deck → one document; no version history (D9). The `presentations` row's
+ * export mirror settles `running → succeeded | failed`, or back to `queued`
+ * while the runner retries — exactly `generatePresentation`'s contract:
+ *
+ * - permanent: not configured, missing deck ids, an unsafe/missing/oversized/
+ *   unknown-mime export, an unreadable or unowned document, a 4xx answer;
+ * - retryable: transport failures, 5xx/429 answers, and failed DB writes.
+ *
+ * The free-tier document count is deliberately not re-checked (this export
+ * replaces an existing document, it does not add one); the 25 MiB size guard
+ * still applies. Logs carry ids and status only.
+ */
+export async function exportPresentation(payload, ctx) {
+  const presentationId = readPresentationId(payload);
+  if (presentationId === null) {
+    throw permanent("Invalid presentation job payload.");
+  }
+
+  let row = null;
+  try {
+    row = await loadExportRow(ctx, presentationId);
+    if (row === null) {
+      ctx.log(`presentation=${presentationId} no longer exists; nothing to export`);
+      return;
+    }
+    if (presentonBase() === null) {
+      throw permanent(PRESENTATION_COPY.NOT_CONNECTED, "not-configured");
+    }
+    if (
+      row.document_id === null ||
+      typeof row.presenton_presentation_id !== "string" ||
+      row.presenton_presentation_id === ""
+    ) {
+      throw permanent(PRESENTATION_COPY.EXPORT_NOT_READY);
+    }
+
+    await updateRow(ctx, row.id, {
+      export_status: "running",
+      export_error_message: null,
+    });
+
+    const exported = await presentonJson(
+      ctx,
+      `${presentonBase()}/api/v1/ppt/presentation/${encodeURIComponent(row.presenton_presentation_id)}/export`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ export_as: row.format }),
+      },
+      120_000,
+      {
+        transient: PRESENTATION_COPY.EXPORT_TRANSIENT,
+        permanent: PRESENTATION_COPY.EXPORT_FAILED,
+      },
+    );
+
+    const remotePath = typeof exported?.path === "string" ? exported.path : "";
+    const { buffer, mimeType } = await downloadExport(
+      ctx,
+      remotePath,
+      PRESENTATION_COPY.EXPORT_TRANSIENT,
+    );
+
+    const document = await loadExportDocument(ctx, row);
+    const fileName = exportFileName(remotePath, mimeType);
+
+    const upload = await ctx.client.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(document.storage_path, buffer, {
+        contentType: mimeType,
+        upsert: true,
+      });
+    if (upload.error) throw transient(PRESENTATION_COPY.EXPORT_TRANSIENT);
+
+    const { error: updateError } = await ctx.client
+      .from("documents")
+      .update({
+        name: fileName,
+        size_bytes: buffer.byteLength,
+        mime_type: mimeType,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", document.id)
+      .eq("user_id", row.user_id);
+    if (updateError) throw transient(PRESENTATION_COPY.EXPORT_TRANSIENT);
+
+    await updateRow(ctx, row.id, {
+      export_status: "succeeded",
+      export_error_message: null,
+      exported_at: new Date().toISOString(),
+    });
+    ctx.log(`re-exported document=${document.id} for presentation=${row.id}`);
+  } catch (caught) {
+    const failure = classify(caught, ctx);
+    if (row !== null) {
+      const terminal =
+        failure.retryable === false || ctx.attempt >= ctx.maxAttempts;
+      const message = !failure.retryable
+        ? failure.message
+        : terminal
+          ? PRESENTATION_COPY.EXPORT_TERMINAL
+          : PRESENTATION_COPY.EXPORT_TRANSIENT;
+      const exportStatus =
+        failure.retryable && !terminal ? "queued" : "failed";
+      // Best effort: the runner's own failure record is what settles the job,
+      // and a failed mirror write must not mask the original error.
+      try {
+        await updateRow(ctx, row.id, {
+          export_status: exportStatus,
+          export_error_message: message,
+        });
       } catch {
         // Ignored deliberately; the runner still reports the failure.
       }

@@ -34,7 +34,7 @@ import {
  * parse of the embedded select.
  */
 const PRESENTATION_SELECT =
-  "id, prompt, template, n_slides, format, status, error_message, slides_done, slides_total, document_id, presenton_presentation_id, created_at, document:documents!presentations_document_id_fkey ( id, name, mime_type, size_bytes )";
+  "id, prompt, template, n_slides, format, status, error_message, slides_done, slides_total, document_id, presenton_presentation_id, created_at, export_status, export_error_message, exported_at, document:documents!presentations_document_id_fkey ( id, name, mime_type, size_bytes )";
 
 type PresentationQueryRow = PresentationRow & {
   document: PresentationDocumentRow | PresentationDocumentRow[] | null;
@@ -91,6 +91,37 @@ export async function getLatestPresentation(
   return result.data ? toItem(result.data as PresentationQueryRow, timeZone) : null;
 }
 
+/**
+ * Whether the owner has an export in flight that the mirror does not show yet
+ * (Task C4).
+ *
+ * The `export_status` mirror is worker-written (C1): between the editor's
+ * `requestExportAction` enqueue and the worker's first mirror write the row
+ * still reads null/old, so the editor would look idle although a real job is
+ * queued. This read consults the owner-visible `jobs` row itself (RLS
+ * `jobs_select_own`, select-only) instead of inventing a second writer for the
+ * mirror. A read failure answers `false` — the editor then falls back to the
+ * mirror's own state rather than claiming an export it cannot prove.
+ */
+export async function hasPendingPresentationExport(
+  userId: string,
+  presentationId: string,
+): Promise<boolean> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("jobs")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("kind", "presentation.export")
+    .in("status", ["queued", "running"])
+    .contains("payload", { presentationId })
+    .limit(1);
+
+  if (error) return false;
+  return (data ?? []).length > 0;
+}
+
 /** Creates the request row the worker will claim. Service role (no client write). */
 export async function insertPresentation(
   userId: string,
@@ -106,7 +137,13 @@ export async function insertPresentation(
       template: draft.template,
       n_slides: draft.nSlides,
       format: draft.format,
-      source_document_id: draft.sourceDocumentId,
+      language: draft.language,
+      instructions: draft.instructions,
+      tone: draft.tone,
+      verbosity: draft.verbosity,
+      include_table_of_contents: draft.includeTableOfContents,
+      include_title_slide: draft.includeTitleSlide,
+      source_document_ids: draft.sourceDocumentIds,
       status: "queued",
     })
     .select("id")

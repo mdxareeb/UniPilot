@@ -27,12 +27,61 @@ export type PresentationRow = Pick<
   | "document_id"
   | "presenton_presentation_id"
   | "created_at"
+  | "export_status"
+  | "export_error_message"
+  | "exported_at"
 >;
 
 export const PRESENTATION_PROMPT_MAX_LENGTH = 2_000;
 export const PRESENTATION_TEMPLATE_MAX_LENGTH = 120;
 export const PRESENTATION_MIN_SLIDES = 5;
 export const PRESENTATION_MAX_SLIDES = 30;
+export const PRESENTATION_MAX_SOURCES = 8;
+export const PRESENTATION_INSTRUCTIONS_MAX_LENGTH = 2_000;
+
+/** The stored language values; the UI adds "Auto", which maps to null. */
+export const PRESENTATION_LANGUAGE_VALUES = [
+  "Arabic",
+  "Bengali",
+  "Chinese (Simplified)",
+  "Dutch",
+  "English",
+  "French",
+  "German",
+  "Hindi",
+  "Indonesian",
+  "Italian",
+  "Japanese",
+  "Korean",
+  "Malay",
+  "Polish",
+  "Portuguese",
+  "Russian",
+  "Spanish",
+  "Swedish",
+  "Thai",
+  "Turkish",
+  "Ukrainian",
+  "Urdu",
+  "Vietnamese",
+] as const;
+export const PRESENTATION_LANGUAGE_OPTIONS = [
+  "Auto",
+  ...PRESENTATION_LANGUAGE_VALUES,
+] as const;
+export const PRESENTATION_TONES = [
+  "default",
+  "casual",
+  "professional",
+  "funny",
+  "educational",
+  "sales_pitch",
+] as const;
+export const PRESENTATION_VERBOSITIES = [
+  "concise",
+  "standard",
+  "text-heavy",
+] as const;
 
 export const PRESENTATION_STATUSES = [
   "queued",
@@ -41,6 +90,20 @@ export const PRESENTATION_STATUSES = [
   "failed",
 ] as const;
 export type PresentationStatusValue = (typeof PRESENTATION_STATUSES)[number];
+
+/**
+ * The export mirror's vocabulary (Task C1) — the same four states; null until
+ * an export has ever been requested. The UI treats `queued`/`running` as
+ * "exporting" and disables the export control.
+ */
+export const PRESENTATION_EXPORT_STATUSES = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+] as const;
+export type PresentationExportStatusValue =
+  (typeof PRESENTATION_EXPORT_STATUSES)[number];
 
 /** The schema's status vocabulary in the tool's words. */
 export const PRESENTATION_STATUS_LABELS: Record<PresentationStatusValue, string> = {
@@ -83,6 +146,12 @@ export type PresentationItem = {
   documentId?: string;
   /** The Presenton service's presentation id (Phase-2 editor link). */
   presentonPresentationId?: string;
+  /** The export mirror (Task C1) — absent until an export has been requested. */
+  exportStatus?: PresentationExportStatusValue;
+  /** Sanitized export failure copy; absent unless an export failed. */
+  exportErrorMessage?: string;
+  /** When the last successful export replaced the deck's document. */
+  exportedAt?: string;
   createdLabel: string;
 };
 
@@ -92,7 +161,13 @@ export type PresentationDraft = {
   template: string;
   nSlides: number | null;
   format: PresentationFormat;
-  sourceDocumentId: string | null;
+  language: string | null; // a PRESENTATION_LANGUAGE_VALUES entry, or null for Auto
+  instructions: string | null;
+  tone: (typeof PRESENTATION_TONES)[number] | null;
+  verbosity: (typeof PRESENTATION_VERBOSITIES)[number] | null;
+  includeTableOfContents: boolean;
+  includeTitleSlide: boolean;
+  sourceDocumentIds: string[];
 };
 
 const UUID_PATTERN =
@@ -104,6 +179,16 @@ export function isPresentationUuid(value: unknown): value is string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** True when `value` is one of the closed vocabulary's exact entries. */
+function isVocabularyValue<T extends readonly string[]>(
+  vocabulary: T,
+  value: unknown,
+): value is T[number] {
+  return (
+    typeof value === "string" && (vocabulary as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -147,14 +232,78 @@ export function parsePresentationRequest(
   const format = input.format === "pdf" ? "pdf" : input.format === "pptx" ? "pptx" : null;
   if (format === null) return null;
 
-  const rawSource = input.sourceDocumentId;
-  let sourceDocumentId: string | null = null;
-  if (rawSource !== null && rawSource !== undefined && rawSource !== "") {
-    if (!isPresentationUuid(rawSource)) return null;
-    sourceDocumentId = rawSource.trim();
+  const rawLanguage = input.language;
+  let language: string | null = null;
+  if (rawLanguage !== null && rawLanguage !== undefined) {
+    if (!isVocabularyValue(PRESENTATION_LANGUAGE_VALUES, rawLanguage)) {
+      return null;
+    }
+    language = rawLanguage;
   }
 
-  return { prompt, template, nSlides, format, sourceDocumentId };
+  const rawInstructions = input.instructions;
+  let instructions: string | null = null;
+  if (rawInstructions !== null && rawInstructions !== undefined) {
+    if (typeof rawInstructions !== "string") return null;
+    const trimmed = rawInstructions.trim();
+    if (trimmed !== "") {
+      if (trimmed.length > PRESENTATION_INSTRUCTIONS_MAX_LENGTH) return null;
+      instructions = trimmed;
+    }
+  }
+
+  const rawTone = input.tone;
+  let tone: PresentationDraft["tone"] = null;
+  if (rawTone !== null && rawTone !== undefined) {
+    if (!isVocabularyValue(PRESENTATION_TONES, rawTone)) return null;
+    tone = rawTone;
+  }
+
+  const rawVerbosity = input.verbosity;
+  let verbosity: PresentationDraft["verbosity"] = null;
+  if (rawVerbosity !== null && rawVerbosity !== undefined) {
+    if (!isVocabularyValue(PRESENTATION_VERBOSITIES, rawVerbosity)) return null;
+    verbosity = rawVerbosity;
+  }
+
+  // Contents defaults off; the title slide defaults on (the DB/service default
+  // is true), and only an explicit false turns it off.
+  const includeTableOfContents = input.includeTableOfContents === true;
+  const includeTitleSlide = input.includeTitleSlide !== false;
+
+  const rawSourceIds = input.sourceDocumentIds;
+  const sourceDocumentIds: string[] = [];
+  if (rawSourceIds !== null && rawSourceIds !== undefined) {
+    if (
+      !Array.isArray(rawSourceIds) ||
+      rawSourceIds.length > PRESENTATION_MAX_SOURCES
+    ) {
+      return null;
+    }
+    const seen = new Set<string>();
+    for (const rawId of rawSourceIds) {
+      if (!isPresentationUuid(rawId)) return null;
+      const id = rawId.trim();
+      const key = id.toLowerCase();
+      if (seen.has(key)) return null;
+      seen.add(key);
+      sourceDocumentIds.push(id);
+    }
+  }
+
+  return {
+    prompt,
+    template,
+    nSlides,
+    format,
+    language,
+    instructions,
+    tone,
+    verbosity,
+    includeTableOfContents,
+    includeTitleSlide,
+    sourceDocumentIds,
+  };
 }
 
 /** Which statuses mean "the worker is on it" (the page polls then). */
@@ -202,6 +351,18 @@ export function presentationRowToItem(
   if (row.presenton_presentation_id !== null) {
     item.presentonPresentationId = row.presenton_presentation_id;
   }
+  if (
+    row.export_status !== null &&
+    (PRESENTATION_EXPORT_STATUSES as readonly string[]).includes(
+      row.export_status,
+    )
+  ) {
+    item.exportStatus = row.export_status as PresentationExportStatusValue;
+  }
+  if (row.export_error_message !== null) {
+    item.exportErrorMessage = row.export_error_message;
+  }
+  if (row.exported_at !== null) item.exportedAt = row.exported_at;
 
   if (document !== null) {
     const info: PresentationDocumentInfo = {

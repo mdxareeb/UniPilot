@@ -39,6 +39,7 @@ export default async function PresentationToolPage() {
   let sourceDocuments: { id: string; name: string }[] = [];
   let templates: PresentonTemplate[] = [];
   let editHref: string | null = null;
+  let viewerHref: string | null = null;
 
   if (user) {
     const [latestPresentation, documents] = await Promise.all([
@@ -69,6 +70,9 @@ export default async function PresentationToolPage() {
       // The UniPilot wrapper route (chrome + embedded editor), never the raw
       // Presenton URL: the wrapper owns the frame, labels and fallbacks.
       editHref = `/tools/presentation/${latest.id}/edit`;
+      // The native viewer (B4) reads the stored engine deck; it owns its own
+      // not-ready/unavailable states, so the link only needs the row id.
+      viewerHref = `/tools/presentation/${latest.id}`;
     }
   }
 
@@ -89,6 +93,7 @@ export default async function PresentationToolPage() {
         }))}
         sourceDocuments={sourceDocuments}
         editHref={editHref}
+        viewerHref={viewerHref}
       />
     </Container>
   );

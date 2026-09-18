@@ -20,11 +20,13 @@
  * delegate to the Python service through `whatsappJobs.mjs`
  * (`whatsapp.connect`, `whatsapp.sync`, `whatsapp.push`,
  * `whatsapp.disconnect`). 31.x registers `presentation.generate`, which drives
- * the separate Presenton service through `presentationJobs.mjs`.
+ * the separate Presenton service through `presentationJobs.mjs`. Task C1 adds
+ * `presentation.export`, the re-export that replaces a deck's document in
+ * place, from the same module.
  */
 import { processDocument } from "./documentProcessing.mjs";
 import { reindexDocument } from "./documentReindex.mjs";
-import { generatePresentation } from "./presentationJobs.mjs";
+import { exportPresentation, generatePresentation } from "./presentationJobs.mjs";
 import {
   whatsappConnect,
   whatsappDisconnect,
@@ -38,6 +40,8 @@ export const handlers = {
   "document.reindex": reindexDocument,
 
   "presentation.generate": generatePresentation,
+
+  "presentation.export": exportPresentation,
 
   "whatsapp.connect": whatsappConnect,
 

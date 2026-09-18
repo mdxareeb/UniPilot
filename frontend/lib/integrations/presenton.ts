@@ -10,6 +10,9 @@
  * Consumers:
  * - the tool page's Server Actions read the configured state and list
  *   templates;
+ * - the native editor's Server Actions (C4) read the deck and write through
+ *   `updatePresentation`/`updateSlide`/`requestPresentationExport`; structural
+ *   writes stay gated by `isStructuralEditingEnabled`;
  * - the Node worker (`backend/worker/presentationJobs.mjs`) drives the full
  *   generate → poll → download flow. The worker cannot import this module
  *   (plain `.mjs`, no TypeScript build step), so its HTTP calls mirror the
@@ -38,6 +41,25 @@ import {
   presentonPublicUrl,
   presentonUiUrl,
 } from "./presentonConfig";
+import type {
+  DeckSlide,
+  DeckTheme,
+  DeckThemePackage,
+  IconType,
+  PresentationDeck,
+  PresentationTemplate,
+} from "../presentation/types";
+import { assetContentType, isSafeAssetPath } from "../presentation/assets";
+import {
+  DEFAULT_ICON_WEIGHT,
+  iconWeightFromPath,
+  normalizeIconPath,
+  normalizeIconWeight,
+} from "../presentation/icons";
+import {
+  IMAGE_UPLOAD_EXTENSIONS,
+  IMAGE_UPLOAD_MAX_BYTES,
+} from "../presentation/imageLimits";
 
 /** Defensive cap on the prompt forwarded to the service (the UI enforces less). */
 export const PRESENTON_CONTENT_MAX_LENGTH = 8_000;
@@ -45,12 +67,48 @@ export const PRESENTON_INSTRUCTIONS_MAX_LENGTH = 2_000;
 export const PRESENTON_TEMPLATE_MAX_LENGTH = 120;
 export const PRESENTON_MAX_SLIDES = 50;
 export const PRESENTON_SOURCE_FILE_MAX_BYTES = 25 * 1024 * 1024;
+/** Image search/prompt bounds; the UI enforces less, the wire never more. */
+export const PRESENTON_IMAGE_QUERY_MAX_LENGTH = 200;
+export const PRESENTON_IMAGE_PROMPT_MAX_LENGTH = 1_000;
+/** The engine's `/images/search` `limit` maximum (its own `le=30`). */
+export const PRESENTON_IMAGE_SEARCH_MAX_LIMIT = 30;
+/** The engine's default `limit` when the caller does not ask (`Query(default=12)`). */
+export const PRESENTON_IMAGE_SEARCH_DEFAULT_LIMIT = 12;
+/**
+ * The upload bound UniPilot enforces, shared with the browser picker through
+ * `lib/presentation/imageLimits.ts` (the engine documents no image size
+ * limit; this is UniPilot's own request-memory bound).
+ */
+export { IMAGE_UPLOAD_MAX_BYTES as PRESENTON_IMAGE_UPLOAD_MAX_BYTES } from "../presentation/imageLimits";
+/** The engine's `ALLOWED_UPLOAD_IMAGE_EXTENSIONS` (`images.py`). */
+export { IMAGE_UPLOAD_EXTENSIONS as PRESENTON_IMAGE_UPLOAD_EXTENSIONS } from "../presentation/imageLimits";
+/** Icon search bounds: the engine's own default is 20 with no stated maximum;
+ * UniPilot asks at most 40 per picker page (the fork's own request). */
+export const PRESENTON_ICON_QUERY_MAX_LENGTH = 200;
+export const PRESENTON_ICON_SEARCH_DEFAULT_LIMIT = 20;
+export const PRESENTON_ICON_SEARCH_MAX_LIMIT = 40;
 
 const START_TIMEOUT_MS = 30_000;
 const STATUS_TIMEOUT_MS = 15_000;
 const TEMPLATES_TIMEOUT_MS = 15_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+/** A full deck (slides + hydrated `ui`) is the largest JSON the adapter reads. */
+const DECK_TIMEOUT_MS = 30_000;
+/** One editor write (metadata, slide or the full-array replace). */
+const MUTATION_TIMEOUT_MS = 30_000;
+/** `POST /{id}/export` builds the file synchronously; allow a slow large deck. */
+const EXPORT_REQUEST_TIMEOUT_MS = 60_000;
+/** One engine asset for the owner-gated proxy (B2); bytes, not JSON. */
+const ASSET_TIMEOUT_MS = 30_000;
+/** One image library/search read (the stock providers answer within ~20 s). */
+const IMAGES_TIMEOUT_MS = 30_000;
+/** One provider-backed generation (the engine's own provider call is slow). */
+const IMAGE_GENERATE_TIMEOUT_MS = 120_000;
+/** One image upload: multipart bytes to the engine's image store. */
+const IMAGE_UPLOAD_TIMEOUT_MS = 120_000;
+/** One icon-catalog search (the vector store answers once initialized). */
+const ICONS_TIMEOUT_MS = 30_000;
 
 /** Presenton's async-task lifecycle (mirror of `enums.async_task_status.py`). */
 export type PresentonTaskStatus = "pending" | "processing" | "completed" | "error";
@@ -74,15 +132,30 @@ export type PresentonAsyncTask = {
   updated_at?: string;
 };
 
+/** The engine's export formats (`export_as` on the generate and export routes). */
+export type PresentonExportFormat = "pptx" | "pdf";
+
 /** The `GeneratePresentationRequest` fields UniPilot sends (all of them). */
 export type PresentonGenerationInput = {
   content: string;
   nSlides?: number | null;
   language?: string | null;
   template: string;
-  format: "pptx" | "pdf";
+  format: PresentonExportFormat;
   /** Presenton-side paths returned by {@link uploadPresentationSourceFile}. */
   sourceFiles?: string[];
+  /** Free-form steering; clipped to {@link PRESENTON_INSTRUCTIONS_MAX_LENGTH}. */
+  instructions?: string | null;
+  /** Presenton's `ChatTone` (`default` | `casual` | `professional` | …). */
+  tone?: string | null;
+  /** Presenton's verbosity (`concise` | `standard` | `text-heavy`). */
+  verbosity?: string | null;
+  /**
+   * Always sent either way: Presenton's service defaults differ from the
+   * UniPilot request defaults (the parser leaves contents off, title on).
+   */
+  includeTableOfContents?: boolean;
+  includeTitleSlide?: boolean;
 };
 
 export type PresentonTemplate = {
@@ -231,15 +304,19 @@ function readTask(value: unknown): PresentonAsyncTask {
 }
 
 /**
- * §3.1 (docs/integrations/presenton.md) — start an async generation. The
- * response is Presenton's `AsyncTaskModel`; poll it with
- * {@link getPresentationTaskStatus} until `completed`/`error`.
+ * Build the §3.1 request body — pure and exported so the exact wire shape is
+ * provable in an environment with no Presenton service;
+ * {@link startPresentationGeneration} is the only production caller.
+ *
+ * Omission rules: an absent or empty optional never appears in the body — a
+ * `null` would read as a real value on the service — while both booleans are
+ * always present, because Presenton's own defaults differ from UniPilot's
+ * request defaults (contents off, title slide on). Validation here is the same
+ * pre-fetch gate as before: same inputs are rejected, with the same codes.
  */
-export async function startPresentationGeneration(
+export function buildGenerationRequestBody(
   input: PresentonGenerationInput,
-): Promise<PresentonAsyncTask> {
-  const base = requireBaseUrl();
-
+): Record<string, unknown> {
   const content = input.content.trim().slice(0, PRESENTON_CONTENT_MAX_LENGTH);
   if (content === "") {
     throw new PresentonError("rejected", "A topic is required.");
@@ -258,16 +335,39 @@ export async function startPresentationGeneration(
     throw new PresentonError("rejected", "Invalid template.");
   }
 
+  const instructions = input.instructions
+    ?.trim()
+    .slice(0, PRESENTON_INSTRUCTIONS_MAX_LENGTH);
+
   const body: Record<string, unknown> = {
     content,
     template,
     export_as: input.format,
+    include_table_of_contents: input.includeTableOfContents === true,
+    include_title_slide: input.includeTitleSlide !== false,
   };
   if (input.nSlides) body.n_slides = input.nSlides;
   if (input.language) body.language = input.language;
+  if (instructions) body.instructions = instructions;
+  if (input.tone) body.tone = input.tone;
+  if (input.verbosity) body.verbosity = input.verbosity;
   if (input.sourceFiles && input.sourceFiles.length > 0) {
     body.files = input.sourceFiles;
   }
+
+  return body;
+}
+
+/**
+ * §3.1 (docs/integrations/presenton.md) — start an async generation. The
+ * response is Presenton's `AsyncTaskModel`; poll it with
+ * {@link getPresentationTaskStatus} until `completed`/`error`.
+ */
+export async function startPresentationGeneration(
+  input: PresentonGenerationInput,
+): Promise<PresentonAsyncTask> {
+  const base = requireBaseUrl();
+  const body = buildGenerationRequestBody(input);
 
   const response = await fetchWithTimeout(
     joinUrl(base, "/api/v1/ppt/presentation/generate/async"),
@@ -360,6 +460,445 @@ export async function listPresentationTemplates(): Promise<PresentonTemplate[]> 
 }
 
 /**
+ * A deck response must at least be the documented envelope before any consumer
+ * treats it as one. `ui`/element payloads stay unvalidated service JSON (the
+ * engine stores them unvalidated too), so the renderer's helpers default on
+ * absent fields rather than the read rejecting a renderable deck.
+ */
+function readDeck(value: unknown): PresentationDeck {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    typeof (value as Record<string, unknown>).id !== "string" ||
+    !Array.isArray((value as Record<string, unknown>).slides)
+  ) {
+    throw new PresentonError("failed", "The service returned an unreadable response.");
+  }
+  return value as PresentationDeck;
+}
+
+/** The template envelope check, same posture as {@link readDeck}. */
+function readTemplate(value: unknown): PresentationTemplate {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    typeof (value as Record<string, unknown>).id !== "string" ||
+    typeof (value as Record<string, unknown>).name !== "string"
+  ) {
+    throw new PresentonError("failed", "The service returned an unreadable response.");
+  }
+  return value as PresentationTemplate;
+}
+
+/**
+ * §7.3 — the native viewer's deck read: slides, hydrated `ui`, `theme`, `fonts`
+ * and the `generation_mode`/`type` flags. Returned as stored by the engine;
+ * {@link readDeck} checks only the envelope.
+ */
+export async function getPresentationDeck(
+  presentationId: string,
+): Promise<PresentationDeck> {
+  const base = requireBaseUrl();
+  assertSafeSegment(presentationId, "presentation id");
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, `/api/v1/ppt/presentation/${presentationId}`),
+    { method: "GET", headers: requestHeaders() },
+    DECK_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  return readDeck(await response.json());
+}
+
+/**
+ * §7.3 — one template's layouts, theme and fonts (template previews and the
+ * hydration module in C share this read). Same guards and failure vocabulary
+ * as {@link listPresentationTemplates}.
+ */
+export async function getPresentationTemplate(
+  templateId: string,
+): Promise<PresentationTemplate> {
+  const base = requireBaseUrl();
+  assertSafeSegment(templateId, "template id");
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, `/api/v1/ppt/template/${templateId}`),
+    { method: "GET", headers: requestHeaders() },
+    TEMPLATES_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  return readTemplate(await response.json());
+}
+
+/**
+ * §7.3 — one custom theme as the engine serves it (`GET /themes/all`,
+ * `ThemeResponse`). `theme` is the whole response entry, returned verbatim:
+ * the entry's `data` carries the palette (`{colors, fonts}`), so it reads as
+ * a `DeckThemePackage` everywhere a theme value is used — the editor forwards
+ * it to `PATCH /update` exactly as received, never flattened or rebuilt.
+ */
+export type PresentonTheme = {
+  id: string;
+  /** The picker's label when the engine names the theme, else null. */
+  name: string | null;
+  /** The entry as served; the theme value forwarded on selection. */
+  theme: Record<string, unknown>;
+};
+
+/**
+ * §7.3/§5.4 — the theme picker's custom list. The same envelope posture as the
+ * template list: a non-array body or a non-2xx answer throws the adapter's
+ * classified error, entries without a usable id are dropped (never guessed
+ * at), and every surviving entry is passed through untouched.
+ */
+export async function listPresentationThemes(): Promise<PresentonTheme[]> {
+  const base = requireBaseUrl();
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, "/api/v1/ppt/themes/all"),
+    { method: "GET", headers: requestHeaders() },
+    TEMPLATES_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const body: unknown = await response.json();
+  if (!Array.isArray(body)) {
+    throw new PresentonError("failed", "The service returned an unreadable response.");
+  }
+
+  return body
+    .filter(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" && entry !== null && !Array.isArray(entry),
+    )
+    .filter((entry) => typeof entry.id === "string" && entry.id !== "")
+    .map((entry) => ({
+      id: entry.id as string,
+      name:
+        typeof entry.name === "string" && entry.name.trim() !== ""
+          ? entry.name.trim()
+          : null,
+      theme: entry,
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// Editor mutations (§7.4–§7.5) — pure bodies first, then the wire calls
+// ---------------------------------------------------------------------------
+
+/** Every structural slide id must be a UUID (`slides.id` is a UUID pk). */
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The theme slot is never omitted and never null. Upstream writes `None` for
+ * an absent key, and `JSON.stringify` would drop an `undefined` value anyway,
+ * so untrusted input (C4's Server Action forwards browser state through here)
+ * must fail the pre-fetch gate instead of silently wiping a deck's theme.
+ */
+function requireTheme(theme: unknown): DeckTheme | DeckThemePackage {
+  if (typeof theme !== "object" || theme === null) {
+    throw new PresentonError("rejected", "A theme is required.");
+  }
+  return theme as DeckTheme | DeckThemePackage;
+}
+
+/**
+ * §7.4 — the rename/theme-change body for `PATCH /presentation/update`.
+ *
+ * `theme` must be the deck's current theme object — a resolved flat theme or
+ * the stored `DeckThemePackage`, forwarded verbatim so a rename never flattens
+ * the stored shape. It is always present even for a pure rename: upstream
+ * writes `None` whenever the key is absent (`if theme or theme is None`),
+ * which wipes the deck's theme. `title` is omitted when absent and trimmed
+ * otherwise; upstream ignores a falsy title, so an empty rename must never
+ * silently become a no-op.
+ */
+export function buildPresentationUpdateBody(input: {
+  id: string;
+  title?: string;
+  theme: DeckTheme | DeckThemePackage;
+}): Record<string, unknown> {
+  assertSafeSegment(input.id, "presentation id");
+  const body: Record<string, unknown> = {
+    id: input.id,
+    theme: requireTheme(input.theme),
+  };
+  if (input.title !== undefined) {
+    const title = input.title.trim();
+    if (title === "") {
+      throw new PresentonError("rejected", "A deck title is required.");
+    }
+    body.title = title;
+  }
+  return body;
+}
+
+/**
+ * The ten fields every slide write carries. `ui`, `html_content`, `properties`
+ * and `speaker_note` are sent as explicit nulls when absent: the engine types
+ * them optional, and a deck state that had no value must not keep a stale one.
+ */
+function slideWriteRecord(slide: DeckSlide): Record<string, unknown> {
+  return {
+    id: slide.id,
+    presentation: slide.presentation,
+    layout_group: slide.layout_group,
+    layout: slide.layout,
+    index: slide.index,
+    content: slide.content,
+    properties: slide.properties ?? null,
+    ui: slide.ui ?? null,
+    html_content: slide.html_content ?? null,
+    speaker_note: slide.speaker_note ?? null,
+  };
+}
+
+/**
+ * §7.4 — the single-slide body for `PATCH /presentation/slide_update` (text,
+ * notes, single-side layouts, element properties). The engine ignores
+ * `id`/`presentation`/`index` on the stored row (and rejects a slide whose
+ * `presentation` does not match), so the full loaded slide is sent unchanged:
+ * no id rotation.
+ */
+export function buildSlideUpdateBody(
+  slide: DeckSlide,
+): { slide: Record<string, unknown> } {
+  return { slide: slideWriteRecord(slide) };
+}
+
+/**
+ * §7.5 — the full-array body for a structural edit (add/delete/duplicate/
+ * reorder) through `PATCH /presentation/update`.
+ *
+ * The engine deletes the deck's rows scoped to the request's owner and then
+ * inserts the incoming rows as given (`presentation.py:2488-2494`; the delete
+ * precedes `add_all`). Whenever the request's owner scope does not match the
+ * deck's slides — this runtime runs `DISABLE_AUTH` (owner `None`) while the
+ * existing decks are owner-scoped — the delete removes nothing, so a reused id
+ * collides with `UNIQUE(slides.id)` (controller ruling 2026-09-16). Every
+ * slide **must therefore carry a freshly generated UUID**; freshness against
+ * the stored deck is not checkable here (the existing ids are unknowable — the
+ * caller guarantees it), so this builder enforces everything it can: at least
+ * one slide, at most {@link PRESENTON_MAX_SLIDES}, every id a UUID, no two
+ * slides sharing one (case-insensitively), and every slide owned by `id` — a
+ * foreign `presentation` would insert another deck's slide into this deck's
+ * replacement, corrupting both.
+ *
+ * `theme` must be a theme object and is always present for the same reason as
+ * the metadata body; the full field set is sent because the route re-inserts
+ * the rows wholesale.
+ *
+ * `nSlides` (C4) is the stored count the route keeps beside the array: the
+ * engine's replace path re-inserts slides but never recomputes `n_slides`, so
+ * a caller that does not send it leaves the deck's count stale. When provided
+ * it must equal the array length (a mismatch is a caller bug, not a request to
+ * make); when omitted the field is left out exactly as before.
+ */
+export function buildSlidesReplaceBody(input: {
+  id: string;
+  theme: DeckTheme | DeckThemePackage;
+  slides: DeckSlide[];
+  nSlides?: number;
+}): Record<string, unknown> {
+  assertSafeSegment(input.id, "presentation id");
+  const theme = requireTheme(input.theme);
+  if (input.slides.length === 0 || input.slides.length > PRESENTON_MAX_SLIDES) {
+    throw new PresentonError("rejected", "Invalid slide list.");
+  }
+  if (
+    input.nSlides !== undefined &&
+    (!Number.isInteger(input.nSlides) || input.nSlides !== input.slides.length)
+  ) {
+    throw new PresentonError("rejected", "Invalid slide count.");
+  }
+
+  const seen = new Set<string>();
+  for (const slide of input.slides) {
+    if (!UUID_PATTERN.test(slide.id)) {
+      throw new PresentonError("rejected", "Invalid slide id.");
+    }
+    if (slide.presentation !== input.id) {
+      throw new PresentonError(
+        "rejected",
+        "A slide belongs to a different deck.",
+      );
+    }
+    const key = slide.id.toLowerCase();
+    if (seen.has(key)) {
+      throw new PresentonError("rejected", "Duplicate slide id.");
+    }
+    seen.add(key);
+  }
+
+  const body: Record<string, unknown> = {
+    id: input.id,
+    theme,
+    slides: input.slides.map(slideWriteRecord),
+  };
+  if (input.nSlides !== undefined) body.n_slides = input.nSlides;
+  return body;
+}
+
+/**
+ * §7.5 capability gate — the structural replace only works when the delete's
+ * owner scope matches the deck's slides (auth plus an owner-scoped API key, or
+ * decks created in the same `DISABLE_AUTH` runtime). This engine runs
+ * `DISABLE_AUTH` (owner is `None`), so the replace is blocked for existing
+ * decks; the capability therefore ships dark behind this server-only flag.
+ * Any value other than `"1"` — including unset — is off. `updatePresentation`'s
+ * structural branch enforces the same gate server-side, C4's editor renders
+ * structural controls disabled with an honest reason unless this is true, and
+ * neither ever fakes a structural edit. Read at call time, never inlined at
+ * build.
+ */
+export function isStructuralEditingEnabled(): boolean {
+  return process.env.PRESENTON_STRUCTURAL_EDITS === "1";
+}
+
+/**
+ * The shared write transport: one JSON PATCH/POST with the adapter's headers,
+ * timeout and failure classification. Nothing is parsed from the response —
+ * the editor re-reads the deck through {@link getPresentationDeck} instead.
+ */
+async function sendJsonWrite(
+  method: "PATCH" | "POST",
+  url: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method,
+      headers: { ...requestHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    timeoutMs,
+  );
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+}
+
+/**
+ * §7.4 — rename a deck and/or apply a theme, or replace the whole slide array
+ * (structural saves) through the same route. The engine answers with the whole
+ * deck; callers re-read it rather than trusting the write response.
+ *
+ * The structural branch is the gated wiring: it never sends unless
+ * {@link isStructuralEditingEnabled} is true, so with the flag off (this
+ * runtime) the honest failure is a permanent `rejected` instead of a write
+ * that would delete nothing. A structural call may not carry a rename — the
+ * editor saves one change reason at a time — so an ambiguous input is refused
+ * rather than silently dropping the title.
+ */
+export async function updatePresentation(input: {
+  id: string;
+  title?: string;
+  theme: DeckTheme | DeckThemePackage;
+  /** Present ⇒ a full-array structural write ({@link buildSlidesReplaceBody}). */
+  slides?: DeckSlide[];
+  /** The count the structural write stores; only meaningful with `slides`. */
+  nSlides?: number;
+}): Promise<void> {
+  const base = requireBaseUrl();
+  const url = joinUrl(base, "/api/v1/ppt/presentation/update");
+
+  if (input.slides !== undefined) {
+    if (!isStructuralEditingEnabled()) {
+      throw new PresentonError(
+        "rejected",
+        "Structural editing isn't enabled in this environment.",
+      );
+    }
+    if (input.title !== undefined) {
+      throw new PresentonError(
+        "rejected",
+        "A structural write can't rename the deck.",
+      );
+    }
+    await sendJsonWrite(
+      "PATCH",
+      url,
+      buildSlidesReplaceBody({
+        id: input.id,
+        theme: input.theme,
+        slides: input.slides,
+        nSlides: input.nSlides,
+      }),
+      MUTATION_TIMEOUT_MS,
+    );
+    return;
+  }
+
+  await sendJsonWrite(
+    "PATCH",
+    url,
+    buildPresentationUpdateBody(input),
+    MUTATION_TIMEOUT_MS,
+  );
+}
+
+/**
+ * §7.4 — update one slide (text, notes, single-side layouts, element
+ * properties). `presentationId` is checked against the slide's own
+ * `presentation` before anything leaves this process: the engine rejects a
+ * mismatch too, but a cross-deck write must never be attempted at all.
+ */
+export async function updateSlide(
+  presentationId: string,
+  slide: DeckSlide,
+): Promise<void> {
+  const base = requireBaseUrl();
+  assertSafeSegment(presentationId, "presentation id");
+  if (slide.presentation !== presentationId) {
+    throw new PresentonError(
+      "rejected",
+      "The slide belongs to a different deck.",
+    );
+  }
+  await sendJsonWrite(
+    "PATCH",
+    joinUrl(base, "/api/v1/ppt/presentation/slide_update"),
+    buildSlideUpdateBody(slide),
+    MUTATION_TIMEOUT_MS,
+  );
+}
+
+/**
+ * §7.4/§7.7 — ask the engine to export an existing deck. The worker is the
+ * only production caller of the export path (C1); this request-only capability
+ * never downloads or stores bytes.
+ */
+export async function requestPresentationExport(
+  presentationId: string,
+  format: PresentonExportFormat,
+): Promise<void> {
+  const base = requireBaseUrl();
+  assertSafeSegment(presentationId, "presentation id");
+  await sendJsonWrite(
+    "POST",
+    joinUrl(base, `/api/v1/ppt/presentation/${presentationId}/export`),
+    { export_as: format },
+    EXPORT_REQUEST_TIMEOUT_MS,
+  );
+}
+
+/**
  * §3.4 — upload one source document (the bytes are read from UniPilot's own
  * private bucket by the worker) and return the Presenton-side paths to pass
  * into `files` on §3.1.
@@ -436,6 +975,448 @@ export async function downloadPresentationExport(
         "application/octet-stream";
 
   return { bytes: await response.arrayBuffer(), mimeType };
+}
+
+/** One proxied engine asset: the raw bytes plus the extension-derived type. */
+export type PresentonAsset = {
+  bytes: ArrayBuffer;
+  /** Resolved from the path's extension by the shared asset policy (spec §6.9). */
+  contentType: string;
+};
+
+/**
+ * B2 — fetch one asset for the owner-gated proxy. The path has already passed
+ * the route's policy (`classifyAssetPath`); the adapter re-enforces the same
+ * prefix + traversal/encoding guard (`isSafeAssetPath`, which rejects `..`,
+ * `\`, `//`, `%`, `?` and `#`) before any request, so no stored or caller value
+ * can be turned into a request for another route or host. The content type is
+ * derived from the path, never trusted from the engine (its static mount
+ * answers `application/octet-stream` for fonts). No bytes and no paths are
+ * ever logged; failures use the adapter's existing classification.
+ */
+export async function fetchPresentationAsset(
+  path: string,
+): Promise<PresentonAsset> {
+  const base = requireBaseUrl();
+  if (!isSafeAssetPath(path)) {
+    throw new PresentonError("rejected", "Invalid asset path.");
+  }
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, path),
+    { method: "GET", headers: requestHeaders() },
+    ASSET_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  return {
+    bytes: await response.arrayBuffer(),
+    contentType: assetContentType(path),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Task D3 — the editor's image surface (§5.4 images row, §7.4)
+//
+// Search (Pexels/Pixabay through the engine), provider generation, the
+// generated/uploaded library and deletion all live here; the browser reaches
+// them through Server Actions, and uploads through the owner-gated route
+// handler (the API key never leaves the server). Responses are normalized to
+// the fields the UI actually renders. Prompts, query strings and filesystem
+// paths are never logged.
+// ---------------------------------------------------------------------------
+
+/** The engine's two image-library partitions (`is_uploaded`). */
+export type PresentonImageKind = "generated" | "uploaded";
+
+/** One engine image asset, normalized (`GET /images/generated|uploaded`). */
+export type PresentonImage = {
+  id: string;
+  /** The engine's `created_at` as served, when it carried one. */
+  createdAt: string | null;
+  /** True for `uploaded`, false for `generated`. */
+  isUploaded: boolean;
+  /**
+   * The browser-facing `/app_data/images/…` path the asset proxy can serve.
+   * The engine's filesystem path is deliberately not carried past this adapter
+   * (review fix): it is not needed by any caller and must not reach the
+   * browser.
+   */
+  fileUrl: string;
+  /** The recorded image prompt (generated assets may carry one in `extras`). */
+  prompt: string | null;
+};
+
+/**
+ * The engine answers provider-less generation with a static placeholder
+ * (`absolute_fastapi_asset_url("/static/images/placeholder.jpg")`). UniPilot
+ * never inserts that placeholder (no fake images) — the caller detects it and
+ * shows the honest "generation isn't configured" state instead. Pure and
+ * exported so the check is provable without an engine.
+ */
+export function isPresentonPlaceholderImage(url: string): boolean {
+  if (typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (trimmed === "") return false;
+  const [path] = trimmed.split(/[?#]/, 1);
+  return path.endsWith("/static/images/placeholder.jpg");
+}
+
+/**
+ * One library entry as `{id, created_at, is_uploaded, path, extras, file_url}`
+ * (the engine's `_image_asset_api_dict`), normalized; null when the entry has
+ * no usable id or browser-facing path (never guessed at). The filesystem `path`
+ * is dropped here so it can never cross to a caller.
+ */
+export function normalizePresentonImage(value: unknown): PresentonImage | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const id = typeof entry.id === "string" ? entry.id.trim() : "";
+  const fileUrl =
+    typeof entry.file_url === "string" ? entry.file_url.trim() : "";
+  if (id === "" || fileUrl === "") return null;
+  const extras =
+    typeof entry.extras === "object" && entry.extras !== null
+      ? (entry.extras as Record<string, unknown>)
+      : null;
+  const prompt =
+    extras !== null &&
+    typeof extras.prompt === "string" &&
+    extras.prompt.trim() !== ""
+      ? extras.prompt.trim()
+      : null;
+  return {
+    id,
+    createdAt:
+      typeof entry.created_at === "string" && entry.created_at !== ""
+        ? entry.created_at
+        : null,
+    isUploaded: entry.is_uploaded === true,
+    fileUrl,
+    prompt,
+  };
+}
+
+/** The search route's `List[str]`, keeping only non-empty strings. */
+export function normalizePresentonImageSearch(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (entry): entry is string =>
+        typeof entry === "string" && entry.trim() !== "",
+    )
+    .map((entry) => entry.trim());
+}
+
+/**
+ * §5.4 — stock image search through the engine. `page` is not a route
+ * parameter on this engine (the route takes `limit`, 1..30, default 12), so
+ * the caller's limit is clamped to that range. A configured provider returns
+ * absolute URL strings; an unconfigured one answers 4xx (classified
+ * `rejected`) and the UI states that honestly.
+ */
+export async function searchPresentationImages(
+  query: string,
+  limit: number = PRESENTON_IMAGE_SEARCH_DEFAULT_LIMIT,
+): Promise<string[]> {
+  const base = requireBaseUrl();
+  const normalizedQuery = typeof query === "string" ? query.trim() : "";
+  if (normalizedQuery === "") {
+    throw new PresentonError("rejected", "An image search query is required.");
+  }
+  if (normalizedQuery.length > PRESENTON_IMAGE_QUERY_MAX_LENGTH) {
+    throw new PresentonError("rejected", "The image search query is too long.");
+  }
+  const boundedLimit = Number.isFinite(limit)
+    ? Math.min(
+        Math.max(Math.trunc(limit), 1),
+        PRESENTON_IMAGE_SEARCH_MAX_LIMIT,
+      )
+    : PRESENTON_IMAGE_SEARCH_DEFAULT_LIMIT;
+
+  const response = await fetchWithTimeout(
+    joinUrl(
+      base,
+      `/api/v1/ppt/images/search?query=${encodeURIComponent(
+        normalizedQuery,
+      )}&limit=${boundedLimit}`,
+    ),
+    { method: "GET", headers: requestHeaders() },
+    IMAGES_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  return normalizePresentonImageSearch(await response.json());
+}
+
+/**
+ * §5.4 — generate one image from a prompt. The engine answers with a single
+ * URL string (a provider URL, an `/app_data/images/…` file URL, or its
+ * placeholder when generation is disabled); the raw string is returned
+ * faithfully and the caller applies {@link isPresentonPlaceholderImage}.
+ */
+export async function generatePresentationImage(
+  prompt: string,
+): Promise<string> {
+  const base = requireBaseUrl();
+  const normalizedPrompt = typeof prompt === "string" ? prompt.trim() : "";
+  if (normalizedPrompt === "") {
+    throw new PresentonError("rejected", "An image prompt is required.");
+  }
+  if (normalizedPrompt.length > PRESENTON_IMAGE_PROMPT_MAX_LENGTH) {
+    throw new PresentonError("rejected", "The image prompt is too long.");
+  }
+
+  const response = await fetchWithTimeout(
+    joinUrl(
+      base,
+      `/api/v1/ppt/images/generate?prompt=${encodeURIComponent(
+        normalizedPrompt,
+      )}`,
+    ),
+    { method: "GET", headers: requestHeaders() },
+    IMAGE_GENERATE_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const body: unknown = await response.json();
+  if (typeof body !== "string" || body.trim() === "") {
+    throw new PresentonError(
+      "failed",
+      "The service returned an unreadable response.",
+    );
+  }
+  return body.trim();
+}
+
+/** §5.4 — one library partition (`generated` or `uploaded`), newest first. */
+export async function listPresentationImages(
+  kind: PresentonImageKind,
+): Promise<PresentonImage[]> {
+  const base = requireBaseUrl();
+  if (kind !== "generated" && kind !== "uploaded") {
+    throw new PresentonError("rejected", "Invalid image library.");
+  }
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, `/api/v1/ppt/images/${kind}`),
+    { method: "GET", headers: requestHeaders() },
+    IMAGES_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const body: unknown = await response.json();
+  if (!Array.isArray(body)) {
+    throw new PresentonError(
+      "failed",
+      "The service returned an unreadable response.",
+    );
+  }
+  return body
+    .map(normalizePresentonImage)
+    .filter((image): image is PresentonImage => image !== null);
+}
+
+/**
+ * §5.4/§7.4 — forward one uploaded image to the engine's image store and
+ * return the created asset. Validation here mirrors the route's pre-checks
+ * (bounded bytes, an allowed extension, an image/* type when the browser sent
+ * one); the engine re-validates the actual bytes and rejects a corrupt file.
+ */
+export async function uploadPresentationImage(input: {
+  name: string;
+  mimeType: string;
+  bytes: Uint8Array;
+}): Promise<PresentonImage> {
+  const base = requireBaseUrl();
+
+  if (
+    input.bytes.byteLength === 0 ||
+    input.bytes.byteLength > IMAGE_UPLOAD_MAX_BYTES
+  ) {
+    throw new PresentonError("rejected", "Invalid image file.");
+  }
+  const name = typeof input.name === "string" ? input.name : "";
+  const dot = name.lastIndexOf(".");
+  const extension = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  if (
+    !(IMAGE_UPLOAD_EXTENSIONS as readonly string[]).includes(extension)
+  ) {
+    throw new PresentonError("rejected", "Invalid image file.");
+  }
+  if (input.mimeType !== "" && !input.mimeType.startsWith("image/")) {
+    throw new PresentonError("rejected", "Invalid image file.");
+  }
+
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([new Uint8Array(input.bytes)], {
+      type: input.mimeType || "application/octet-stream",
+    }),
+    name === "" ? `upload${extension}` : name,
+  );
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, "/api/v1/ppt/images/upload"),
+    {
+      method: "POST",
+      headers: requestHeaders(),
+      body: form,
+    },
+    IMAGE_UPLOAD_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const image = normalizePresentonImage(await response.json());
+  if (image === null) {
+    throw new PresentonError(
+      "failed",
+      "The service returned an unreadable response.",
+    );
+  }
+  return image;
+}
+
+/**
+ * §5.4 — delete one engine image asset by id. A missing id makes the engine's
+ * route answer 500 (its own `except Exception` wraps the 404), so callers
+ * should only ask for ids the library listed; transport and classification are
+ * the adapter's usual.
+ */
+export async function deletePresentationImage(id: string): Promise<void> {
+  const base = requireBaseUrl();
+  if (!UUID_PATTERN.test(id)) {
+    throw new PresentonError("rejected", "Invalid image id.");
+  }
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, `/api/v1/ppt/images/${id}`),
+    { method: "DELETE", headers: requestHeaders() },
+    MUTATION_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task D4 — the editor's icon surface (§5.4 icons row, §7.4)
+//
+// The engine's icon catalog (`GET /icons/search`, a vector store over its
+// bundled SVG icons) returns absolute or engine-relative `/static/icons/…`
+// URLs. They are normalized to relative paths here so every consumer — the
+// picker's proxy previews and the renderer's recolor fetch — uses the
+// owner-gated asset proxy; `is_icon`/`color` land on the element through the
+// single-slide `slide_update` path. Queries and paths are never logged.
+// ---------------------------------------------------------------------------
+
+/** One normalized catalog result: the engine-relative icon path + its weight. */
+export type PresentonIcon = {
+  /** The engine-relative `/static/icons/<weight>/<file>.svg` path. */
+  path: string;
+  /**
+   * The weight embedded in the path. The engine falls back to its default
+   * (`bold`) when the requested weight has no file for the matched icon, so
+   * the path — not the request — is authoritative.
+   */
+  weight: IconType;
+};
+
+/**
+ * One catalog entry as an engine path, or null when it is not a usable icon
+ * asset (never guessed at). `normalizeIconPath` owns the prefix/extension/
+ * traversal policy; the weight is read back from the path.
+ */
+export function normalizePresentonIcon(value: unknown): PresentonIcon | null {
+  const path = normalizeIconPath(value);
+  if (path === null) return null;
+  return { path, weight: iconWeightFromPath(path) ?? DEFAULT_ICON_WEIGHT };
+}
+
+/**
+ * §5.4/§7.4 — icon catalog search. Mirrors the engine route faithfully:
+ * `query` is required, `limit` defaults to 20, and the optional type/weight
+ * select the style directory (the route accepts both `icon_type` and
+ * `icon_weight`; an invalid value normalizes to `bold` on the engine, so it
+ * is normalized here the same way). Results are de-duplicated paths, in the
+ * engine's relevance order.
+ */
+export async function searchPresentationIcons(
+  query: string,
+  options: { type?: IconType; weight?: IconType; limit?: number } = {},
+): Promise<PresentonIcon[]> {
+  const base = requireBaseUrl();
+  const normalizedQuery = typeof query === "string" ? query.trim() : "";
+  if (normalizedQuery === "") {
+    throw new PresentonError("rejected", "An icon search query is required.");
+  }
+  if (normalizedQuery.length > PRESENTON_ICON_QUERY_MAX_LENGTH) {
+    throw new PresentonError("rejected", "The icon search query is too long.");
+  }
+  const boundedLimit = Number.isFinite(options.limit)
+    ? Math.min(
+        Math.max(Math.trunc(options.limit as number), 1),
+        PRESENTON_ICON_SEARCH_MAX_LIMIT,
+      )
+    : PRESENTON_ICON_SEARCH_DEFAULT_LIMIT;
+
+  const params = new URLSearchParams({
+    query: normalizedQuery,
+    limit: String(boundedLimit),
+  });
+  if (options.type !== undefined) {
+    params.set("icon_type", normalizeIconWeight(options.type));
+  }
+  if (options.weight !== undefined) {
+    params.set("icon_weight", normalizeIconWeight(options.weight));
+  }
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, `/api/v1/ppt/icons/search?${params.toString()}`),
+    { method: "GET", headers: requestHeaders() },
+    ICONS_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const body: unknown = await response.json();
+  if (!Array.isArray(body)) {
+    throw new PresentonError(
+      "failed",
+      "The service returned an unreadable response.",
+    );
+  }
+
+  const seen = new Set<string>();
+  const icons: PresentonIcon[] = [];
+  for (const entry of body) {
+    const icon = normalizePresentonIcon(entry);
+    if (icon === null || seen.has(icon.path)) continue;
+    seen.add(icon.path);
+    icons.push(icon);
+  }
+  return icons;
 }
 
 /**
