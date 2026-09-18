@@ -195,8 +195,23 @@ against it.
 
 For MCP-browser QA (Playwright MCP tools): drive the same real login form at
 `/login` with `qa.unipilot@unipilot.test` + `UNIPILOT_QA_PASSWORD` read from
-`frontend/.env.development.local` â€” never type the password into a tool call or
+`frontend/.env.development.local` — never type the password into a tool call or
 screenshot it.
+
+**Breach recorded (2026-09-16).** During a native-presentation task an agent's
+MCP login surfaced `UNIPILOT_QA_PASSWORD` once in a tool result. No artifact
+held it, the password was rotated immediately afterwards, and both identities
+were re-synced and re-validated through the real login UI. The rule below is
+now explicit.
+
+**Secret rule (no exceptions).** QA credentials never appear in tool results,
+logs, screenshots, diffs or reports. Never `cat`/`type`/`Get-Content` an env
+file into a tool result; never echo a password, token or cookie; never inline a
+password into a command string that a transcript captures. Authenticate
+browsers with the stored session (`frontend/.playwright/qa-session.json`) or a
+script that reads the env itself and prints only booleans/ids. If a secret is
+ever surfaced, stop, rotate it (`--reset` seed + fresh storage state), and
+record the incident here.
 
 Expiry handling: the fixture validates any existing storage state first (it
 loads `/onboarding` â€” the one protected route since guests can browse the

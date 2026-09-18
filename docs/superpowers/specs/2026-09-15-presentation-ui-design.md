@@ -1,21 +1,29 @@
 # Native presentation experience — design
 
-Date: 2026-09-15
-Status: Phase 0 spec — awaiting founder review. No code written, nothing
-committed. Phases A–F become implementation work only after this document is
-approved.
+Date: 2026-09-15 · Refreshed: 2026-09-16 (post-fork learnings — §4.1–4.2)
+Status: Refreshed 2026-09-16 per the founder's directive; awaiting review at
+the plan gate before phase A. This refresh is the basis for the phased
+implementation plan (`docs/superpowers/plans/2026-09-16-native-presentation.md`).
+The interim fork UI (`presenton-ui/`, git-ignored, own repo) stays the editor
+until native parity lands, then is retired; the native build replaces it
+phase by phase.
 Task IDs: TASK.md `31.x` (extends 31.8/31.9; leaves 31.3/31.5/31.6/31.7 as
 recorded gaps — §13).
 Related: `docs/integrations/presenton.md` (the service contract),
-`DESIGN.md`, `MOTION.md`, `AGENTS.md` (QA session, browser QA).
+`docs/superpowers/specs/2026-09-15-presenton-fork-theme-design.md` and
+`presenton-ui/DIVERGENCE.md` (what the fork proved), `DESIGN.md`, `MOTION.md`,
+`AGENTS.md` (QA session, browser QA).
 
-Provenance: this spec distils a read-only inventory of Presenton's Next.js
-frontend (`presenton-main/servers/nextjs`), its FastAPI surface
+Provenance: read-only inventory of Presenton's Next.js frontend
+(`presenton-main/servers/nextjs`), its FastAPI surface
 (`presenton-main/servers/fastapi` + `openai_spec.json`), and UniPilot's current
 wiring (`frontend/lib/integrations/presenton.ts`, `backend/worker/`, the
 `presentations` migration, `/tools/presentation`, `/documents`, `/integrations`,
-`frontend/components/motion/`). Taken 2026-09-15. `presenton-main/` is
-git-ignored; no Presenton code, CSS, or assets are copied into this repo.
+`frontend/components/motion/`). Taken 2026-09-15; refreshed 2026-09-16 with the
+fork's verified runtime behaviour (`presenton-ui/DIVERGENCE.md`) and a re-check
+of the exact slide/template/theme response shapes in the FastAPI models.
+`presenton-main/` and `presenton-ui/` are both git-ignored; no Presenton code,
+CSS, or assets are copied into this repo.
 
 ---
 
@@ -35,12 +43,24 @@ server-only adapter (`frontend/lib/integrations/presenton.ts`), worker
 plumbing. A saved deck stays a PPTX/PDF `documents` row with
 `source='presentation'`. The native editor edits the deck's working state
 through Presenton's presentation/template/theme APIs and re-exports to that
-same document. No iframe is the default experience; the existing wrapper route
-survives only as a clearly labelled fallback for decks the native path cannot
-render (Smart HTML), recorded in §14.
+same document. No iframe is the default experience; the wrapper route survives
+only as a labelled fallback for decks the native path cannot render (Smart
+HTML), recorded in §14, and as the bridge to the interim fork until the native
+editor phases land.
+
+The native build sits on the existing UniPilot stack — Next 16.3.1 / React 19 /
+Tailwind 4 / `motion` / Supabase SSR, the 26.x assistant-era patterns
+(server-only provider boundaries, streaming route handlers, sanitized copy) and
+the 29.1 job runner (§7.0) — plus the presentation plumbing already in place
+(adapter, worker, tool registry, documents). No new provider wiring: provider
+models/keys stay in Presenton's own environment and admin UI.
 
 Everything is built from existing UniPilot primitives and tokens — no new
-fonts, no new colors, no page-specific animation system.
+fonts, no new colors, no page-specific animation system. Native chrome is
+UniPilot's (workspace shell, wordmark, Bricolage/Geist/Geist Mono, glass,
+dark-first); Presenton's wordmark/logo/marketing strings never appear on a
+native surface. Generated decks keep their own deck fonts and colors **inside
+the stage only** (the chrome-vs-deck rule, §8.6).
 
 ## 2. Goal / non-goals
 
@@ -58,7 +78,9 @@ Goal:
 
 Non-goals:
 
-- No Presenton fork, no vendored frontend, no iframe editor by default.
+- No vendored Presenton code in UniPilot's repo, no iframe editor by default.
+  The interim fork (`presenton-ui/`) is the bridge and is retired once native
+  parity lands.
 - No new provider wiring: providers/models/keys stay in Presenton's own admin
   UI. UniPilot never gains a provider-settings surface.
 - No Presenton Cloud contact (community designs, cloud providers, device
@@ -82,21 +104,66 @@ Non-goals:
    Bricolage/Geist, the radius/elevation scales, and the shared Motion
    vocabulary (`frontend/components/motion/`, `presets.ts`). Deck content is
    user content and may carry its own fonts/colors *inside the stage only*.
+6. Native chrome is UniPilot's. Presenton's wordmark, logo, splash art and
+   marketing strings never appear on a native surface; the shell, wordmark and
+   type system are the app's own (§8.6). The chrome-vs-deck rule is one rule:
+   chrome is UniPilot, deck content is the deck.
 
 ## 4. Current state
 
 | Piece | Today |
 |---|---|
 | Tool page `/tools/presentation` | Server page + `PresentationWorkspace` client: prompt, template, slides (5–30), format, one source document; polling `router.refresh()` every 4 s while queued/running; result card (Download / Edit deck / Open in Documents). |
-| Editor | `/tools/presentation/[id]/edit` — `EditDeckFrame` iframe at `PRESENTON_PUBLIC_URL/presentation?id=…`, labelled cross-origin, with "open in a new tab". |
-| Adapter | `listPresentationTemplates`, `startPresentationGeneration`, `getPresentationTaskStatus` (async-tasks list workaround), `uploadPresentationSourceFile`, `downloadPresentationExport`, `presentonEditUrl`. Server-only, typed, path-guarded. |
+| Editor | `/tools/presentation/[id]/edit` — `EditDeckFrame` iframe. The frame URL comes from `resolveEditorUrl`: the themed fork (`PRESENTON_UI_URL`) when set and reachable, Presenton's own editor as the honest fallback; labelled cross-origin, with "open in a new tab". |
+| Adapter | `listPresentationTemplates`, `startPresentationGeneration`, `getPresentationTaskStatus` (async-tasks list workaround), `uploadPresentationSourceFile`, `downloadPresentationExport`, `presentonEditUrl`, `resolveEditorUrl`. Server-only, typed, path-guarded. |
 | Worker | `presentation.generate`: start async task → poll → download export → quota guard → `documents` row (`source='presentation'`) → row `succeeded`. Retry/backoff/dead-letter via `public.jobs`. |
 | DB | `public.presentations` (request + status mirror + `presenton_presentation_id` + `document_id`); `documents.source`; bucket allowlist includes PPTX. |
 | History | None (only `getLatestPresentation`); `/documents` lists the file with no provenance or deck affordance. |
 | Settings | `/integrations` has no Presenton card. |
 
-Presenton's editor interior is a separate Next.js app on its own origin; no
-cross-origin restyle is possible. This spec replaces that embed with native UI.
+Presenton's editor interior is a separate Next.js app on its own origin; it is
+forked and themed locally as the interim bridge (`presenton-ui/`), and this
+spec replaces the embed with native UI over phases B–D. The fork is a bridge,
+not the destination: no Presenton code or assets live in this repo.
+
+### 4.1 Post-fork runtime behaviour (verified 2026-09-15/16)
+
+Sources: `presenton-ui/DIVERGENCE.md`, `docs/integrations/presenton.md` §3.2,
+and the running stack (engine image built 2026-09-08, `PRESENTON_URL` local).
+These are the learnings the native build inherits; none of them require new
+UniPilot surfaces.
+
+| Behaviour | What was verified | Native consequence |
+|---|---|---|
+| `/status` 500 workaround | `GET /presentation/status/{id}` and `GET /async-tasks/status/{id}` answer 500 for every task whose `data` is set (SQLAlchemy `ObjectDereferencedError`, upstream `presentation.py:3212`). The async-tasks list endpoint returns identical fields without the mutation. | The adapter and worker already resolve tasks from `GET /api/v1/async-tasks?type=presentation.generate&limit=200&order=desc` and filter by id. Native reads keep this path; revert both call sites only when upstream fixes the status route. |
+| Export-through-the-engine path | `POST /api/v1/ppt/presentation/{id}/export {export_as}` answers `{presentation_id, path, edit_path}`; `path` is already app-relative — `/app_data/exports/{pdf,pptx}/<Title>_<uuid>.<ext>`. The fork delegates its export button to this endpoint and downloads through the proxy; P0 verified a 911,303-byte PDF and a valid 21-entry OOXML PPTX. | The native `presentation.export` worker job consumes the same call and the same `path` guard as the generate flow (`/app_data/` prefix + no `..`). No second export mechanism, no new formats. |
+| Asset mounts (exact shape) | `/app_data/**` is FastAPI `StaticFiles` over the app-data volume: auth + owner-path checked, **except** `/app_data/fonts/**` and `/app_data/templates/**`, which the engine serves without auth. `/static/**` is FastAPI's packaged resources (icons, replaceable-image placeholders, vendored Tailwind/Chart.js for the export renderer). `/vendor/fonts/**` is served by the Next app's `public/` dir (theme font URLs such as Montserrat point there, not at FastAPI). | The native asset proxy (§6.9) must accept the three prefixes (`/app_data/`, `/static/`, `/vendor/`), keep the `..` guard and the deck-reference membership check, and gate the `/app_data/` image/export families by owner exactly as the engine does. |
+| Template asset shape | Bundled `templates/<id>/template.json` carries `thumbnail: "static/…"` and other relative `static/…` URLs; at seed time they are rewritten to `/app_data/templates/<template_id>/static/…` and the files are copied to the app-data volume (`app_data/templates/<id>/static/image*.png`, `thumbnail.png`). | Template thumbnails and layout assets resolve to `/app_data/templates/**` and are safe to proxy without the per-deck scan when the deck's template id matches; still no cross-template reach. |
+| userConfig / provider gate | Presenton's web UI validates provider + key **and model** (`hasValidLLMConfig`) in its settings store and otherwise redirects every app route to its setup wizard; the engine container works because `USER_CONFIG_PATH` exists, and the fork sets `PRESENTON_USER_CONFIG_PATH` read-only to satisfy the same check. | Native pages never load Presenton's UI, so the gate does not apply to them — generation and export APIs are governed by the service's own env/admin settings, not the browser gate. The gate matters only for the labelled fallback wrapper (fork/engine editor), which keeps the fork's env handling. |
+| Provider output cap | `LLM_MAX_OUTPUT_TOKENS=1000` (a Groq OTPM workaround) truncated the outline call and produced a 1-slide deck; full decks need a provider/tier with a larger output budget. | Operational, not code: live-QA deck sizes depend on the configured provider. Verification may use short decks; nothing is faked. |
+| Long SSE in dev | The fork's dev-server generation stream disconnected ~4–5 minutes in; the engine persisted completed slides and resumes on reload with `stream=true`. | Native generation stays on the async-task + polling path (worker), never a browser SSE stream. The phase-D chat proxy is server-to-server (adapter opens the upstream SSE; the browser gets UniPilot frames), mirroring the 26.x assistant streaming route. |
+| Frozen content scope | The fork's P3 sweep froze deck-content paths (`components/slide-editor/**`, template/slide previews, export runtime, deck-preview cards carrying `slide-theme`) so chrome theming could not touch deck fonts/colors. | Evidence that the chrome-vs-deck rule is implementable exactly as written: native chrome is UniPilot; stage content stays the deck's. |
+
+### 4.2 Exact data shapes (re-verified 2026-09-16)
+
+Against `presenton-main/servers/fastapi`. These are the wire shapes the native
+renderer and editor consume; §6 describes how they render.
+
+- `GET /api/v1/ppt/presentation/{id}` → `PresentationWithSlides`:
+  `{id, version, content, n_slides, language, title, created_at, updated_at,
+  tone, verbosity, slides: SlideModel[], fonts, theme, generation_mode,
+  type}`.
+- `SlideModel`: `{id (uuid), layout_group, layout, index, content: dict,
+  html_content?, speaker_note?, properties?, ui?}` — `ui` is
+  `{components: [{id, description, position: {x, y}, elements: [SlideElement]}]}`.
+- `TemplateV2` (`GET /template/{id}`): `{id, name, description,
+  layouts: {layouts: [{id, description, components}]}, theme, fonts,
+  merged_components, is_default, assets?}` with
+  `theme = {colors: {primary, background, card, stroke, background_text,
+  primary_text, graph_0…graph_9}, fonts: {textFont: {name, url}}}`.
+- Element discriminator `type`: `text`, `text-list`, `image`, `table`,
+  `vector`, `chart`, `infographic`, `container`, `flex`, `grid`, `group`
+  (measured counts in §6.2).
 
 ## 5. Presenton UI inventory — screen/feature matrix
 
@@ -106,7 +173,7 @@ cross-origin restyle is possible. This spec replaces that embed with native UI.
 |---|---|---|---|---|
 | 1 | Auth gate / onboarding | Admin setup/sign-in, role split, provider onboarding wizard | Not surfaced — Presenton auth is service-level (`PRESENTON_API_KEY` bearer or `DISABLE_AUTH` single-user). UniPilot keeps its own auth; guests see the existing sign-in prompt. | — |
 | 2 | Generate `/upload` | Prompt + attachments (8 files, many types), slide count (Auto/5/8–20/custom ≤ 50), language (~100, auto), advanced (instructions, tone ×6, verbosity ×3, TOC, title slide), Standard/Smart mode, provider pill, preflight | Native form on `/tools/presentation` (§5.2). Smart mode and non-document attachment types deferred. | A |
-| 3 | Outline `/outline` | Template selection (built-in/custom cards + suggested), streamed outline, inline markdown edit, add/delete/reorder (≤ 50 slides, ≤ 100 words), AI outline chat, regenerate, Continue | Not in A–F. Requires the create → outlines → prepare → stream pipeline instead of the current one-shot async job. Recorded gap (§14, question Q2). | — |
+| 3 | Outline `/outline` | Template selection (built-in/custom cards + suggested), streamed outline, inline markdown edit, add/delete/reorder (≤ 50 slides, ≤ 100 words), AI outline chat, regenerate, Continue | Not in A–F. Requires the create → outlines → prepare → stream pipeline instead of the current one-shot async job. Recorded gap (§14; settled out — §13). | — |
 | 4 | Deck editor `/presentation?id=…` | Header (rename, regenerate, undo/redo, present, shortcuts, export PDF/PPTX, autosave indicator), 165 px thumbnail rail (drag reorder, add slides + layout chooser), canvas editor (full element editing, toolbars, palette), slide actions (duplicate/move/delete, notes), AI chat panel, streaming generation overlay, present mode | Native viewer (B), native core editor (C), extended parity (D). Streaming overlay not needed natively (worker owns generation; viewer reads the finished deck). | B/C/D |
 | 5 | Present mode (`mode=present`) | Fullscreen 1280×720 stage, auto-hiding chrome, progress, prev/next, layout grid, speaker notes panel, keyboard (←→↑↓ Space PageUp/Down Home End F G N Esc), click zones | Native inside the viewer route (B). | B |
 | 6 | Dashboard `/dashboard` | Decks grid/list with first-slide previews, type badge, slide count, open, rename, duplicate, delete, blank presentation, legacy table | Tool-page history list (F). Duplicate/delete actions: §10-F. Legacy v1 decks: not supported. | F |
@@ -133,15 +200,16 @@ Presenton's `/upload` fields and which UniPilot will carry:
 | Tone (6 values) | — | Add |
 | Verbosity (3 values) | — | Add |
 | Include TOC / title slide | — | Add two toggle controls |
-| Web search | — | Excluded in A (provider-dependent; provider config stays Presenton-side); question Q5 |
+| Web search | — | Excluded in A (provider-dependent; provider config stays Presenton-side — settled out, §13) |
 | Standard / Smart mode | — | Standard only (UniPilot generates v2-standard) |
 | Template | ✓ picker from `GET /template/all` | Keep; E deepens it |
 | Format pptx/pdf | ✓ | Keep |
 | Provider pill / preflight | — | Not surfaced; `/integrations` shows reachability (F) |
 
 New `presentations` request columns for A: `language`, `instructions`, `tone`,
-`verbosity`, `include_toc`, `include_title_slide` (all nullable/defaulted;
-`source_document_id` becomes `source_document_ids uuid[]` — see D9).
+`verbosity`, `include_table_of_contents`, `include_title_slide` (all
+nullable/defaulted; `source_document_id` becomes `source_document_ids uuid[]` —
+see D9 and §7.9, the migration list).
 
 ### 5.3 Outline (recorded, deferred)
 
@@ -150,7 +218,7 @@ outline → edit slides markdown → pick template on the outline screen →
 `prepare` → stream slide generation). UniPilot's one-shot `generate/async`
 skips it. Bringing outline editing in means switching the worker's pipeline and
 adding a streamed editing surface; that is a separate spec. TASK.md 31.3 stays
-open (question Q2).
+open (settled out for this program — §13).
 
 ### 5.4 Editor operations inventory (Phases B–D scope)
 
@@ -211,7 +279,8 @@ route as a labelled fallback (D7). UniPilot never generates Smart decks today.
 
 ### 6.1 Template V2 model (exact shapes)
 
-Read-only source of truth: `presentation-main/servers/fastapi`.
+Read-only source of truth: `presenton-main/servers/fastapi` (exact response
+fields re-verified 2026-09-16 — §4.2).
 
 A deck is a row in `presentations` + one `slides` row per slide. A slide
 carries:
@@ -253,7 +322,7 @@ Counted across the ten bundled templates (`presenton-main/templates/*/template.j
 | `vector` | 984 | polygons/ellipses, fill/stroke/dash/shadow |
 | `flex` | 780 | direction/wrap/align/justify/gap |
 | `container` | 370 | single-child wrapper |
-| `chart` | 132 | nine `chart_type` values appear: bar 42, line 36, pie 14, horizontal_bar 12, donut 10, area 6, stacked_bar 6, scatter 4, horizontal_stacked_bar 2 (enum defines 12) |
+| `chart` | 132 | nine `chart_type` values appear: bar 42, line 36, pie 14, horizontal_bar 12, donut 10, area 6, stacked_bar 6, scatter 4, horizontal_stacked_bar 2 (the engine enum defines 11 — `radar` and `polar_area` exist but appear in no bundled template — verified 2026-09-16 against `templates/v2/models/elements.py`) |
 | `grid` | 78 | columns/rows/gaps |
 | `infographic` | 42 | only three `data.type` values appear: gauge 22, progress_bar 16, vertical_funnel 4 (enum defines 27) |
 | `text-list` | 6 | marker/gap/items |
@@ -323,22 +392,40 @@ the current theme explicitly.
 
 ### 6.9 Assets — the proxy problem
 
-Slide assets live on Presenton: `/app_data/images/**` (auth required),
-`/app_data/fonts/**`, `/app_data/templates/<id>/static/**`, `/static/**`
-(public), and `/vendor/**` (mount to verify in the Phase B spike). Browsers
-cannot send the adapter's bearer token for `<img>`/`@font-face`, and per-user
-scoping must not leak across UniPilot accounts sharing one Presenton instance.
+Slide assets live on Presenton. Verified mounts (2026-09-16, §4.1):
+
+- `/app_data/**` — FastAPI `StaticFiles` over the app-data volume. Auth +
+  owner-path checked, **except** `/app_data/fonts/**` and
+  `/app_data/templates/**`, which are public prefixes on the engine.
+- `/static/**` — FastAPI's packaged resources: icons, replaceable-image
+  placeholders, vendored Tailwind/Chart.js used by the export renderer.
+- `/vendor/fonts/**` — served by the Next app's `public/` dir (theme font URLs,
+  e.g. Montserrat, point here, not at FastAPI).
+- Template assets: `template.json` `static/…` URLs are rewritten at seed time
+  to `/app_data/templates/<template_id>/static/…` (thumbnail included).
+- Deck slide images: `/app_data/images/**`; generated deck fonts:
+  `/app_data/fonts/**`.
+
+Browsers cannot send the adapter's bearer token for `<img>`/`@font-face`, and
+per-user scoping must not leak across UniPilot accounts sharing one Presenton
+instance.
 
 Design: **one owner-gated asset proxy** —
 `GET /api/presentation/[id]/asset?src=<path>`:
 
 1. Session user must own presentation `id` (RLS read).
-2. The deck is loaded server-side and the requested path must be referenced by
-   it (scan `ui`, `content`, `html_content`, `theme`, `fonts`) — not merely
-   allowlisted.
+2. The deck is loaded server-side. Every **user-data** path
+   (`/app_data/images|uploads|exports|pptx-to-*/**`) must be referenced by the
+   deck (scan `ui`, `content`, `html_content`, `theme`, `fonts`) — not merely
+   allowlisted. `/app_data/templates/<template_id>/…` must match the deck's
+   template id (`layout_group`). The engine-public assets
+   `/app_data/fonts/**`, `/static/**`, `/vendor/**` pass with the traversal
+   guard alone — they carry no user data and the engine mounts them publicly,
+   an explicit, recorded relaxation of the scan rule.
 3. The proxy fetches from Presenton with the adapter's auth, enforces the
-   `/app_data/` + no-`..` guard, streams bytes back with a private cache
-   header and the correct content type.
+   `/app_data/`, `/static/`, `/vendor/` prefix allowlist plus the no-`..` guard,
+   and streams bytes back with a private cache header and the correct content
+   type.
 
 Template assets (public on Presenton) use the same route with the deck's
 template id as the check. This removes CORS/mixed-origin concerns and keeps
@@ -362,6 +449,33 @@ route (which itself remains as the record of the old mechanism).
   system.
 
 ## 7. Architecture
+
+### 7.0 Stack and plumbing (reused — nothing new is introduced)
+
+- Frontend: Next 16.3.1, React 19.2.8, Tailwind 4, `motion ^13.1.1`, Supabase
+  SSR (`frontend/package.json`). Native pages are server components inside
+  `(app)`; interactivity is client components; all animation is the shared
+  Motion system.
+- Presenton access: the server-only adapter
+  `frontend/lib/integrations/presenton.ts` + `presentonConfig.ts` — the only
+  module that speaks Presenton HTTP. Extended in place; no second client.
+- Data: `frontend/lib/data/presentations.ts` (owner-RLS reads via the
+  request-scoped client, service-role writes), `presentationValues.ts` (parser
+  + display contract), `presentationActions.ts` (Server Actions),
+  `presentationErrors.ts` (sanitized copy).
+- Jobs: `frontend/lib/data/jobs.ts` enqueue → `public.jobs` →
+  `backend/worker/run.mjs` (29.1) → `presentationJobs.mjs` (+
+  `heartbeat.mjs`'s `touch_job` lease).
+- Streaming precedent: `frontend/app/api/assistant/turn/route.ts` (26.8) — the
+  session-gated ReadableStream SSE route the phase-D chat proxy mirrors.
+- Registry: `frontend/components/tools/toolCatalog.ts` — the presentation
+  tool's status/destination stays the single source of truth there.
+- Documents: `public.documents` + the private `documents` bucket + the
+  `/documents` surfaces (unchanged).
+- DB: `backend/supabase/migrations/20260914100000_presentation_generator.sql`;
+  the Phase-A/C columns (§7.9) are additive migrations on top.
+- No new provider wiring: providers/models/keys stay in Presenton's env and
+  admin UI. UniPilot never learns a provider name.
 
 ### 7.1 Diagram
 
@@ -417,7 +531,7 @@ the same guard/error vocabulary it has today.
 | Add / delete / duplicate / reorder | `PATCH /api/v1/ppt/presentation/update` `{id, slides: […]}` | Server deletes and re-inserts all slides; send the whole array, `theme` included, every slide with `properties` (nullable) |
 | Layout choose for new slide | hydration module (§7.6) + `slide_update` | No API for content→ui |
 | Per-slide layout swap | hydration module + `slide_update` | Preserve compatible content; unmapped elements fall back honestly |
-| Theme change | `PATCH /presentation/update` `{id, theme}` | Theme object from template/custom list |
+| Theme change | `PATCH /api/v1/ppt/presentation/update` `{id, theme}` | Theme object from template/custom list |
 | Image search/generate/upload | `GET /images/search`, `GET /images/generate?prompt=`, `POST /images/upload`, `GET /images/generated|uploaded`, `DELETE /images/{id}` | Then set element `data` via `slide_update` |
 | Icon search | `GET /api/v1/ppt/icons/search` | Then set `data`/`is_icon`/`color` |
 | Chart / table / infographic data | `slide_update` | Native editors write the element JSON |
@@ -458,11 +572,15 @@ New job kind `presentation.export` (payload `{presentationId}`) handled by
 `backend/worker/presentationJobs.mjs` or a sibling module:
 
 1. Read the row; require `presenton_presentation_id` and `document_id`.
-2. `POST /presentation/{id}/export {export_as}` → `path` under `/app_data/`.
+2. `POST /presentation/{id}/export {export_as}` → `{presentation_id, path,
+   edit_path}`; `path` is app-relative
+   (`/app_data/exports/{pdf,pptx}/<Title>_<uuid>.<ext>` — verified on the
+   current image, §4.1). The fork's delegated export proved this route
+   end-to-end (P0: PDF 911,303 bytes; PPTX valid 21-entry OOXML).
 3. Download bytes with the existing guards (≤ 25 MiB, mime by extension).
 4. Replace the existing document: upload to the same `storage_path`
    (upsert), update `documents` (`name`, `size_bytes`, `mime_type`,
-   `updated_at`). One deck → one document; no version history (D9, Q6).
+   `updated_at`). One deck → one document; no version history (D9).
 
 UI mirror: new `presentations` columns `export_status`
 (`queued|running|succeeded|failed|null`), `export_error_message` (sanitized),
@@ -475,7 +593,10 @@ UI mirror: new `presentations` columns `export_status`
 ownership-checked, adapter opens Presenton's SSE with the bearer key and pipes
 frames to the browser as-is; the client parses `chunk`/`status`/`trace`/
 `complete`/`error`. No timeout truncation; abort propagates. This also sidesteps
-Presenton's cookie-only EventSource limitation.
+Presenton's cookie-only EventSource limitation. The route follows the 26.8
+precedent (`frontend/app/api/assistant/turn/route.ts`): session gate →
+onboarding gate → `ReadableStream` of SSE frames → sanitized error frame;
+no frame carries provider or database internals.
 
 ### 7.9 Data model changes (migrations, one per phase that needs them)
 
@@ -483,7 +604,9 @@ Phase A (`presentations` request fields):
 
 - `language text`, `instructions text`, `tone text` (check vocabulary),
   `verbosity text` (check), `include_table_of_contents boolean not null
-  default false`, `include_title_slide boolean not null default false`,
+  default false`, `include_title_slide boolean not null default true`
+  (true preserves current decks: the service's own default is true and
+  UniPilot will now always send the boolean explicitly),
   `web_search boolean not null default false`.
 - Replace `source_document_id` with `source_document_ids uuid[]` (D9). Postgres
   cannot FK an array element, so every id is re-validated in the Server Action
@@ -517,9 +640,9 @@ the re-export update path.
 | LaTeX runs in text | Gap — raw run rendered | §6.4 |
 | 24 of 27 infographic types | Gap — honest placeholder | §6.7 |
 | Custom template editing/creation (TASK 31.5–31.7) | Out of A–F | §14 |
-| Outline editing (TASK 31.3) | Out of A–F | §5.3, Q2 |
-| Theme creation (custom palettes) | Out of C–F | §5.4, Q4 |
-| Web search at generate time | Out of A | Q5 |
+| Outline editing (TASK 31.3) | Out of A–F | §5.3, §13 |
+| Theme creation (custom palettes) | Out of C–F | §5.4, §13 |
+| Web search at generate time | Out of A | §13 |
 | Non-document source attachment types | Gap (documents vocabulary) | §5.2 |
 | Multi-tab / multi-user editing | Out of scope (last-write-wins) | §7.10 |
 
@@ -585,6 +708,20 @@ semantics; present mode supports the keyboard set and traps focus; all
 toolbars are focusable and dismiss with Escape; drag interactions have
 keyboard equivalents (move slide up/down at minimum) — matching the Tasks
 board precedent.
+
+### 8.6 Branding (chrome is UniPilot's; deck content is the deck's)
+
+- Native presentation surfaces are UniPilot's throughout: the workspace shell,
+  the wordmark (Rocket in the primary badge + "UniPilot"), Bricolage/Geist/
+  Geist Mono, glass, dark-first, the shared Motion vocabulary. No Presenton
+  wordmark, logo, splash art or marketing string appears anywhere in native
+  chrome.
+- Generated deck content keeps its own deck fonts and colors **inside the
+  stage only** — the same rule the fork's frozen content scope encodes
+  (`presenton-ui/DIVERGENCE.md`).
+- The interim fork's chrome carries UniPilot's mark (recorded in
+  `presenton-ui/DIVERGENCE.md`) so the current editor reads correctly until the
+  native build replaces it. Upstream's LICENSE/NOTICE stay in the fork.
 
 ## 9. Mapping onto existing UniPilot surfaces
 
@@ -672,7 +809,7 @@ network checks, 375/768/1280 screenshots into `frontend/screenshots/`,
 
 - Tool-page decks list; `/documents` provenance + Open deck; `/integrations`
   Presenton status card; delete deck (row + Presenton deck + document policy)
-  with `Modal` confirm; duplicate as a stretch item (Q7).
+  with `Modal` confirm; duplicate as a stretch item.
 - Verification: RLS tests (list is owner-only), Chromium flows for open/
   delete, honest service-offline states.
 
@@ -731,26 +868,34 @@ network checks, 375/768/1280 screenshots into `frontend/screenshots/`,
 
 ## 13. Open questions (for review)
 
-1. **Chart.js dependency** — approve Chart.js + datalabels (D5), or do you
-   want the custom-SVG route with a narrower chart set?
-2. **Outline editing** (TASK 31.3): confirm it stays out of A–F and gets its
-   own spec later (recommended), or promote it into this program?
-3. **Smart mode**: confirm native support stays out (UniPilot generates
-   standard only), with the labelled iframe fallback.
-4. **Theme creation** (custom palettes, `POST /theme/generate`): out of C–F
-   (only template/custom theme selection) — confirm.
-5. **Web search at generation**: out of A because it depends on Presenton-side
-   provider config — confirm, or include it as a pass-through toggle.
-6. **Re-export semantics**: overwrite the same document (recommended) vs keep
-   each export as a new document.
-7. **History actions**: which of duplicate/delete ship in F (delete has
-   document implications)? Duplicate is proposed as a stretch.
-8. **Multi-document source input**: up to 8 UniPilot PDF/DOCX documents —
-   acceptable bound, or must arbitrary Presenton-supported types be allowed
-   (would require widening the documents vocabulary)?
-9. **Present mode** lives in the viewer phase (B) — confirm, or move to C.
-10. **Autosave**: 2 s debounce, last-write-wins, no multi-tab protection —
-    acceptable for v1?
+Only one decision remains open before Phase B:
+
+1. **Chart.js dependency** — approve `chart.js` + `chartjs-plugin-datalabels`
+   (D5), or take the custom-SVG route with a narrower chart set? The plan
+   carries both options; Phase B starts with the approved one.
+
+Settled for this program by the refresh directive (2026-09-16) — recorded here
+so the plan can proceed without re-litigating, and reviewable at the plan
+gate:
+
+- **Outline editing** (TASK 31.3) stays out of A–F; it is a separate pipeline
+  (create → outlines → prepare → stream) and a separate spec when wanted.
+- **Smart mode** stays out: UniPilot generates v2-standard only; Smart HTML
+  decks open with the labelled fallback.
+- **Theme creation** (`POST /theme/generate`, custom palettes) stays out of
+  C–F: the editor offers theme *selection* (template + existing custom
+  themes).
+- **Web search at generation** stays out of A: it depends on Presenton-side
+  provider config, which UniPilot never surfaces.
+- **Re-export overwrites the same document** (D9): one deck ↔ one document,
+  no export version history.
+- **History actions in F**: delete ships (row + engine deck + document per the
+  documents policy, `Modal` confirm); duplicate is a stretch.
+- **Multi-document sources**: up to 8 existing UniPilot PDF/DOCX documents;
+  arbitrary Presenton-supported types stay out (would widen the documents
+  vocabulary).
+- **Present mode ships in B** (viewer phase).
+- **Autosave**: 2 s debounce, last-write-wins, no multi-tab protection.
 
 ## 14. Recorded gaps / out of scope
 
@@ -761,11 +906,19 @@ network checks, 375/768/1280 screenshots into `frontend/screenshots/`,
 - Non-document attachment types at generation time (UniPilot documents are
   PDF/DOCX/PPTX/PNG/JPEG).
 - Presenton admin/settings/provider surfaces, Presenton Cloud, legacy v1 decks.
+- **Per-owner engine identity.** The engine's image library has no ownership
+  metadata: UniPilot mitigates with a reference-based filter (library
+  list/insert/delete intersect the caller's own decks' asset paths), which is
+  appropriate for a single-owner deployment but not isolation. The real fix is
+  per-owner engine accounts / an isolated library — tracked for a later phase
+  (recorded 2026-09-17, D3).
 - Real-time collaboration, per-user Presenton auth bridging (the service uses
   one API key; UniPilot's session is the only identity).
 
 ## 15. Next step
 
-On approval of this spec: invoke `writing-plans` to produce the phased
-implementation plan (A–F) with per-phase tasks, tests, and verification
-evidence, then implement phase by phase. No code before that.
+This refreshed spec is the plan's basis:
+`docs/superpowers/plans/2026-09-16-native-presentation.md` (produced with
+`writing-plans`, 2026-09-16). Execution starts on the founder's go-ahead,
+phase by phase (A → F), pausing at each phase boundary for review. The one
+remaining approval item is Q1 (Chart.js). No code before the go-ahead.
