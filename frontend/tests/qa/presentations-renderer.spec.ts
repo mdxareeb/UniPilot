@@ -107,6 +107,47 @@ import {
   isImageInScope,
 } from "../../lib/presentation/imageScope";
 import {
+  addChartRow,
+  addChartSeries,
+  applyChartField,
+  categoryPlaceholder,
+  chartAxisLabels,
+  chartColorSlots,
+  chartColorTargetMode,
+  chartHasAxes,
+  chartRowCount,
+  chartSeriesSupportsMultiple,
+  chartThemePalette,
+  CHART_COLOR_LIMIT,
+  CHART_ROW_LIMIT,
+  CHART_SERIES_LIMIT,
+  CHART_TEXT_MAX_LENGTH,
+  CHART_TYPE_OPTIONS,
+  DATA_LABEL_OPTIONS,
+  readChartCategories,
+  readChartSeries,
+  removeChartRow,
+  removeChartSeries,
+  setCategory,
+  setChartColor,
+  setSeriesName,
+  setSeriesValue,
+} from "../../lib/presentation/chartOps";
+import {
+  addTableColumn,
+  addTableRow,
+  removeTableColumn,
+  removeTableRow,
+  setTableCellText,
+  tableBounds,
+  tableCellText,
+  tableColumnCount,
+  TABLE_COLUMN_HARD_CAP,
+  TABLE_ROW_HARD_CAP,
+  tableHasHeader,
+  tableRenderedRowCount,
+} from "../../lib/presentation/tableOps";
+import {
   applyIconColor,
   applyIconSource,
   DEFAULT_ICON_WEIGHT,
@@ -4252,5 +4293,778 @@ test.describe("engine-public image sources (D4)", () => {
     expect(classifyImageSource("/static//x.svg", emptyScope)).toBe("denied");
     expect(isEnginePublicImageSource("/static/../x.svg")).toBe(false);
     expect(isEnginePublicImageSource(null)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task D5 — chart data ops (spec §5.4 charts row, §6.6)
+//
+// The pure half of the chart editor: `chartOps` maps the editor's writes onto
+// the exact `ChartElement` fields `chartConfig` reads, with the renderer's own
+// normalization, palette precedence and per-type rules (pie/donut single
+// series; no scales for pie/donut/polar_area). Every helper is bounds-safe and
+// returns the same element reference when a write is a no-op — the live
+// editor, re-render and persistence are proved in `qa-presentation-ui`.
+// ---------------------------------------------------------------------------
+
+function chartOpsFixture(overrides: Partial<ChartElement> = {}): ChartElement {
+  return {
+    type: "chart",
+    chart_type: "bar",
+    title: "Trend",
+    categories: ["Jan", "Feb", "Mar"],
+    series: [{ name: "Series 1", values: [1, 2, 3] }],
+    colors: null,
+    name: "chart",
+    ...overrides,
+  };
+}
+
+test.describe("chart data ops — types and fields (D5)", () => {
+  test("the type list covers the wire enum and the data-label positions", () => {
+    expect(
+      CHART_TYPE_OPTIONS.map((option) => option.value).sort(),
+    ).toEqual(WIRE_CHART_TYPES.map(([chartType]) => chartType).sort());
+    expect(CHART_TYPE_OPTIONS.every((option) => option.label.trim() !== "")).toBe(
+      true,
+    );
+    expect(DATA_LABEL_OPTIONS.map((option) => option.value)).toEqual([
+      "base",
+      "mid",
+      "top",
+      "outside",
+    ]);
+  });
+
+  test("applyChartField normalizes the title and preserves identity on no-ops", () => {
+    const element = chartOpsFixture();
+    expect(applyChartField(element, { field: "title", value: "Trend" })).toBe(
+      element,
+    );
+    expect(applyChartField(element, { field: "chart_type", value: "bar" })).toBe(
+      element,
+    );
+    expect(
+      applyChartField(element, { field: "data_labels", value: null }),
+    ).toBe(element);
+    expect(applyChartField(element, { field: "x_axis", value: true })).not.toBe(
+      element,
+    );
+
+    const cleared = applyChartField(element, { field: "title", value: "   " });
+    expect(cleared.title).toBeNull();
+    expect(applyChartField(cleared, { field: "title", value: "" })).toBe(cleared);
+
+    const line = applyChartField(element, {
+      field: "chart_type",
+      value: "line",
+    });
+    expect(line.chart_type).toBe("line");
+    expect(line.categories).toBe(element.categories);
+
+    const labels = applyChartField(element, {
+      field: "data_labels",
+      value: "outside",
+    });
+    expect(labels.data_labels).toBe("outside");
+
+    const axis = applyChartField(element, { field: "x_axis", value: false });
+    expect(axis.x_axis).toBe(false);
+    expect(applyChartField(axis, { field: "x_axis", value: false })).toBe(axis);
+    const grid = applyChartField(axis, { field: "y_axis_grid", value: false });
+    expect(grid.y_axis_grid).toBe(false);
+    expect(element.x_axis).toBeUndefined();
+  });
+
+  test("per-type rules: series multiplicity, axes and radar labels", () => {
+    expect(chartSeriesSupportsMultiple("bar")).toBe(true);
+    expect(chartSeriesSupportsMultiple("pie")).toBe(false);
+    expect(chartSeriesSupportsMultiple("donut")).toBe(false);
+
+    expect(chartHasAxes("bar")).toBe(true);
+    expect(chartHasAxes("radar")).toBe(true);
+    expect(chartHasAxes("pie")).toBe(false);
+    expect(chartHasAxes("donut")).toBe(false);
+    expect(chartHasAxes("polar_area")).toBe(false);
+
+    expect(chartAxisLabels("radar")).toEqual({
+      xAxis: "Category labels",
+      xGrid: "Spokes",
+      yAxis: "Value labels",
+      yGrid: "Rings",
+    });
+    expect(chartAxisLabels("bar").xAxis).toBe("Show X axis");
+  });
+});
+
+test.describe("chart data ops — series, categories and rows (D5)", () => {
+  test("readChartSeries applies the renderer's normalization without throwing", () => {
+    const element = chartOpsFixture({
+      series: [
+        { name: "", values: [1, Number.NaN, Number.POSITIVE_INFINITY] },
+        { name: "Named", values: [3] },
+        { name: "Strings", values: ["5", "x", ""] },
+        null,
+        "junk",
+      ] as unknown as ChartElement["series"],
+    });
+    expect(readChartSeries(element)).toEqual([
+      { name: "Series 1", values: [1, 0, 0] },
+      { name: "Named", values: [3] },
+      { name: "Strings", values: [5, 0, 0] },
+    ]);
+    expect(readChartSeries(chartOpsFixture({ series: null }))).toEqual([]);
+    expect(readChartSeries(chartOpsFixture({ series: undefined }))).toEqual([]);
+  });
+
+  test("readChartCategories keeps positions and empties non-strings", () => {
+    const element = chartOpsFixture({
+      categories: ["A", 7, null, "  D  "] as unknown as string[],
+    });
+    expect(readChartCategories(element)).toEqual(["A", "", "", "  D  "]);
+    expect(readChartCategories(chartOpsFixture({ categories: null }))).toEqual(
+      [],
+    );
+    expect(categoryPlaceholder(2)).toBe("Value 3");
+  });
+
+  test("setSeriesValue writes finite values and pads unstored rendered cells", () => {
+    const element = chartOpsFixture({
+      series: [
+        { name: "One", values: [1, 2] },
+        { name: "Two", values: [3, 4] },
+      ],
+    });
+    expect(setSeriesValue(element, 0, 1, 2)).toBe(element);
+    expect(setSeriesValue(element, 1, 0, 9).series).toEqual([
+      { name: "One", values: [1, 2] },
+      { name: "Two", values: [9, 4] },
+    ]);
+    expect(setSeriesValue(element, 0, 1, Number.NaN)).toBe(element);
+    expect(setSeriesValue(element, 0, 1, Number.POSITIVE_INFINITY)).toBe(element);
+    expect(setSeriesValue(element, 0, -1, 5)).toBe(element);
+    /* Past the rendered grid (three categories) the write is refused. */
+    expect(setSeriesValue(element, 0, 3, 5)).toBe(element);
+    expect(setSeriesValue(element, 5, 0, 5)).toBe(element);
+
+    /* Row 2 renders but Series One does not store a value for it: the write
+       pads with the zeros the renderer already draws (mirrors setCategory). */
+    const padded = setSeriesValue(element, 0, 2, 7);
+    expect(padded.series).toEqual([
+      { name: "One", values: [1, 2, 7] },
+      { name: "Two", values: [3, 4] },
+    ]);
+    expect(element.series?.[0].values).toEqual([1, 2]);
+    const config = chartConfig(padded, null);
+    expect(chartDatasets(config)[0].data).toEqual([1, 2, 7]);
+
+    /* A later write to the now-stored cell is a plain in-range edit. */
+    expect(setSeriesValue(padded, 0, 2, 7)).toBe(padded);
+  });
+
+  test("the edited value reaches chartConfig's dataset (editor → renderer parity)", () => {
+    const edited = setSeriesValue(chartOpsFixture(), 0, 1, 42);
+    const config = chartConfig(edited, null);
+    expect(chartDatasets(config)[0].data).toEqual([1, 42, 3]);
+  });
+
+  test("setSeriesName and setCategory cap text and materialize only edited gaps", () => {
+    const element = chartOpsFixture({ categories: ["Jan"] });
+    expect(setSeriesName(element, 0, "Series 1")).toBe(element);
+    expect(setSeriesName(element, 0, "Revenue").series?.[0].name).toBe("Revenue");
+    expect(setSeriesName(element, 9, "Nope")).toBe(element);
+
+    expect(setCategory(element, 0, "Jan")).toBe(element);
+    const padded = setCategory(element, 2, "Mar");
+    expect(padded.categories).toEqual(["Jan", "Value 2", "Mar"]);
+    expect(readChartCategories(padded)).toEqual(["Jan", "Value 2", "Mar"]);
+
+    const long = "x".repeat(CHART_TEXT_MAX_LENGTH + 20);
+    const capped = setCategory(element, 0, long);
+    expect(capped.categories?.[0]).toHaveLength(CHART_TEXT_MAX_LENGTH);
+    expect(setCategory(element, -1, "x")).toBe(element);
+    expect(setCategory(element, CHART_ROW_LIMIT, "x")).toBe(element);
+  });
+
+  test("addChartRow appends a category and a zero per series, capped at 24", () => {
+    const element = chartOpsFixture();
+    const added = addChartRow(element);
+    expect(added.categories).toEqual(["Jan", "Feb", "Mar", "Item 4"]);
+    expect(added.series?.[0].values).toEqual([1, 2, 3, 0]);
+    expect(element.categories).toEqual(["Jan", "Feb", "Mar"]);
+
+    /* Series shorter than the row count are padded to the new width. */
+    const shortSeries = chartOpsFixture({
+      categories: ["A", "B", "C"],
+      series: [{ name: "One", values: [1] }],
+    });
+    expect(addChartRow(shortSeries).series?.[0].values).toEqual([1, 0, 0, 0]);
+
+    /* No stored series: the category row is appended honestly, no series. */
+    const noSeries = chartOpsFixture({ series: [] });
+    const noSeriesNext = addChartRow(noSeries);
+    expect(noSeriesNext.categories).toHaveLength(4);
+    expect(noSeriesNext.series).toEqual([]);
+
+    const full = chartOpsFixture({
+      categories: Array.from({ length: CHART_ROW_LIMIT }, (_, index) => `C${index}`),
+      series: [{ name: "One", values: Array.from({ length: CHART_ROW_LIMIT }, () => 1) }],
+    });
+    expect(addChartRow(full)).toBe(full);
+  });
+
+  test("removeChartRow drops the category and every stored value, keeping one row", () => {
+    const element = chartOpsFixture({
+      series: [
+        { name: "One", values: [1, 2, 3] },
+        { name: "Two", values: [4] },
+      ],
+    });
+    const removed = removeChartRow(element, 1);
+    expect(removed.categories).toEqual(["Jan", "Mar"]);
+    expect(removed.series).toEqual([
+      { name: "One", values: [1, 3] },
+      { name: "Two", values: [4] },
+    ]);
+    expect(removeChartRow(element, 9)).toBe(element);
+    expect(removeChartRow(element, -1)).toBe(element);
+
+    const single = chartOpsFixture({ categories: ["Only"], series: [] });
+    expect(removeChartRow(single, 0)).toBe(single);
+  });
+
+  test("addChartSeries pads to the row count and refuses pie/donut and the cap", () => {
+    const element = chartOpsFixture();
+    const added = addChartSeries(element);
+    expect(added.series).toHaveLength(2);
+    expect(added.series?.[1]).toEqual({
+      name: "Series 2",
+      values: [0, 0, 0],
+    });
+
+    const pie = chartOpsFixture({ chart_type: "pie" });
+    expect(addChartSeries(pie)).toBe(pie);
+    const donut = chartOpsFixture({ chart_type: "donut" });
+    expect(addChartSeries(donut)).toBe(donut);
+
+    const capped = chartOpsFixture({
+      series: Array.from({ length: CHART_SERIES_LIMIT }, (_, index) => ({
+        name: `Series ${index + 1}`,
+        values: [1, 2, 3],
+      })),
+    });
+    expect(addChartSeries(capped)).toBe(capped);
+  });
+
+  test("removeChartSeries keeps the last series and removes by index", () => {
+    const element = chartOpsFixture({
+      series: [
+        { name: "One", values: [1, 2, 3] },
+        { name: "Two", values: [4, 5, 6] },
+      ],
+    });
+    expect(removeChartSeries(element, 0).series).toEqual([
+      { name: "Two", values: [4, 5, 6] },
+    ]);
+    expect(removeChartSeries(element, 7)).toBe(element);
+
+    const single = chartOpsFixture();
+    expect(removeChartSeries(single, 0)).toBe(single);
+  });
+
+  test("chartRowCount follows the longest of categories and values, capped at 24", () => {
+    expect(chartRowCount(chartOpsFixture())).toBe(3);
+    expect(
+      chartRowCount(
+        chartOpsFixture({
+          categories: ["A"],
+          series: [{ name: "One", values: [1, 2, 3, 4] }],
+        }),
+      ),
+    ).toBe(4);
+    expect(
+      chartRowCount(chartOpsFixture({ categories: [], series: [] })),
+    ).toBe(0);
+
+    /* The renderer caps its labels at 24 (chartLabels): the editor exposes
+       exactly the rows the renderer draws. */
+    const wide = chartOpsFixture({
+      categories: Array.from({ length: CHART_ROW_LIMIT + 6 }, (_, i) => `C${i}`),
+      series: [
+        {
+          name: "One",
+          values: Array.from({ length: CHART_ROW_LIMIT + 6 }, () => 1),
+        },
+      ],
+    });
+    expect(chartRowCount(wide)).toBe(CHART_ROW_LIMIT);
+
+    /* Row writers keep the raw width: an unrelated add never truncates a
+       series the renderer does not draw. */
+    const added = addChartRow(wide);
+    expect(added).toBe(wide);
+  });
+});
+
+test.describe("chart data ops — colors (D5)", () => {
+  const THEME = ["#111111", "#222222", "#333333"];
+
+  test("chartThemePalette reads the ten graph roles, or the fork defaults", () => {
+    const palette = chartThemePalette(themeColors());
+    expect(palette).toHaveLength(10);
+    expect(palette[0]).toBe("#285F20");
+    expect(chartThemePalette(null).length).toBeGreaterThan(0);
+    expect(chartThemePalette({ graph_0: "not a color" }).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  test("slots target series or categories with the renderer's labels", () => {
+    const single = chartOpsFixture();
+    expect(chartColorTargetMode(single)).toBe("category");
+    expect(
+      chartColorSlots(single, THEME).map((slot) => slot.label),
+    ).toEqual(["Jan", "Feb", "Mar"]);
+    expect(chartColorSlots(single, THEME).map((slot) => slot.color)).toEqual(
+      THEME,
+    );
+    expect(chartColorSlots(single, THEME).every((slot) => !slot.explicit)).toBe(
+      true,
+    );
+
+    const multi = chartOpsFixture({
+      series: [
+        { name: "One", values: [1, 2, 3] },
+        { name: "Two", values: [4, 5, 6] },
+      ],
+    });
+    expect(chartColorTargetMode(multi)).toBe("series");
+    expect(chartColorSlots(multi, THEME).map((slot) => slot.label)).toEqual([
+      "One",
+      "Two",
+    ]);
+
+    /* Pie keeps the category mode even with several stored series. */
+    const pie = chartOpsFixture({
+      chart_type: "pie",
+      series: [
+        { name: "One", values: [1, 2, 3] },
+        { name: "Two", values: [4, 5, 6] },
+      ],
+    });
+    expect(chartColorTargetMode(pie)).toBe("category");
+    expect(chartColorSlots(pie, THEME).map((slot) => slot.label)).toEqual([
+      "Jan",
+      "Feb",
+      "Mar",
+    ]);
+
+    /* Explicit colors win, cycling exclusively like the renderer: a 2-color
+       palette on a 3-category chart draws explicit[2 % 2] for the third
+       category, and the chip reports exactly that. */
+    const explicit = chartOpsFixture({ colors: ["#ABCDEF", "#123456"] });
+    const slots = chartColorSlots(explicit, THEME);
+    expect(slots[0]).toMatchObject({ color: "#ABCDEF", explicit: true });
+    expect(slots[1]).toMatchObject({ color: "#123456", explicit: true });
+    expect(slots[2]).toMatchObject({ color: "#ABCDEF", explicit: false });
+    expect(
+      chartDatasets(chartConfig(explicit, null))[0].backgroundColor,
+    ).toEqual(["#ABCDEF", "#123456", "#ABCDEF"]);
+  });
+
+  test("setChartColor preserves every other slot's rendered color and the chips agree", () => {
+    /* Fresh element: no explicit colors, three rendered slots seeded from the
+       theme. Editing Feb must keep Jan and Mar drawing their theme colors. */
+    const element = chartOpsFixture({ colors: null });
+    const before = chartColorSlots(element, THEME);
+    expect(before.map((slot) => slot.color)).toEqual(THEME);
+
+    const written = setChartColor(element, 1, "#ABCDEF", THEME);
+    /* The whole exposed slot set materializes: a shorter array would make the
+       renderer cycle explicit[2 % 2] = explicit[0] for Mar. */
+    expect(written.colors).toEqual(["#111111", "#ABCDEF", "#333333"]);
+
+    const after = chartColorSlots(written, THEME);
+    expect(after[0].color).toBe(before[0].color);
+    expect(after[1].color).toBe("#ABCDEF");
+    expect(after[2].color).toBe(before[2].color);
+    expect(after.map((slot) => slot.color)).toEqual([
+      "#111111",
+      "#ABCDEF",
+      "#333333",
+    ]);
+
+    /* Chip-vs-render agreement: the dataset draws exactly what the chips
+       report, category by category. */
+    const config = chartConfig(written, null);
+    expect(chartDatasets(config)[0].backgroundColor).toEqual(
+      after.map((slot) => slot.color),
+    );
+
+    /* Editing the first slot from no explicit colors keeps the others too. */
+    const first = setChartColor(element, 0, "#ABCDEF", THEME);
+    expect(first.colors).toEqual(["#ABCDEF", "#222222", "#333333"]);
+    expect(chartColorSlots(first, THEME).slice(1).map((slot) => slot.color)).toEqual([
+      "#222222",
+      "#333333",
+    ]);
+
+    /* Same-value writes are identity; reset removes the explicit slot, and the
+       remaining explicit pair then cycles (the renderer's own all-or-nothing
+       palette) — the chips report exactly that. */
+    expect(setChartColor(written, 1, "#ABCDEF", THEME)).toBe(written);
+    const reset = setChartColor(written, 1, null, THEME);
+    expect(reset.colors).toEqual(["#111111", "#333333"]);
+    expect(chartColorSlots(reset, THEME).map((slot) => slot.color)).toEqual([
+      "#111111",
+      "#333333",
+      "#111111",
+    ]);
+
+    /* Invalid and out-of-range writes are refused. */
+    expect(setChartColor(element, 0, "not a color", THEME)).toBe(element);
+    expect(setChartColor(element, CHART_COLOR_LIMIT, "#FFFFFF", THEME)).toBe(
+      element,
+    );
+    expect(setChartColor(written, 5, null, THEME)).toBe(written);
+  });
+
+  test("setChartColor keeps an existing explicit palette's other slots untouched", () => {
+    /* Explicit colors cycle exclusively: with two stored colors, the third
+       category draws explicit[0]. Editing one slot must not shift that. */
+    const element = chartOpsFixture({ colors: ["#AABBCC", "#112233"] });
+    const before = chartColorSlots(element, THEME);
+    expect(before.map((slot) => slot.color)).toEqual([
+      "#AABBCC",
+      "#112233",
+      "#AABBCC",
+    ]);
+
+    const written = setChartColor(element, 1, "#ABCDEF", THEME);
+    expect(written.colors).toEqual(["#AABBCC", "#ABCDEF", "#AABBCC"]);
+    const after = chartColorSlots(written, THEME);
+    expect(after[0].color).toBe(before[0].color);
+    expect(after[2].color).toBe(before[2].color);
+    expect(chartDatasets(chartConfig(written, null))[0].backgroundColor).toEqual(
+      after.map((slot) => slot.color),
+    );
+    expect(element.colors).toEqual(["#AABBCC", "#112233"]);
+
+    /* Invalid stored colors are dropped like the renderer drops them: one
+       valid explicit color cycles exclusively over every slot. */
+    const dirty = chartOpsFixture({
+      colors: ["#123456", "junk", "  "] as string[],
+    });
+    expect(
+      chartColorSlots(dirty, THEME).map((slot) => slot.color),
+    ).toEqual(["#123456", "#123456", "#123456"]);
+    expect(setChartColor(dirty, 1, "#ABCDEF", THEME).colors).toEqual([
+      "#123456",
+      "#ABCDEF",
+      "#123456",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task D5 — table data ops (spec §5.4 tables row, §6.4)
+//
+// The pure half of the table editor: rendered-row addressing (row 0 is the
+// stored header when `columns` is non-empty), run-preserving plain-text cell
+// writes, and bounds-safe row/column add/remove that respect the wire's
+// declared min/max (falling back to the fork editor's own caps). The live
+// cell edit and persistence are proved in `qa-presentation-ui`.
+// ---------------------------------------------------------------------------
+
+function tableOpsFixture(overrides: Partial<TableElement> = {}): TableElement {
+  return {
+    type: "table",
+    name: "metrics",
+    size: { width: 800, height: 200 },
+    columns: [
+      {
+        font: { size: 14, bold: true },
+        runs: [{ text: "Region", font: { size: 14, bold: true } }],
+      },
+      { runs: [{ text: "Sales" }] },
+    ],
+    rows: [
+      [{ runs: [{ text: "US" }] }, { runs: [{ text: "10" }] }],
+      [{ runs: [{ text: "EU" }] }, { runs: [{ text: "20" }] }],
+    ],
+    ...overrides,
+  };
+}
+
+test.describe("table data ops — shape and bounds (D5)", () => {
+  test("rendered rows/columns and header detection follow the renderer", () => {
+    const element = tableOpsFixture();
+    expect(tableRenderedRowCount(element)).toBe(3);
+    expect(tableColumnCount(element)).toBe(2);
+    expect(tableHasHeader(element)).toBe(true);
+
+    const headerless = tableOpsFixture({ columns: [] });
+    expect(tableRenderedRowCount(headerless)).toBe(2);
+    expect(tableHasHeader(headerless)).toBe(false);
+
+    const wide = tableOpsFixture({
+      columns: [{ runs: [{ text: "A" }] }],
+      rows: [[{ runs: [{ text: "x" }] }], []],
+    });
+    expect(tableColumnCount(wide)).toBe(1);
+    expect(tableRenderedRowCount(wide)).toBe(3);
+
+    const malformed = {
+      type: "table",
+      columns: undefined,
+      rows: undefined,
+    } as unknown as TableElement;
+    expect(tableRenderedRowCount(malformed)).toBe(0);
+    expect(tableColumnCount(malformed)).toBe(1);
+    expect(tableHasHeader(malformed)).toBe(false);
+  });
+
+  test("declared bounds win and clamp into the editor's hard caps", () => {
+    expect(tableBounds(tableOpsFixture())).toEqual({
+      minRows: 1,
+      maxRows: 8,
+      minColumns: 1,
+      maxColumns: 6,
+    });
+    expect(
+      tableBounds(
+        tableOpsFixture({
+          min_rows: 2,
+          max_rows: 3,
+          min_columns: 2,
+          max_columns: 4,
+        }),
+      ),
+    ).toEqual({ minRows: 2, maxRows: 3, minColumns: 2, maxColumns: 4 });
+
+    /* min > max collapses to the minimum; huge values clamp to the hard cap. */
+    expect(
+      tableBounds(tableOpsFixture({ min_rows: 5, max_rows: 2 })),
+    ).toMatchObject({ minRows: 5, maxRows: 5 });
+    expect(
+      tableBounds(tableOpsFixture({ max_rows: 999, max_columns: 999 })),
+    ).toMatchObject({
+      maxRows: TABLE_ROW_HARD_CAP,
+      maxColumns: TABLE_COLUMN_HARD_CAP,
+    });
+  });
+
+  test("tableCellText reads stored runs and tolerates missing cells", () => {
+    const element = tableOpsFixture();
+    expect(tableCellText(element, 0, 0)).toBe("Region");
+    expect(tableCellText(element, 1, 1)).toBe("10");
+    /* A padded column the row does not store reads empty. */
+    expect(tableCellText(element, 1, 7)).toBe("");
+    /* Out-of-range rows read empty, never throw. */
+    expect(tableCellText(element, 9, 0)).toBe("");
+    expect(tableCellText(element, -1, 0)).toBe("");
+  });
+});
+
+test.describe("table data ops — cell writes (D5)", () => {
+  test("setTableCellText preserves the first run's style and every cell field", () => {
+    const styledCell = {
+      font: { size: 12, color: "#03362D" },
+      color: { color: "#F8F4E9", opacity: 1 },
+      alignment: "center" as const,
+      runs: [{ text: "US", font: { bold: true } }, { text: "!" }],
+    };
+    const element = tableOpsFixture({ rows: [[styledCell]] });
+    const next = setTableCellText(element, 1, 0, "USA");
+    expect(next.rows[0][0]).toEqual({
+      ...styledCell,
+      runs: [{ text: "USA", font: { bold: true } }],
+    });
+    expect(element.rows[0][0].runs).toEqual([
+      { text: "US", font: { bold: true } },
+      { text: "!" },
+    ]);
+  });
+
+  test("a LaTeX first run degrades to its font (or the cell font), never kept as text", () => {
+    const latexCell = {
+      font: { size: 10 },
+      runs: [{ type: "latex" as const, latex: "x^2", font: { italic: true } }],
+    };
+    const element = tableOpsFixture({ rows: [[latexCell]] });
+    expect(setTableCellText(element, 1, 0, "x²").rows[0][0].runs).toEqual([
+      { text: "x²", font: { italic: true } },
+    ]);
+
+    const plainLatex = {
+      runs: [{ type: "latex" as const, latex: "y" }],
+    };
+    const latexOnly = tableOpsFixture({ rows: [[plainLatex]] });
+    /* Rewriting the LaTeX source as itself is a no-op (the displayed text is
+       already that source); a real edit degrades to plain text. */
+    expect(setTableCellText(latexOnly, 1, 0, "y")).toBe(latexOnly);
+    expect(
+      setTableCellText(latexOnly, 1, 0, "y2").rows[0][0].runs,
+    ).toEqual([{ text: "y2" }]);
+  });
+
+  test("the header row addresses `columns` and the body rows address `rows`", () => {
+    const element = tableOpsFixture();
+    const header = setTableCellText(element, 0, 1, "Revenue");
+    expect(header.columns?.[1].runs).toEqual([{ text: "Revenue" }]);
+    expect(header.rows?.[0][1].runs).toEqual([{ text: "10" }]);
+
+    const body = setTableCellText(element, 2, 0, "APAC");
+    expect(body.rows?.[1][0].runs).toEqual([{ text: "APAC" }]);
+    expect(body.columns?.[0].runs).toEqual([
+      { text: "Region", font: { size: 14, bold: true } },
+    ]);
+  });
+
+  test("an unaddressable or unchanged write is a no-op with the same reference", () => {
+    const element = tableOpsFixture();
+    expect(setTableCellText(element, 1, 0, "US")).toBe(element);
+    expect(setTableCellText(element, 9, 0, "x")).toBe(element);
+    expect(setTableCellText(element, -1, 0, "x")).toBe(element);
+    expect(setTableCellText(element, 1, -1, "x")).toBe(element);
+
+    const malformed = {
+      type: "table",
+      columns: undefined,
+      rows: undefined,
+    } as unknown as TableElement;
+    expect(setTableCellText(malformed, 0, 0, "x")).toBe(malformed);
+  });
+
+  test("editing a padded cell materializes it at the right column", () => {
+    const twoColumns = tableOpsFixture({
+      columns: [{ runs: [{ text: "A" }] }, { runs: [{ text: "B" }] }],
+      rows: [[{ runs: [{ text: "x" }] }]],
+    });
+    const next = setTableCellText(twoColumns, 1, 1, "y");
+    expect(next.rows[0]).toEqual([
+      { runs: [{ text: "x" }] },
+      { runs: [{ text: "y" }] },
+    ]);
+    expect(twoColumns.rows[0]).toEqual([{ runs: [{ text: "x" }] }]);
+  });
+});
+
+test.describe("table data ops — row and column structure (D5)", () => {
+  test("addTableRow appends empty cells and respects the default/declared cap", () => {
+    const element = tableOpsFixture();
+    const added = addTableRow(element);
+    expect(added.rows).toHaveLength(3);
+    expect(added.rows?.[2]).toEqual([{ runs: [] }, { runs: [] }]);
+    expect(element.rows).toHaveLength(2);
+
+    const sevenBodyRows = tableOpsFixture({
+      rows: Array.from({ length: 7 }, () => [{ runs: [] }, { runs: [] }]),
+    });
+    expect(tableRenderedRowCount(sevenBodyRows)).toBe(8);
+    expect(addTableRow(sevenBodyRows)).toBe(sevenBodyRows);
+
+    const declared = tableOpsFixture({ max_rows: 3 });
+    expect(addTableRow(declared)).toBe(declared);
+  });
+
+  test("removeTableRow promotes the header, keeps the last row and honours min_rows", () => {
+    const element = tableOpsFixture();
+    const promoted = removeTableRow(element, 0);
+    expect(promoted.columns).toEqual([{ runs: [{ text: "US" }] }, { runs: [{ text: "10" }] }]);
+    expect(promoted.rows).toEqual([[{ runs: [{ text: "EU" }] }, { runs: [{ text: "20" }] }]]);
+    expect(element.columns?.[0].runs).toEqual([
+      { text: "Region", font: { size: 14, bold: true } },
+    ]);
+
+    const body = removeTableRow(element, 1);
+    expect(body.rows).toHaveLength(1);
+    expect(body.columns).toEqual(element.columns);
+
+    const headerOnly = tableOpsFixture({ rows: [] });
+    expect(removeTableRow(headerOnly, 0)).toBe(headerOnly);
+
+    const singleBody = tableOpsFixture({ columns: [], rows: [[{ runs: [] }]] });
+    expect(removeTableRow(singleBody, 0)).toBe(singleBody);
+
+    const declared = tableOpsFixture({ min_rows: 3 });
+    expect(removeTableRow(declared, 1)).toBe(declared);
+    expect(removeTableRow(element, 9)).toBe(element);
+  });
+
+  test("addTableColumn pads short rows so the new cell lands at the new index", () => {
+    const short = tableOpsFixture({
+      columns: [{ runs: [{ text: "A" }] }, { runs: [{ text: "B" }] }],
+      rows: [[{ runs: [{ text: "only" }] }], []],
+    });
+    const added = addTableColumn(short);
+    expect(added.columns).toHaveLength(3);
+    expect(added.columns?.[2]).toEqual({ runs: [] });
+    expect(added.rows?.[0]).toEqual([
+      { runs: [{ text: "only" }] },
+      { runs: [] },
+      { runs: [] },
+    ]);
+    expect(added.rows?.[1]).toEqual([{ runs: [] }, { runs: [] }, { runs: [] }]);
+
+    const declared = tableOpsFixture({ max_columns: 2 });
+    expect(addTableColumn(declared)).toBe(declared);
+
+    /* An empty element initializes its first renderable cell (1×1 body). */
+    const empty = tableOpsFixture({ columns: [], rows: [] });
+    const initialized = addTableColumn(empty);
+    expect(initialized.rows).toEqual([[{ runs: [] }]]);
+    expect(tableRenderedRowCount(initialized)).toBe(1);
+    expect(tableColumnCount(initialized)).toBe(1);
+    expect(empty.rows).toEqual([]);
+  });
+
+  test("an empty table initializes its first cell from either add action", () => {
+    const empty = tableOpsFixture({ columns: [], rows: [] });
+    expect(tableRenderedRowCount(empty)).toBe(0);
+
+    const withRow = addTableRow(empty);
+    expect(withRow.rows).toEqual([[{ runs: [] }]]);
+    expect(tableRenderedRowCount(withRow)).toBe(1);
+    expect(tableColumnCount(withRow)).toBe(1);
+
+    const withColumn = addTableColumn(empty);
+    expect(withColumn.rows).toEqual([[{ runs: [] }]]);
+
+    /* The initialized cell is editable like any other. */
+    const edited = setTableCellText(withRow, 0, 0, "First");
+    expect(edited.rows?.[0][0].runs).toEqual([{ text: "First" }]);
+  });
+
+  test("removeTableColumn drops the column from header and body, bounds-safe", () => {
+    const element = tableOpsFixture();
+    const removed = removeTableColumn(element, 0);
+    expect(removed.columns).toEqual([{ runs: [{ text: "Sales" }] }]);
+    expect(removed.rows).toEqual([
+      [{ runs: [{ text: "10" }] }],
+      [{ runs: [{ text: "20" }] }],
+    ]);
+    expect(element.columns).toHaveLength(2);
+
+    /* Rows too short to store the column keep their other cells. */
+    const ragged = tableOpsFixture({
+      columns: [{ runs: [{ text: "A" }] }, { runs: [{ text: "B" }] }],
+      rows: [[{ runs: [{ text: "only" }] }], []],
+    });
+    const raggedRemoved = removeTableColumn(ragged, 1);
+    expect(raggedRemoved.columns).toEqual([{ runs: [{ text: "A" }] }]);
+    expect(raggedRemoved.rows).toEqual([
+      [{ runs: [{ text: "only" }] }],
+      [],
+    ]);
+
+    const declared = tableOpsFixture({ min_columns: 2 });
+    expect(removeTableColumn(declared, 0)).toBe(declared);
+    const single = tableOpsFixture({
+      columns: [{ runs: [] }],
+      rows: [[{ runs: [] }]],
+    });
+    expect(removeTableColumn(single, 0)).toBe(single);
+    expect(removeTableColumn(element, 9)).toBe(element);
   });
 });

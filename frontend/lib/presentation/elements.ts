@@ -822,8 +822,9 @@ export function resolveDeckFontFamily(
 // ---------------------------------------------------------------------------
 
 /** The fork's `DEFAULT_CHART_COLORS`, used only when neither the element nor
- * the deck theme carries a palette. */
-const DEFAULT_CHART_COLORS = [
+ * the deck theme carries a palette. Exported so the editor's palette slots seed
+ * from the exact same fallback the renderer uses (`chartOps.ts`). */
+export const DEFAULT_CHART_COLORS = [
   "#7F22FE",
   "#155DFC",
   "#F59E0B",
@@ -925,8 +926,10 @@ function isStackedChart(kind: ChartType): boolean {
   return kind === "stacked_bar" || kind === "horizontal_stacked_bar";
 }
 
-/** The fork's `normalizeChartColor`: `#`-optional hex / rgb(a), or null. */
-function normalizeColor(value: unknown): string | null {
+/** The fork's `normalizeChartColor`: `#`-optional hex / rgb(a), or null.
+ * Exported so the editor writes exactly the color vocabulary `chartConfig`
+ * accepts (`chartOps.ts`). */
+export function normalizeChartColor(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const color = value.trim();
   if (!color) return null;
@@ -943,7 +946,7 @@ function normalizeColor(value: unknown): string | null {
 function readColorList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
-    .map((color) => normalizeColor(color))
+    .map((color) => normalizeChartColor(color))
     .filter((color): color is string => color !== null);
 }
 
@@ -1323,7 +1326,7 @@ export function chartConfig(
   const labels = chartLabels(element, series);
   const explicitColors = readColorList(element.colors);
   const themeColors = theme
-    ? GRAPH_ROLES.map((role) => normalizeColor(theme.colors?.[role])).filter(
+    ? GRAPH_ROLES.map((role) => normalizeChartColor(theme.colors?.[role])).filter(
         (color): color is string => color !== null,
       )
     : [];
@@ -1338,11 +1341,11 @@ export function chartConfig(
   const titleFontSize = clamp(height * 0.044, 11, 26);
   const valueFontSize = clamp(height * 0.029, 8, 15);
 
-  const textColor = normalizeColor(element.text_color) ?? "#475467";
-  const titleColor = normalizeColor(element.title_color) ?? "#344054";
-  const legendColor = normalizeColor(element.legend_color) ?? textColor;
-  const axisColor = normalizeColor(element.axis_color) ?? "#98A2B3";
-  const gridColor = normalizeColor(element.grid_color) ?? axisColor;
+  const textColor = normalizeChartColor(element.text_color) ?? "#475467";
+  const titleColor = normalizeChartColor(element.title_color) ?? "#344054";
+  const legendColor = normalizeChartColor(element.legend_color) ?? textColor;
+  const axisColor = normalizeChartColor(element.axis_color) ?? "#98A2B3";
+  const gridColor = normalizeChartColor(element.grid_color) ?? axisColor;
   const title = typeof element.title === "string" ? element.title.trim() : "";
 
   const pieLike = isPieLikeChart(kind);
@@ -1532,5 +1535,5 @@ export function infographicTextColor(
   element: Pick<InfographicElement, "text_color">,
   fallback: string,
 ): string {
-  return normalizeColor(element.text_color) ?? fallback;
+  return normalizeChartColor(element.text_color) ?? fallback;
 }

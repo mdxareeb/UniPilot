@@ -77,11 +77,13 @@ import { classifyAssetPath } from "../../lib/presentation/assets";
 import { IMAGE_UPLOAD_MAX_BYTES } from "../../lib/presentation/imageLimits";
 import { isSmartDeck } from "../../lib/presentation/smart";
 import type {
+  ChartElement,
   DeckSlide,
   DeckTheme,
   DeckThemePackage,
   PresentationDeck,
   SlideComponent,
+  TableElement,
 } from "../../lib/presentation/types";
 import { acquireWorkerLock } from "./workerLock";
 
@@ -4291,6 +4293,379 @@ test.describe("editor icons (live deck)", () => {
       expect(storedElement?.data).toBe(chosenPath);
       expect(storedElement?.is_icon).toBe(true);
       expect(storedElement?.color).toBe("#C2410C");
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+});
+
+/*
+ * Task D5 — chart and table data editors (spec §5.4 charts/tables rows, §6.6,
+ * §6.4).
+ *
+ * Both cases seed a scratch element onto the discovered live deck's first
+ * slide through the engine's own `slide_update`, drive the native inspector
+ * with real clicks/typing, assert the engine-stored wire and the stage's
+ * re-render, reload the editor to prove the stored state reads back, and
+ * restore the original slide in a `finally`. The pure halves of every
+ * operation are pinned in `qa-presentation-renderer`; these cases prove the
+ * live loop (commit → `slide_update` → autosave `Saved` → engine → re-render →
+ * reload) and never fake data.
+ */
+test.describe("editor charts (live deck)", () => {
+  /** One deterministic chart component appended to the target slide. */
+  function seedChartComponent(target: EditorTarget): {
+    seededSlide: DeckSlide;
+    key: string;
+  } {
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const component: SlideComponent = {
+      id: "qa-d5-chart-target",
+      description: "QA D5 chart target",
+      position: { x: 150, y: 180 },
+      elements: [
+        {
+          type: "chart",
+          name: "qa_d5_chart_target",
+          position: { x: 0, y: 0 },
+          size: { width: 620, height: 320 },
+          chart_type: "bar",
+          title: "QA D5 chart",
+          categories: ["Alpha", "Beta", "Gamma"],
+          series: [
+            { name: "Series 1", values: [1, 2] },
+            { name: "Series 2", values: [3, 4] },
+          ],
+          colors: ["#285F20"],
+          decorative: false,
+        } satisfies ChartElement,
+      ],
+    };
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, component],
+          }
+        : target.originalSlide.ui,
+    };
+    return { seededSlide, key: `components:${componentCount}/0` };
+  }
+
+  test("edits a series value, re-renders the canvas and persists through a reload", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const { seededSlide, key } = seedChartComponent(target);
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page
+        .locator(`[data-editor-element-hit="${key}"]`)
+        .click({ force: true });
+
+      // The seeded element is a chart: its controls and canvas are live.
+      await expect(page.locator("[data-editor-chart-controls]")).toBeVisible();
+      const chart = page.locator(
+        '[data-editor-stage] [data-deck-chart-name="qa_d5_chart_target"]',
+      );
+      await expect(chart).toHaveAttribute("data-deck-chart-state", "ready", {
+        timeout: 20_000,
+      });
+      const canvas = chart.locator("canvas");
+      const beforePixels = await canvas.evaluate((node) =>
+        (node as HTMLCanvasElement).toDataURL(),
+      );
+
+      await page.locator("[data-editor-chart-toggle]").click();
+      await expect(page.locator("[data-editor-chart-editor]")).toBeVisible({
+        timeout: 10_000,
+      });
+      await page.screenshot({
+        path: "screenshots/phase-d-d5-chart-editor.png",
+      });
+
+      // Series 1 stores no value for Gamma: the grid renders the padded 0 and
+      // the write must persist it instead of silently discarding the edit.
+      const valueInput = page.locator('[data-editor-chart-value="0-2"]');
+      await expect(valueInput).toHaveValue("0");
+      await valueInput.fill("42");
+      await valueInput.press("Enter");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      await expect
+        .poll(
+          async () => {
+            const stored = await readEngineDeck(api, target.deckId);
+            const element = elementAtHitKey(stored, 0, key) as {
+              series?: Array<{ values?: number[] }>;
+            } | null;
+            return element?.series?.[0]?.values;
+          },
+          { timeout: 20_000 },
+        )
+        .toEqual([1, 2, 42]);
+
+      // The stage chart re-renders from chartConfig (the canvas bytes change).
+      await expect
+        .poll(
+          async () =>
+            canvas.evaluate((node) => (node as HTMLCanvasElement).toDataURL()),
+          { timeout: 20_000 },
+        )
+        .not.toBe(beforePixels);
+
+      /* Pie renders only the first series: switching the type disables the
+         second series' inputs instead of pretending they are editable. */
+      await page.locator("#editor-chart-type").click();
+      await page.getByRole("option", { name: "Pie chart", exact: true }).click();
+      await expect(page.locator('[data-editor-chart-series="1"]')).toBeDisabled();
+      await expect(page.locator('[data-editor-chart-value="1-0"]')).toBeDisabled();
+      await expect(
+        page.locator('[data-editor-chart-note]').filter({
+          hasText: "render only the first series",
+        }),
+      ).toBeVisible();
+      await page.screenshot({
+        path: "screenshots/phase-d-d5-chart-pie-readonly.png",
+      });
+
+      // Back to a bar chart for the stage/reload evidence; the engine read-back
+      // is the authoritative settle.
+      await page.locator("#editor-chart-type").click();
+      await page.getByRole("option", { name: "Bar chart", exact: true }).click();
+      await expect
+        .poll(
+          async () => {
+            const stored = await readEngineDeck(api, target.deckId);
+            const element = elementAtHitKey(stored, 0, key) as {
+              chart_type?: string;
+            } | null;
+            return element?.chart_type;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe("bar");
+
+      // Close the popover for the stage screenshot.
+      await page.locator("[data-editor-chart-close]").click();
+      await expect(page.locator("[data-editor-chart-editor]")).toBeHidden();
+      await page.locator("[data-editor-stage]").screenshot({
+        path: "screenshots/phase-d-d5-chart-stage.png",
+      });
+
+      // Reload: the stored value reads back into the editor grid.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page
+        .locator(`[data-editor-element-hit="${key}"]`)
+        .click({ force: true });
+      await page.locator("[data-editor-chart-toggle]").click();
+      await expect(page.locator('[data-editor-chart-value="0-2"]')).toHaveValue(
+        "42",
+      );
+      await page.screenshot({
+        path: "screenshots/phase-d-d5-chart-reload.png",
+      });
+
+      // Responsive: the popover stays inside a 375px viewport, console clean.
+      await page.setViewportSize({ width: 375, height: 720 });
+      await page.locator("[data-editor-chart-toggle]").scrollIntoViewIfNeeded();
+      const responsiveEditor = page.locator("[data-editor-chart-editor]");
+      await expect(responsiveEditor).toBeVisible();
+      await expect(responsiveEditor).toBeInViewport();
+      await page.screenshot({
+        path: "screenshots/phase-d-d5-chart-375.png",
+      });
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+});
+
+test.describe("editor tables (live deck)", () => {
+  /** One deterministic table component appended to the target slide. */
+  function seedTableComponent(target: EditorTarget): {
+    seededSlide: DeckSlide;
+    key: string;
+  } {
+    const componentCount = target.originalSlide.ui?.components?.length ?? 0;
+    const cell = (text: string) => ({ runs: [{ text }] });
+    const component: SlideComponent = {
+      id: "qa-d5-table-target",
+      description: "QA D5 table target",
+      position: { x: 140, y: 150 },
+      elements: [
+        {
+          type: "table",
+          name: "qa_d5_table_target",
+          position: { x: 0, y: 0 },
+          size: { width: 820, height: 260 },
+          columns: [cell("Region"), cell("Sales")],
+          rows: [
+            [cell("US"), cell("10")],
+            [cell("EU"), cell("20")],
+          ],
+          decorative: false,
+        } satisfies TableElement,
+      ],
+    };
+    const seededSlide: DeckSlide = {
+      ...target.originalSlide,
+      ui: target.originalSlide.ui
+        ? {
+            ...target.originalSlide.ui,
+            components: [...target.originalSlide.ui.components, component],
+          }
+        : target.originalSlide.ui,
+    };
+    return { seededSlide, key: `components:${componentCount}/0` };
+  }
+
+  test("edits a cell and adds a row, both rendering and persisting through a reload", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const { seededSlide, key } = seedTableComponent(target);
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    try {
+      await api.patch("/api/v1/ppt/presentation/slide_update", {
+        data: { slide: seededSlide },
+        timeout: 30_000,
+      });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page
+        .locator(`[data-editor-element-hit="${key}"]`)
+        .click({ force: true });
+
+      // The seeded element is a table: its grid addresses rendered cells.
+      await expect(page.locator("[data-editor-table-controls]")).toBeVisible();
+      const stageTable = page.locator(
+        '[data-editor-stage] [data-deck-table-name="qa_d5_table_target"]',
+      );
+      await expect(stageTable.locator('[data-deck-table-cell="1-1"]')).toHaveText(
+        "10",
+      );
+
+      const cellInput = page.locator('[data-editor-table-cell="1-1"]');
+      await expect(cellInput).toHaveValue("10");
+      await cellInput.fill("99");
+      await cellInput.press("Tab");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      await expect
+        .poll(
+          async () => {
+            const stored = await readEngineDeck(api, target.deckId);
+            const element = elementAtHitKey(stored, 0, key) as {
+              rows?: Array<Array<{ runs?: Array<{ text?: string }> }>>;
+            } | null;
+            return element?.rows?.[0]?.[1]?.runs?.[0]?.text;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe("99");
+      await expect(stageTable.locator('[data-deck-table-cell="1-1"]')).toHaveText(
+        "99",
+      );
+      await page.screenshot({
+        path: "screenshots/phase-d-d5-table-editor.png",
+      });
+      await page.locator("[data-editor-stage]").screenshot({
+        path: "screenshots/phase-d-d5-table-stage.png",
+      });
+
+      // Add a row through the editor; the engine stores a third body row.
+      await page.locator("[data-editor-table-add-row]").click();
+      await expect
+        .poll(
+          async () => {
+            const stored = await readEngineDeck(api, target.deckId);
+            const element = elementAtHitKey(stored, 0, key) as {
+              rows?: unknown[];
+            } | null;
+            return element?.rows?.length;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe(3);
+      await expect(page.locator(`[data-editor-table-cell="3-0"]`)).toHaveValue(
+        "",
+      );
+
+      // Reload: both the cell text and the added row read back.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page
+        .locator(`[data-editor-element-hit="${key}"]`)
+        .click({ force: true });
+      await expect(page.locator('[data-editor-table-cell="1-1"]')).toHaveValue(
+        "99",
+      );
+      await expect(page.locator('[data-editor-table-cell="3-0"]')).toHaveValue(
+        "",
+      );
+      await expect(
+        page.locator(
+          '[data-editor-stage] [data-deck-table-name="qa_d5_table_target"]',
+        ),
+      ).toBeVisible();
+      await page.screenshot({
+        path: "screenshots/phase-d-d5-table-reload.png",
+      });
 
       expect(
         consoleErrors,

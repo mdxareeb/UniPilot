@@ -80,10 +80,16 @@ export function TableElement({
   const resolveFamily = useDeckFontFamily();
   const box = elementBox(element);
   const rows = normalizedRows(element);
+  const tableName =
+    typeof element.name === "string" && element.name !== ""
+      ? element.name
+      : undefined;
 
   if (rows.length === 0) {
     return (
       <div
+        data-deck-table=""
+        data-deck-table-name={tableName}
         style={{
           ...frameStyle(box, mode),
           ...transformCss(element.rotation),
@@ -108,6 +114,7 @@ export function TableElement({
       return (
         <div
           key={`${rowIndex}-${columnIndex}`}
+          data-deck-table-cell={`${rowIndex}-${columnIndex}`}
           style={{
             ...fontTextStyle(frameFont, resolveFamily, { includeTextDecoration: false }),
             display: "flex",
@@ -133,6 +140,8 @@ export function TableElement({
 
   return (
     <div
+      data-deck-table=""
+      data-deck-table-name={tableName}
       style={{
         ...frameStyle(box, mode),
         ...transformCss(element.rotation),

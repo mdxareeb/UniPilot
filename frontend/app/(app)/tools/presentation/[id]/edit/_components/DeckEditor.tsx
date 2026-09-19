@@ -93,6 +93,7 @@ import {
   type TextRange,
 } from "@/lib/presentation/textRuns";
 import type {
+  ChartElement,
   DeckSlide,
   DeckTheme,
   DeckThemePackage,
@@ -102,6 +103,7 @@ import type {
   PresentationDeck,
   SlideComponent,
   SlideElement,
+  TableElement,
   TemplateLayout,
   TextElement,
   TextRunValue,
@@ -114,6 +116,7 @@ import {
   updatePresentationAction,
   updateSlideAction,
 } from "@/lib/data/presentationActions";
+import { ChartControls } from "./ChartControls";
 import { EditorRail, STRUCTURAL_EDITING_REASON } from "./EditorRail";
 import { IconPickerModal } from "./IconPickerModal";
 import { ImageControls } from "./ImageControls";
@@ -122,6 +125,7 @@ import { InlineRunsEditor } from "./InlineRunsEditor";
 import { InspectorPanel } from "./InspectorPanel";
 import { RunFormatToolbar } from "./RunFormatToolbar";
 import { SaveStatus } from "./SaveStatus";
+import { TableControls } from "./TableControls";
 import { mergeStructuralAck } from "./structuralMerge";
 import {
   buildThemeChoices,
@@ -643,18 +647,26 @@ export function DeckEditor({
         null);
 
   /* ---------------------------------------------------------------------
-     Image element controls (D3): the primary selection is an image → the
-     inspector shows source/fit/crop/radius/flips/opacity, all committing
-     through the same single-slide path as every other element write.
+     Element controls (D3 images/icons, D5 charts/tables): the primary
+     selection's typed view decides which inspector section renders. Every
+     section commits through the same single-slide path as every other write.
      --------------------------------------------------------------------- */
 
-  const selectedImage = useMemo<ImageElement | null>(() => {
+  const selectedElementAtPath = useMemo<SlideElement | null>(() => {
     if (activeElementKey === null) return null;
     const path = parseElementPathKey(activeElementKey);
     if (path === null) return null;
-    const element = getElementAtPath(selectedSlide, path);
-    return element !== null && element.type === "image" ? element : null;
+    return getElementAtPath(selectedSlide, path);
   }, [activeElementKey, selectedSlide]);
+
+  const selectedImage: ImageElement | null =
+    selectedElementAtPath?.type === "image" ? selectedElementAtPath : null;
+
+  const selectedChart: ChartElement | null =
+    selectedElementAtPath?.type === "chart" ? selectedElementAtPath : null;
+
+  const selectedTable: TableElement | null =
+    selectedElementAtPath?.type === "table" ? selectedElementAtPath : null;
 
   const imageSource = useMemo(
     () =>
@@ -671,9 +683,9 @@ export function DeckEditor({
     [imagePickerOpen, localDeck],
   );
 
-  /** One image-field write on the primary selection (one slide save). */
-  const applyImageUpdate = useCallback(
-    (reason: string, updater: (element: ImageElement) => ImageElement) => {
+  /** One element-field write on the primary selection (one slide save). */
+  const applyElementUpdate = useCallback(
+    (reason: string, updater: (element: SlideElement) => SlideElement) => {
       if (activeElementKey === null) return;
       const path = parseElementPathKey(activeElementKey);
       if (path === null) return;
@@ -681,7 +693,7 @@ export function DeckEditor({
       const slide = current.slides[selectedIndex];
       if (slide === undefined) return;
       const element = getElementAtPath(slide, path);
-      if (element === null || element.type !== "image") return;
+      if (element === null) return;
       const nextElement = updater(element);
       if (nextElement === element) return;
       const nextSlide = updateElementAtPath(slide, path, () => nextElement);
@@ -693,6 +705,15 @@ export function DeckEditor({
       ]);
     },
     [activeElementKey, commit, getState, selectedIndex],
+  );
+
+  /** One image-field write on the primary selection (one slide save). */
+  const applyImageUpdate = useCallback(
+    (reason: string, updater: (element: ImageElement) => ImageElement) =>
+      applyElementUpdate(reason, (element) =>
+        element.type === "image" ? updater(element) : element,
+      ),
+    [applyElementUpdate],
   );
 
   /** The active selection frame (rotation + resize support for handles). */
@@ -2147,6 +2168,31 @@ export function DeckEditor({
                             applyIconColor(element, color),
                           )
                       : undefined
+                  }
+                />
+              ) : undefined
+            }
+            chartControls={
+              selectedChart !== null ? (
+                <ChartControls
+                  element={selectedChart}
+                  themeColors={theme?.colors ?? null}
+                  onUpdate={(reason, updater) =>
+                    applyElementUpdate(reason, (element) =>
+                      element.type === "chart" ? updater(element) : element,
+                    )
+                  }
+                />
+              ) : undefined
+            }
+            tableControls={
+              selectedTable !== null ? (
+                <TableControls
+                  element={selectedTable}
+                  onUpdate={(reason, updater) =>
+                    applyElementUpdate(reason, (element) =>
+                      element.type === "table" ? updater(element) : element,
+                    )
                   }
                 />
               ) : undefined

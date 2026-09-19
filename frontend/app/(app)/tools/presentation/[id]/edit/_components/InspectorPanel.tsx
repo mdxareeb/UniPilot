@@ -46,6 +46,16 @@ export type InspectorPanelProps = {
    * selection is an image; the Image section renders exactly then.
    */
   imageControls?: ReactNode;
+  /**
+   * The selected chart element's controls (D5). Present only when the primary
+   * selection is a chart.
+   */
+  chartControls?: ReactNode;
+  /**
+   * The selected table element's controls (D5). Present only when the primary
+   * selection is a table.
+   */
+  tableControls?: ReactNode;
 };
 
 function Section({
@@ -93,6 +103,8 @@ export function InspectorPanel({
   elementHint,
   elementTextRef,
   imageControls,
+  chartControls,
+  tableControls,
 }: InspectorPanelProps) {
   return (
     <div
@@ -244,6 +256,24 @@ export function InspectorPanel({
           description="The source, fit, crop, radius, flips and opacity saved with the slide."
         >
           {imageControls}
+        </Section>
+      ) : null}
+
+      {chartControls ? (
+        <Section
+          title="Chart"
+          description="Type, title, categories, series, palette and axes saved with the slide."
+        >
+          {chartControls}
+        </Section>
+      ) : null}
+
+      {tableControls ? (
+        <Section
+          title="Table"
+          description="Cell text and the row/column grid saved with the slide."
+        >
+          {tableControls}
         </Section>
       ) : null}
     </div>

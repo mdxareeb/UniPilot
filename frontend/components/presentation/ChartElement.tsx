@@ -155,6 +155,10 @@ export function ChartElement({
   const height = Math.max(1, Math.round(box.height ?? 0));
   const chartType =
     typeof element.chart_type === "string" ? element.chart_type : "unknown";
+  const chartName =
+    typeof element.name === "string" && element.name !== ""
+      ? element.name
+      : undefined;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -173,6 +177,7 @@ export function ChartElement({
     <div
       ref={containerRef}
       data-deck-chart={chartType}
+      data-deck-chart-name={chartName}
       data-deck-chart-state={ready ? "ready" : "pending"}
       style={{
         ...frameStyle(box, mode),
