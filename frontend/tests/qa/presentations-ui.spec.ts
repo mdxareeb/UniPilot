@@ -65,7 +65,7 @@
  * the honest skip — never a silent pass.
  */
 import { test, expect, request as playwrightRequest } from "@playwright/test";
-import type { Page as TestPage } from "@playwright/test";
+import type { Locator, Page as TestPage } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -83,6 +83,12 @@ import { getElementAtPath } from "../../lib/presentation/editorOps";
 import { classifyAssetPath } from "../../lib/presentation/assets";
 import { IMAGE_UPLOAD_MAX_BYTES } from "../../lib/presentation/imageLimits";
 import { isSmartDeck } from "../../lib/presentation/smart";
+import {
+  CHAT_ERROR_COPY,
+  normalizeChatSseEvent,
+  parseSseBlocks,
+  type ChatFrame,
+} from "../../lib/presentation/chatFrames";
 import type {
   ChartElement,
   DeckSlide,
@@ -491,6 +497,41 @@ let editorSkipReason: string | null = null;
 let liveCustomTheme: { id: string; label: string } | null = null;
 let liveCustomThemeSkipReason: string | null = null;
 
+/**
+ * Two stored conversations on the discovered deck for the D8
+ * conversation-switch case. Chat is provider-dependent, so this discovery (and
+ * its case) records an honest skip until a turn has ever completed.
+ */
+type ChatRaceTarget = { deckId: string; conversationIds: [string, string] };
+let chatRaceTarget: ChatRaceTarget | null = null;
+let chatRaceSkipReason: string | null = null;
+
+/** Finds two conversations on the discovered deck; absence records a reason. */
+async function discoverChatRaceTarget(
+  deckId: string,
+): Promise<ChatRaceTarget | { reason: string }> {
+  if (engineUrl === "") {
+    return { reason: "PRESENTON_URL is not set in the spec environment." };
+  }
+  const api = await engineApi();
+  try {
+    const ids = await engineConversationIds(api, deckId);
+    if (ids.length < 2) {
+      return {
+        reason:
+          "the engine stores fewer than two conversations for the discovered deck (no chat turn has completed here).",
+      };
+    }
+    return { deckId, conversationIds: [ids[0], ids[1]] };
+  } catch (error) {
+    return {
+      reason: `chat conversation discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
 /** Reads the engine's custom themes; absence records a skip reason. */
 async function discoverCustomTheme(): Promise<
   { id: string; label: string } | { reason: string }
@@ -732,6 +773,53 @@ async function engineApi() {
       ? { extraHTTPHeaders: { Authorization: `Bearer ${key}` } }
       : {}),
   });
+}
+
+/**
+ * The engine's stored conversation ids for one deck, in its own list order — a
+ * before/after diff deletes exactly the conversations a chat test created
+ * (the abort path may commit one after Stop even though the panel never saw a
+ * `complete` frame).
+ */
+async function engineConversationIds(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  deckId: string,
+): Promise<string[]> {
+  let response: Awaited<ReturnType<typeof api.get>>;
+  try {
+    response = await api.get(
+      `/api/v1/ppt/chat/conversations?presentation_id=${deckId}`,
+      { timeout: 15_000 },
+    );
+  } catch {
+    return [];
+  }
+  if (!response.ok()) return [];
+  const body = (await response.json()) as unknown;
+  if (!Array.isArray(body)) return [];
+  return body
+    .map((entry) =>
+      isRecord(entry) && typeof entry.conversation_id === "string"
+        ? entry.conversation_id
+        : null,
+    )
+    .filter((id): id is string => id !== null && id !== "");
+}
+
+/** Deletes only the conversations that appeared after `before`. */
+async function deleteNewEngineConversations(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  deckId: string,
+  before: string[],
+): Promise<void> {
+  const after = await engineConversationIds(api, deckId);
+  for (const conversationId of after) {
+    if (before.includes(conversationId)) continue;
+    await api.delete(
+      `/api/v1/ppt/chat/conversation?presentation_id=${deckId}&conversation_id=${conversationId}`,
+      { timeout: 15_000 },
+    );
+  }
 }
 
 /** One engine slide restore; a no-op failure is tolerated (best effort). */
@@ -1067,6 +1155,18 @@ test.beforeAll(async () => {
         `[qa-presentations-ui] image deck ${imageDiscovery.deckId} slide ${imageDiscovery.slideIndex} hit ${imageDiscovery.hitKey}`,
       );
     }
+
+    const chatRaceDiscovery = await discoverChatRaceTarget(
+      viewerDiscovery.viewer.deckId,
+    );
+    if ("reason" in chatRaceDiscovery) {
+      chatRaceSkipReason = chatRaceDiscovery.reason;
+    } else {
+      chatRaceTarget = chatRaceDiscovery;
+      console.log(
+        `[qa-presentations-ui] chat conversations ${chatRaceDiscovery.conversationIds.join(",")}`,
+      );
+    }
   }
 
   const customThemeDiscovery = await discoverCustomTheme();
@@ -1182,6 +1282,13 @@ test.describe("no session (fresh request context without storage state)", () => 
         },
       },
     );
+    await expectJsonError(res, 401);
+  });
+
+  test("chat answers 401 before any owner read", async ({ request }) => {
+    const res = await request.post(`/api/presentation/${randomUUID()}/chat`, {
+      data: { message: "Hi" },
+    });
     await expectJsonError(res, 401);
   });
 });
@@ -1406,6 +1513,109 @@ test.describe("owner-gated image upload route (never skip)", () => {
       },
     });
     await expectJsonError(res, 413);
+  });
+});
+
+/**
+ * Task D8 — the streaming chat proxy's HTTP contract (spec §7.8, §5.4).
+ *
+ * Every case here settles before any provider call: the session gate, the
+ * owner gate, the body validation and the engine's pre-stream error path (a
+ * UUID-shaped engine deck id the engine does not store) all answer
+ * deterministically, so none of them skip. The engine-side error case proves
+ * the sanitized-frame contract end to end: the proxy forwards the engine's
+ * `status` frame, then replaces its error detail with UniPilot's own copy —
+ * the raw body never carries "Presentation not found", `detail`, or any
+ * provider/stack text.
+ */
+test.describe("chat proxy route (never skip)", () => {
+  const chatUrl = (id: string) => `/api/presentation/${id}/chat`;
+
+  test("404s an unknown presentation id before any engine call", async ({
+    request,
+  }) => {
+    const res = await request.post(chatUrl(randomUUID()), {
+      data: { message: "Hi" },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("404s a malformed id with no 500", async ({ request }) => {
+    const res = await request.post(chatUrl("not-a-uuid"), {
+      data: { message: "Hi" },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("404s a row with no stored engine deck", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, null);
+    const res = await request.post(chatUrl(presentationId), {
+      data: { message: "Hi" },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("404s another user's presentation for QA1", async ({ request }) => {
+    const presentationId = await seedOwnedPresentation(qa2Id, randomUUID());
+    const res = await request.post(chatUrl(presentationId), {
+      data: { message: "Hi" },
+    });
+    await expectJsonError(res, 404);
+  });
+
+  test("400s an empty message before the owner read", async ({ request }) => {
+    const res = await request.post(chatUrl(randomUUID()), {
+      data: { message: "   " },
+    });
+    await expectJsonError(res, 400);
+  });
+
+  test("400s an invalid conversation id with no engine call", async ({
+    request,
+  }) => {
+    const res = await request.post(chatUrl(randomUUID()), {
+      data: { message: "Hi", conversationId: "not-a-uuid" },
+    });
+    await expectJsonError(res, 400);
+  });
+
+  test("400s a malformed JSON body", async ({ request }) => {
+    const res = await request.post(chatUrl(randomUUID()), {
+      headers: { "content-type": "application/json" },
+      data: "{",
+    });
+    await expectJsonError(res, 400);
+  });
+
+  test("turns an engine-side error into a sanitized SSE error frame", async ({
+    request,
+  }) => {
+    /* A UUID the engine does not store: its stream answers the `status` frame
+       and then the engine's own 404 detail as an error frame. No provider is
+       involved, so this case never skips. */
+    const presentationId = await seedOwnedPresentation(qa1Id, randomUUID());
+
+    const res = await request.post(chatUrl(presentationId), {
+      data: { message: "Hi" },
+    });
+
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("text/event-stream");
+
+    const body = await res.text();
+    const frames = parseSseBlocks(body)
+      .events.map(normalizeChatSseEvent)
+      .filter((frame): frame is ChatFrame => frame !== null);
+
+    expect(frames.some((frame) => frame.type === "status")).toBe(true);
+    const errors = frames.filter((frame) => frame.type === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toEqual({ type: "error", message: CHAT_ERROR_COPY });
+
+    /* The engine's detail and every upstream field are gone from the wire. */
+    expect(body).not.toContain("Presentation not found");
+    expect(body).not.toContain("detail");
+    expect(body).not.toContain("Traceback");
   });
 });
 
@@ -6631,6 +6841,719 @@ test.describe("editor clipboard, duplicate and shortcuts (live deck)", () => {
       if (originalSlide !== null) {
         await restoreEngineSlide(api, originalSlide);
       }
+      await api.dispose();
+    }
+  });
+});
+
+/**
+ * Task D8 — the deck assistant's live cases (spec §7.8, §5.4).
+ *
+ * The panel is driven through the real editor route, the real streaming proxy
+ * and the live engine. The provider is provider-dependent: when the engine
+ * answers the turn with its sanitized error frame (a quota or provider
+ * failure), the case skips with that recorded reason — a fake reply is never
+ * asserted. A successful turn proves deltas rendered, the conversation was
+ * stored by the engine (read back through its own `/chat/history`) and the
+ * console stayed clean. The abort case proves Stop cancels the in-flight
+ * request (the browser observes the abort) and leaves an honest stopped state.
+ *
+ * Every chat-created conversation is deleted from the engine in `finally`, and
+ * the fixture deck's full slide array/title/theme are restored — the shared
+ * engine deck is never left modified.
+ */
+test.describe("editor deck assistant (live deck)", () => {
+  test("streams a short turn into the panel and the engine stores it", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const snapshot = await readEngineDeck(api, target.deckId);
+    const conversationsBefore = await engineConversationIds(api, target.deckId);
+    const createdConversationIds: string[] = [];
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      const toggle = page.locator("[data-editor-chat-toggle]");
+      await toggle.click();
+      const panel = page.locator("[data-chat-panel]");
+      await expect(panel).toBeVisible();
+      await expect(panel.locator("[data-chat-message]")).toHaveCount(0);
+      await expect(panel).toContainText("Ask for a change to this deck");
+
+      await page.screenshot({
+        path: "screenshots/phase-d-d8-chat-panel.png",
+      });
+
+      /* The narrow layout: the panel clamps inside the viewport. */
+      await page.setViewportSize({ width: 375, height: 720 });
+      await expect(panel).toBeVisible();
+      const box = await panel.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+      await page.screenshot({
+        path: "screenshots/phase-d-d8-chat-panel-375.png",
+      });
+      await page.setViewportSize({ width: 1280, height: 720 });
+
+      const prompt =
+        "Reply with one short sentence confirming you can see this deck.";
+      await panel.locator("[data-chat-input]").fill(prompt);
+      await panel.locator("[data-chat-send]").click();
+
+      await expect(panel.locator('[data-chat-message="user"]')).toHaveCount(1);
+      const assistant = panel.locator('[data-chat-message="assistant"]');
+      await expect(assistant).toHaveCount(1);
+
+      /* The stream started: a status frame is rendered (or the turn already
+         settled, which the poll below catches too). */
+      await expect
+        .poll(
+          async () => {
+            const status = await panel.locator("[data-chat-status]").count();
+            const complete =
+              (await panel.locator("[data-chat-complete]").count()) > 0;
+            const error = await panel.locator("[data-chat-error]").count();
+            return status > 0 || complete || error > 0;
+          },
+          {
+            timeout: 120_000,
+            message: "the chat stream must start (a status frame arrives)",
+          },
+        )
+        .toBe(true);
+
+      await expect
+        .poll(
+          async () => {
+            const complete =
+              (await panel.locator("[data-chat-complete]").count()) > 0;
+            const error = await panel.locator("[data-chat-error]").count();
+            return complete || error > 0;
+          },
+          {
+            timeout: 180_000,
+            message: "the turn must settle (complete or a sanitized error)",
+          },
+        )
+        .toBe(true);
+
+      const errorCount = await panel.locator("[data-chat-error]").count();
+      if (errorCount > 0) {
+        /* The stream contract worked (the status frame arrived); the provider
+           answered with an error. The sanitized copy is the whole story. */
+        const errorText = (
+          await panel.locator("[data-chat-error]").first().innerText()
+        ).trim();
+        expect(errorText).toBe(CHAT_ERROR_COPY);
+        test.skip(
+          true,
+          `the engine's provider answered the turn with an error (${errorText}).`,
+        );
+      }
+
+      await expect(panel.locator("[data-chat-complete]")).toHaveCount(1);
+      const reply = (
+        await assistant.locator("p").first().innerText()
+      ).trim();
+      expect(reply.length).toBeGreaterThan(0);
+
+      const conversationId = await panel.getAttribute("data-chat-conversation");
+      expect(conversationId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+      if (conversationId !== null) createdConversationIds.push(conversationId);
+
+      /* The engine stored both turns in that conversation. */
+      const history = await api.get(
+        `/api/v1/ppt/chat/history?presentation_id=${target.deckId}&conversation_id=${conversationId}`,
+        { timeout: 30_000 },
+      );
+      expect(history.ok(), `engine chat history: ${history.status()}`).toBe(true);
+      const historyBody = (await history.json()) as {
+        messages?: Array<{ role?: unknown; content?: unknown }>;
+      };
+      const storedUser = (historyBody.messages ?? []).some(
+        (message) =>
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          message.content.includes(prompt),
+      );
+      expect(storedUser, "the engine must store the user prompt").toBe(true);
+
+      await page.screenshot({
+        path: "screenshots/phase-d-d8-chat-reply.png",
+      });
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      for (const conversationId of createdConversationIds) {
+        await api.delete(
+          `/api/v1/ppt/chat/conversation?presentation_id=${target.deckId}&conversation_id=${conversationId}`,
+          { timeout: 15_000 },
+        );
+      }
+      await deleteNewEngineConversations(api, target.deckId, conversationsBefore);
+      await restoreEngineDeckSlides(
+        api,
+        target.deckId,
+        snapshot.slides,
+        snapshot.theme ?? null,
+      );
+      await restoreEngineDeck(
+        api,
+        target.deckId,
+        snapshot.title ?? null,
+        snapshot.theme ?? null,
+      );
+      await api.dispose();
+    }
+  });
+
+  test("Stop aborts a streaming turn and leaves an honest stopped state", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const snapshot = await readEngineDeck(api, target.deckId);
+    /* The abort path may still commit an engine-side conversation after Stop
+       (the route drains the turn), so cleanup is a before/after id diff. */
+    const conversationsBefore = await engineConversationIds(api, target.deckId);
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    let chatRequestFailed = false;
+    page.on("requestfailed", (failedRequest) => {
+      if (failedRequest.url().includes(`/api/presentation/${presentationId}/chat`)) {
+        chatRequestFailed = true;
+      }
+    });
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      await page.locator("[data-editor-chat-toggle]").click();
+      const panel = page.locator("[data-chat-panel]");
+      await expect(panel).toBeVisible();
+
+      await panel
+        .locator("[data-chat-input]")
+        .fill("Write a detailed paragraph about study techniques.");
+      await panel.locator("[data-chat-send]").click();
+
+      const stop = panel.locator("[data-chat-stop]");
+      const stopVisible = await stop
+        .waitFor({ state: "visible", timeout: 120_000 })
+        .then(() => true, () => false);
+      if (!stopVisible) {
+        const errorVisible =
+          (await panel.locator("[data-chat-error]").count()) > 0;
+        test.skip(
+          true,
+          errorVisible
+            ? "the provider answered with an error before Stop could be exercised."
+            : "the turn settled before Stop could be exercised.",
+        );
+      }
+
+      try {
+        await stop.click();
+      } catch {
+        test.skip(true, "the turn settled before Stop could be clicked.");
+      }
+
+      await expect(assistantMessage(panel)).toContainText("Stopped");
+      await expect(panel.locator("[data-chat-stop]")).toHaveCount(0);
+      await expect(panel.locator("[data-chat-send]")).toBeVisible();
+      expect(await panel.locator("[data-chat-error]").count()).toBe(0);
+
+      /* The browser observed the abort of the in-flight stream: delivery
+         stops immediately. The route then drains the engine's turn instead of
+         hard-cancelling it (its recorded upstream workaround — a cancelled
+         engine chat stream leaves its SQLite transaction open and locks the
+         whole engine), so the health probe below is the other half. */
+      await expect
+        .poll(() => chatRequestFailed, {
+          timeout: 10_000,
+          message: "the aborted chat request must be reported as failed",
+        })
+        .toBe(true);
+
+      await expect
+        .poll(
+          async () => {
+            const response = await api.get(
+              "/api/v1/ppt/presentation/all?page=1&page_size=1",
+              { timeout: 15_000 },
+            );
+            return response.status();
+          },
+          {
+            timeout: 30_000,
+            message:
+              "the engine must stay healthy after an aborted turn (no locked database)",
+          },
+        )
+        .toBe(200);
+
+      await page.screenshot({
+        path: "screenshots/phase-d-d8-chat-stopped.png",
+      });
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await deleteNewEngineConversations(
+        api,
+        target.deckId,
+        conversationsBefore,
+      );
+      await restoreEngineDeckSlides(
+        api,
+        target.deckId,
+        snapshot.slides,
+        snapshot.theme ?? null,
+      );
+      await restoreEngineDeck(
+        api,
+        target.deckId,
+        snapshot.title ?? null,
+        snapshot.theme ?? null,
+      );
+      await api.dispose();
+    }
+  });
+});
+
+/** The single assistant turn in the live panel. */
+function assistantMessage(panel: Locator): Locator {
+  return panel.locator('[data-chat-message="assistant"]');
+}
+
+/**
+ * D8 review fix — a mutating tool round that never reaches `complete`.
+ *
+ * The engine can commit a slide change and then fail (or the user can Stop
+ * while the route's drain lets the engine finish), so the panel must learn
+ * "the deck may have changed" from the mutating `trace` frame itself. These
+ * cases stub the browser-facing chat stream (no provider involved) and prove
+ * the panel re-reads the stored deck, surfaces the honest state, and leaves
+ * the editor able to save afterwards — the failure the review caught was a
+ * stale slide id silently wedging every later save.
+ */
+test.describe("editor deck assistant (stubbed stream)", () => {
+  test("a mutating trace followed by an error re-reads the deck and saving still works", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    try {
+      await page.route(`**/api/presentation/${presentationId}/chat`, (route) =>
+        route.fulfill({
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-store",
+          },
+          body:
+            'data: {"type":"status","status":"Reading deck context"}\n\n' +
+            'data: {"type":"trace","trace":{"kind":"tool_call","round":1,"tool":"updateSlide","status":"start","message":"Updating slide 1"}}\n\n' +
+            'data: {"type":"error","detail":"Groq 429 rate limit org_xyz key sk-secret"}\n\n',
+        }),
+      );
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator("[data-editor-chat-toggle]").click();
+      const panel = page.locator("[data-chat-panel]");
+      await expect(panel).toBeVisible();
+
+      await panel.locator("[data-chat-input]").fill("Edit slide 1");
+      await panel.locator("[data-chat-send]").click();
+
+      /* The turn failed honestly and no upstream detail reached the panel. */
+      await expect(panel.locator("[data-chat-error]")).toContainText(
+        CHAT_ERROR_COPY,
+      );
+      await expect(panel).not.toContainText("Groq");
+      await expect(panel).not.toContainText("sk-secret");
+
+      /* The mutating trace forced a re-read even without a `complete` frame:
+         the review only exists after the stored deck was compared. */
+      await expect(panel.locator("[data-chat-review]")).toContainText(
+        "No slide changes were stored by this turn.",
+        { timeout: 20_000 },
+      );
+
+      /* The editor can still save after the errored mutating turn. */
+      const hit = page.locator(`[data-editor-element-hit="${target.hitKey}"]`);
+      await expect(hit).toBeVisible();
+      await hit.click({ force: true });
+      const inline = page.locator("[data-editor-inline-text]");
+      await expect(inline).toBeVisible();
+      const marker = `QA-D8 stub ${Date.now()}`;
+      await inline.click();
+      await page.keyboard.press("Control+a");
+      await inline.pressSequentially(marker);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+
+  test("Stop after a mutating trace waits for the drain, re-reads, and saving still works", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    /* A streaming stub: `status` + mutating `trace`, then the connection stays
+       open so Stop has something real to abort. No CORS preflight — the
+       panel's body is sent as text/plain (the route parses JSON regardless). */
+    let stubTimer: ReturnType<typeof setTimeout> | null = null;
+    const stub = createServer((request, response) => {
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "POST, OPTIONS",
+          "access-control-allow-headers": "content-type",
+        });
+        response.end();
+        return;
+      }
+      response.on("error", () => {
+        // The client aborted; nothing to report.
+      });
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+        "access-control-allow-origin": "*",
+      });
+      response.write('data: {"type":"status","status":"Reading deck context"}\n\n');
+      response.write(
+        'data: {"type":"trace","trace":{"kind":"tool_call","round":1,"tool":"updateSlide","status":"start","message":"Updating slide 1"}}\n\n',
+      );
+      stubTimer = setTimeout(() => {
+        response.end();
+      }, 20_000);
+    });
+    await new Promise<void>((resolve) => {
+      stub.listen(0, "127.0.0.1", resolve);
+    });
+    const address = stub.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    expect(port).toBeGreaterThan(0);
+
+    try {
+      await page.route(`**/api/presentation/${presentationId}/chat`, (route) =>
+        route.continue({ url: `http://127.0.0.1:${port}/stub/chat` }),
+      );
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator("[data-editor-chat-toggle]").click();
+      const panel = page.locator("[data-chat-panel]");
+      await expect(panel).toBeVisible();
+
+      await panel.locator("[data-chat-input]").fill("Edit slide 1");
+      await panel.locator("[data-chat-send]").click();
+
+      /* The client saw the mutating trace before it stopped. */
+      const assistant = assistantMessage(panel);
+      await expect(assistant).toContainText("Updating slide 1", {
+        timeout: 20_000,
+      });
+
+      await panel.locator("[data-chat-stop]").click();
+      await expect(assistant).toContainText("Stopped");
+
+      /* The drain may still commit: the panel says so and watches. */
+      await expect(panel.locator("[data-chat-settling]")).toBeVisible();
+      await expect(panel.locator("[data-chat-review]")).toContainText(
+        "No slide changes were stored by this turn.",
+        { timeout: 30_000 },
+      );
+      await expect(panel.locator("[data-chat-settling]")).toHaveCount(0);
+
+      /* The editor can still save after the aborted mutating turn. */
+      const hit = page.locator(`[data-editor-element-hit="${target.hitKey}"]`);
+      await expect(hit).toBeVisible();
+      await hit.click({ force: true });
+      const inline = page.locator("[data-editor-inline-text]");
+      await expect(inline).toBeVisible();
+      const marker = `QA-D8 stop ${Date.now()}`;
+      await inline.click();
+      await page.keyboard.press("Control+a");
+      await inline.pressSequentially(marker);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      if (stubTimer !== null) clearTimeout(stubTimer);
+      stub.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        stub.close(() => resolve());
+      });
+      await restoreEngineSlide(api, target.originalSlide);
+      await api.dispose();
+    }
+  });
+  test("a slow history read holds the gate and settles without wedging", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    /* A synthetic conversation is injected into the real list action's
+       response; its history read is then held open to reproduce the
+       slow-response race without needing a completed (provider-dependent)
+       turn. */
+    const stubConversationId = randomUUID();
+    let delayedHistoryReads = 0;
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.route(
+      `**/tools/presentation/${presentationId}/edit`,
+      async (route) => {
+        const request = route.request();
+        if (request.method() !== "POST") {
+          await route.continue();
+          return;
+        }
+        const body =
+          request.postData() ??
+          request.postDataBuffer()?.toString("utf8") ??
+          "";
+        const response = await route.fetch();
+        if (body.includes(stubConversationId)) {
+          delayedHistoryReads += 1;
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          await route.fulfill({ response });
+          return;
+        }
+        const text = await response.text();
+        const injected = text.replace(
+          '"conversations":[]',
+          `"conversations":[{"conversationId":"${stubConversationId}","updatedAt":null,"lastMessagePreview":"Stub thread"}]`,
+        );
+        const headers = Object.fromEntries(
+          (await response.headersArray())
+            .filter((header) => header.name.toLowerCase() !== "content-length")
+            .map((header) => [header.name, header.value]),
+        );
+        await route.fulfill({ response, headers, body: injected });
+      },
+    );
+
+    try {
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator("[data-editor-chat-toggle]").click();
+      const panel = page.locator("[data-chat-panel]");
+      await expect(panel).toBeVisible();
+
+      /* Type first, so the disabled assertions below are meaningful. */
+      await panel.locator("[data-chat-input]").fill("stale message");
+      await expect(panel.locator("[data-chat-send]")).toBeEnabled();
+
+      const select = panel.getByRole("combobox", { name: "Conversation" });
+      await select.click();
+      const stubOption = page.getByRole("option", { name: "Stub thread" });
+      await expect(stubOption).toBeVisible({ timeout: 10_000 });
+      await stubOption.click();
+
+      /* The history read is in flight: the gate disables every send path. */
+      await expect(panel).toContainText("Loading conversation…");
+      await expect(select).toBeDisabled();
+      await expect(panel.locator("[data-chat-input]")).toBeDisabled();
+      await expect(panel.locator("[data-chat-input]")).toHaveValue(
+        "stale message",
+      );
+      await expect(panel.locator("[data-chat-send]")).toBeDisabled();
+      await expect.poll(() => delayedHistoryReads).toBeGreaterThan(0);
+
+      /* It settles: loading clears and the panel is usable again — the
+         regression wedged "Loading conversation…" forever. */
+      await expect(panel.locator("[data-chat-input]")).toBeEnabled({
+        timeout: 15_000,
+      });
+      await expect(select).toBeEnabled();
+      await expect(panel).not.toContainText("Loading conversation…");
+      await expect(panel.locator("[data-chat-send]")).toBeEnabled();
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await page.unroute(`**/tools/presentation/${presentationId}/edit`);
+    }
+  });
+});
+
+/**
+ * D8 review fix — the conversation switch's stale-response guard, live.
+ *
+ * The select is disabled while a history read is in flight and a response is
+ * applied only when its request token is still the latest and the selection
+ * has not moved (`chatHistoryResponseApplies`, unit-tested in the renderer
+ * spec). The engine stores conversations only after a completed turn, which
+ * the provider currently blocks, so the case records an honest skip until two
+ * exist.
+ */
+test.describe("deck assistant conversations (live deck)", () => {
+  test("switching conversations shows the selected thread and drops the previous one", async ({
+    page,
+  }) => {
+    if (chatRaceTarget === null) {
+      test.skip(
+        true,
+        chatRaceSkipReason ?? "No two stored conversations were discovered.",
+      );
+    }
+    const target = requireEditorTarget();
+    const race = chatRaceTarget as ChatRaceTarget;
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+
+    try {
+      const firstUserMessage = async (conversationId: string) => {
+        const response = await api.get(
+          `/api/v1/ppt/chat/history?presentation_id=${race.deckId}&conversation_id=${conversationId}`,
+          { timeout: 30_000 },
+        );
+        expect(response.ok(), `engine history: ${response.status()}`).toBe(true);
+        const body = (await response.json()) as {
+          messages?: Array<{ role?: unknown; content?: unknown }>;
+        };
+        const message = (body.messages ?? []).find(
+          (entry) =>
+            entry.role === "user" &&
+            typeof entry.content === "string" &&
+            entry.content !== "",
+        );
+        return typeof message?.content === "string" ? message.content : "";
+      };
+
+      const textA = await firstUserMessage(race.conversationIds[0]);
+      const textB = await firstUserMessage(race.conversationIds[1]);
+      test.skip(
+        textA === "" || textB === "",
+        "the discovered conversations carry no user message to assert.",
+      );
+
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      });
+      page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator("[data-editor-chat-toggle]").click();
+      const panel = page.locator("[data-chat-panel]");
+      await expect(panel).toBeVisible();
+
+      const select = panel.getByRole("combobox", { name: "Conversation" });
+      await select.click();
+      await page.getByRole("option").nth(1).click();
+      await expect(panel.locator('[data-chat-message="user"]').first()).toContainText(
+        textA.slice(0, 24),
+      );
+
+      await select.click();
+      await page.getByRole("option").nth(2).click();
+      await expect(panel.locator('[data-chat-message="user"]').first()).toContainText(
+        textB.slice(0, 24),
+      );
+      await expect(panel).not.toContainText(textA.slice(0, 24));
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
       await api.dispose();
     }
   });

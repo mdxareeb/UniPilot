@@ -72,6 +72,12 @@ export type DeckAutosave = {
   status: SaveStatus;
   error: string | null;
   saving: boolean;
+  /**
+   * True while any change is queued, in flight, or failed (a retry is
+   * required). The chat panel reads this so it never starts an engine-side
+   * edit while a local change is still waiting to be stored.
+   */
+  dirty: boolean;
   schedule: (target: SaveTarget) => void;
   retry: () => void;
 };
@@ -113,6 +119,7 @@ export function useDeckAutosave({
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   const saveRef = useRef(save);
   const revisionRef = useRef(revision);
@@ -153,6 +160,7 @@ export function useDeckAutosave({
         // The whole batch was scheduled before a newer revision's write.
         setStatus("saved");
       }
+      setDirty(pendingRef.current.size > 0);
       return;
     }
 
@@ -175,6 +183,7 @@ export function useDeckAutosave({
       failedRef.current = targets;
       setStatus("error");
       setError(outcome.error);
+      setDirty(true);
       return;
     }
 
@@ -186,6 +195,7 @@ export function useDeckAutosave({
       // Edits arrived while saving: flush them now instead of waiting again.
       void flushRef.current();
     }
+    setDirty(pendingRef.current.size > 0);
   }, [applyAck]);
 
   useEffect(() => {
@@ -198,6 +208,7 @@ export function useDeckAutosave({
         target,
         revision: revisionRef.current,
       });
+      setDirty(true);
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(() => {
         timerRef.current = null;
@@ -217,6 +228,7 @@ export function useDeckAutosave({
         revision: revisionRef.current,
       });
     }
+    setDirty(true);
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     void flushRef.current();
   }, []);
@@ -233,5 +245,5 @@ export function useDeckAutosave({
     };
   }, []);
 
-  return { status, error, saving, schedule, retry };
+  return { status, error, saving, dirty, schedule, retry };
 }

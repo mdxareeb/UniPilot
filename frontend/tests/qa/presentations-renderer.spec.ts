@@ -95,10 +95,29 @@ import {
 } from "../../lib/presentation/imageOps";
 import {
   isPresentonPlaceholderImage,
+  normalizeChatConversation,
+  normalizeChatHistory,
   normalizePresentonIcon,
   normalizePresentonImage,
   normalizePresentonImageSearch,
 } from "../../lib/integrations/presenton";
+import {
+  applyChatFrame,
+  CHAT_ERROR_COPY,
+  chatHistoryResponseApplies,
+  chatHistoryDiscardReleasesLoading,
+  chatTraceMutatesDeck,
+  chatTurnMayChangeDeck,
+  classifyChatDeckDiff,
+  createChatEntry,
+  frameToSse,
+  normalizeChatFramePayload,
+  normalizeChatSseEvent,
+  parseSseBlocks,
+  slideTextSummary,
+  type ChatDeckSnapshot,
+  type ChatTrace,
+} from "../../lib/presentation/chatFrames";
 import {
   classifyImageSource,
   filterScopedImages,
@@ -6075,5 +6094,550 @@ test.describe("clipboard operations — duplicate and delete (D7)", () => {
       "stack",
       "cluster",
     ]);
+  });
+});
+
+/**
+ * Task D8 — the chat proxy's pure contract (spec §7.8, §5.4).
+ *
+ * The editor's chat panel consumes `chunk`/`status`/`trace`/`complete`/`error`
+ * frames from `POST /api/presentation/{id}/chat`. These cases pin the frame
+ * vocabulary, the SSE framing per the engine's `SSEResponse.to_string()`
+ * (`event: response\ndata: {json}\n\n`), the sanitized error frame (no
+ * provider internals ever survive normalization), the client-side
+ * accumulation, the conservative "did this turn mutate the deck?" rule and
+ * the edit-review representability rule (whole-slide before/after only; every
+ * structural or metadata change says so honestly).
+ */
+
+/** One synthetic slide with ordered text elements (a title, optional body). */
+function chatDiffSlide(
+  id: string,
+  title: string,
+  body = "",
+  note: string | null = null,
+): DeckSlide {
+  return {
+    id,
+    presentation: "deck-1",
+    layout_group: "general",
+    layout: "general:1",
+    index: 0,
+    content: {},
+    speaker_note: note,
+    ui: {
+      components: [
+        {
+          id: `c-${id}`,
+          description: "content",
+          position: { x: 0, y: 0 },
+          elements: [
+            { type: "text", name: "title", runs: [{ text: title }] },
+            ...(body === ""
+              ? []
+              : [{ type: "text", name: "body", runs: [{ text: body }] }]),
+          ],
+        },
+      ],
+    },
+  } as unknown as DeckSlide;
+}
+
+function chatDeckSnapshot(slides: DeckSlide[]): ChatDeckSnapshot {
+  return { slides, theme: { colors: {}, fonts: {} }, title: "Deck" };
+}
+
+test.describe("presenton chat normalizers (pure)", () => {
+  test("normalizeChatConversation keeps shaped entries and drops malformed ones", () => {
+    expect(
+      normalizeChatConversation({
+        conversation_id: "c1",
+        updated_at: "2026-09-19T10:00:00Z",
+        last_message_preview: "Make the title shorter",
+      }),
+    ).toEqual({
+      conversationId: "c1",
+      updatedAt: "2026-09-19T10:00:00Z",
+      lastMessagePreview: "Make the title shorter",
+    });
+
+    expect(
+      normalizeChatConversation({ conversation_id: "c1" }),
+    ).toEqual({
+      conversationId: "c1",
+      updatedAt: null,
+      lastMessagePreview: null,
+    });
+
+    expect(normalizeChatConversation({ conversation_id: "" })).toBeNull();
+    expect(normalizeChatConversation({})).toBeNull();
+    expect(normalizeChatConversation(null)).toBeNull();
+  });
+
+  test("normalizeChatHistory reads the engine envelope and its message rows", () => {
+    const history = normalizeChatHistory({
+      presentation_id: "p1",
+      conversation_id: "c1",
+      messages: [
+        { role: "user", content: "Hi", created_at: "2026-09-19T10:00:00Z" },
+        { role: "assistant", content: "Hello" },
+        { role: 7, content: 9 },
+      ],
+    });
+
+    expect(history).toEqual({
+      presentationId: "p1",
+      conversationId: "c1",
+      messages: [
+        { role: "user", content: "Hi", createdAt: "2026-09-19T10:00:00Z" },
+        { role: "assistant", content: "Hello", createdAt: null },
+      ],
+    });
+
+    expect(
+      normalizeChatHistory({ presentation_id: "p1", conversation_id: "c1" }),
+    ).toBeNull();
+    expect(normalizeChatHistory(null)).toBeNull();
+  });
+});
+
+test.describe("chat frames (pure)", () => {
+  test("parseSseBlocks splits complete frames and keeps the partial tail", () => {
+    const buffer =
+      'data: {"type":"status","status":"Reading deck context"}\n\ndata: {"type":"chunk","chunk":"Hel';
+    const { events, rest } = parseSseBlocks(buffer);
+
+    expect(events).toEqual([
+      {
+        event: null,
+        data: '{"type":"status","status":"Reading deck context"}',
+      },
+    ]);
+    expect(rest).toBe('data: {"type":"chunk","chunk":"Hel');
+  });
+
+  test("parseSseBlocks accepts event lines, CRLF, comments and multi-line data", () => {
+    const buffer =
+      ': keepalive\r\nevent: response\r\ndata: {"type":"chunk",\r\ndata: "chunk":"Hi"}\r\n\r\ndata: second\n\n';
+    const { events, rest } = parseSseBlocks(buffer);
+
+    expect(rest).toBe("");
+    expect(events).toEqual([
+      { event: "response", data: '{"type":"chunk",\n"chunk":"Hi"}' },
+      { event: null, data: "second" },
+    ]);
+  });
+
+  test("normalizeChatFramePayload maps every engine frame shape", () => {
+    expect(normalizeChatFramePayload({ type: "chunk", chunk: "Hello" })).toEqual(
+      { type: "chunk", text: "Hello" },
+    );
+    expect(
+      normalizeChatFramePayload({ type: "status", status: "Saving chat" }),
+    ).toEqual({ type: "status", status: "Saving chat" });
+    expect(
+      normalizeChatFramePayload({
+        type: "trace",
+        trace: {
+          kind: "tool_call",
+          round: 1,
+          tool: "updateSlide",
+          status: "start",
+          message: "Updating slide 2",
+          raw: { provider: "internal" },
+        },
+      }),
+    ).toEqual({
+      type: "trace",
+      trace: {
+        kind: "tool_call",
+        round: 1,
+        tool: "updateSlide",
+        status: "start",
+        message: "Updating slide 2",
+      },
+    });
+    expect(
+      normalizeChatFramePayload({
+        type: "complete",
+        chat: {
+          conversation_id: "c1",
+          response: "Done",
+          tool_calls: ["updateSlide", 7, "searchSlide"],
+        },
+      }),
+    ).toEqual({
+      type: "complete",
+      conversationId: "c1",
+      response: "Done",
+      toolCalls: ["updateSlide", "searchSlide"],
+    });
+  });
+
+  test("normalizeChatFramePayload sanitizes error frames and drops unknown types", () => {
+    const error = normalizeChatFramePayload({
+      type: "error",
+      detail: "Groq 429: rate limit exceeded for org_xyz key sk-secret",
+      status_code: 429,
+      source: "llm",
+    });
+
+    expect(error).toEqual({ type: "error", message: CHAT_ERROR_COPY });
+    const serialized = JSON.stringify(error);
+    expect(serialized).not.toContain("Groq");
+    expect(serialized).not.toContain("sk-secret");
+    expect(serialized).not.toContain("detail");
+
+    expect(normalizeChatFramePayload({ type: "something-else" })).toBeNull();
+    expect(normalizeChatFramePayload(null)).toBeNull();
+    expect(normalizeChatFramePayload("data")).toBeNull();
+    expect(normalizeChatFramePayload({ type: "chunk" })).toBeNull();
+  });
+
+  test("normalizeChatFramePayload drops trace messages that can carry upstream internals", () => {
+    /* Error traces are built from raw tool exceptions (`tools.py`) and model
+       notes from provider output — neither may cross the proxy. */
+    const failed = normalizeChatFramePayload({
+      type: "trace",
+      trace: {
+        kind: "tool_call",
+        round: 1,
+        tool: "updateSlide",
+        status: "error",
+        message: "openai.APIError: invalid api key sk-secret at /app/servers/foo.py",
+      },
+    });
+    expect(failed).toEqual({
+      type: "trace",
+      trace: {
+        kind: "tool_call",
+        round: 1,
+        tool: "updateSlide",
+        status: "error",
+        message: null,
+      },
+    });
+    expect(JSON.stringify(failed)).not.toContain("sk-secret");
+    expect(JSON.stringify(failed)).not.toContain("/app/");
+
+    const note = normalizeChatFramePayload({
+      type: "trace",
+      trace: {
+        kind: "model_note",
+        round: 1,
+        status: "info",
+        message: "provider internal: rate limit for org_xyz",
+      },
+    });
+    expect(note).toEqual({
+      type: "trace",
+      trace: {
+        kind: "model_note",
+        round: 1,
+        tool: null,
+        status: "info",
+        message: null,
+      },
+    });
+
+    /* A successful tool call's canned engine label still renders. */
+    const ok = normalizeChatFramePayload({
+      type: "trace",
+      trace: {
+        kind: "tool_call",
+        round: 1,
+        tool: "updateSlide",
+        status: "start",
+        message: "Updating slide 2",
+      },
+    });
+    expect(ok?.type === "trace" && ok.trace.message).toBe("Updating slide 2");
+  });
+
+  test("normalizeChatSseEvent ignores non-response events and non-JSON data", () => {
+    expect(
+      normalizeChatSseEvent({
+        event: "response",
+        data: '{"type":"chunk","chunk":"a"}',
+      }),
+    ).toEqual({ type: "chunk", text: "a" });
+    expect(
+      normalizeChatSseEvent({
+        event: "ping",
+        data: '{"type":"chunk","chunk":"a"}',
+      }),
+    ).toBeNull();
+    expect(normalizeChatSseEvent({ event: null, data: "not json" })).toBeNull();
+  });
+
+  test("frameToSse writes one JSON data line per frame", () => {
+    expect(frameToSse({ type: "chunk", text: "hi" })).toBe(
+      'data: {"type":"chunk","text":"hi"}\n\n',
+    );
+  });
+
+  test("applyChatFrame accumulates text, status, traces and the completed turn", () => {
+    let entry = createChatEntry("assistant");
+    expect(entry.interrupted).toBe(false);
+    entry = applyChatFrame(entry, {
+      type: "status",
+      status: "Reading deck context",
+    });
+    entry = applyChatFrame(entry, { type: "chunk", text: "Sure" });
+    entry = applyChatFrame(entry, { type: "chunk", text: " — done." });
+    entry = applyChatFrame(entry, {
+      type: "trace",
+      trace: {
+        kind: "tool_call",
+        round: 1,
+        tool: "updateSlide",
+        status: "success",
+        message: "Slide updated",
+      },
+    });
+    entry = applyChatFrame(entry, {
+      type: "complete",
+      conversationId: "c9",
+      response: "Sure — done.",
+      toolCalls: ["updateSlide"],
+    });
+
+    expect(entry.text).toBe("Sure — done.");
+    expect(entry.status).toBe("Reading deck context");
+    expect(entry.traces).toHaveLength(1);
+    expect(entry.conversationId).toBe("c9");
+    expect(entry.complete).toBe(true);
+    expect(entry.error).toBeNull();
+
+    const failed = applyChatFrame(createChatEntry("assistant"), {
+      type: "error",
+      message: CHAT_ERROR_COPY,
+    });
+    expect(failed.error).toBe(CHAT_ERROR_COPY);
+    expect(failed.text).toBe("");
+  });
+
+  test("chatTurnMayChangeDeck flags mutating tools and treats unknown tools as mutating", () => {
+    expect(chatTurnMayChangeDeck([])).toBe(false);
+    expect(
+      chatTurnMayChangeDeck([
+        "searchSlide",
+        "getSlideAtIndex",
+        "getAvailableLayouts",
+      ]),
+    ).toBe(false);
+    expect(chatTurnMayChangeDeck(["getSlideAtIndex", "updateSlide"])).toBe(true);
+    expect(chatTurnMayChangeDeck(["addNewSlide"])).toBe(true);
+    expect(chatTurnMayChangeDeck(["someFutureTool"])).toBe(true);
+  });
+
+  test("chatTraceMutatesDeck flags a mutating tool that started", () => {
+    const trace = (patch: Partial<ChatTrace>): ChatTrace => ({
+      kind: "tool_call",
+      round: 1,
+      tool: "updateSlide",
+      status: "start",
+      message: null,
+      ...patch,
+    });
+
+    expect(chatTraceMutatesDeck(trace({}))).toBe(true);
+    expect(chatTraceMutatesDeck(trace({ tool: "addNewSlide" }))).toBe(true);
+    expect(chatTraceMutatesDeck(trace({ tool: "futureTool" }))).toBe(true);
+    expect(chatTraceMutatesDeck(trace({ tool: "searchSlide" }))).toBe(false);
+    expect(chatTraceMutatesDeck(trace({ status: "success" }))).toBe(false);
+    expect(chatTraceMutatesDeck(trace({ tool: null }))).toBe(false);
+  });
+
+  test("chatHistoryResponseApplies rejects superseded or moved-on responses", () => {
+    expect(
+      chatHistoryResponseApplies({
+        responseToken: 2,
+        latestToken: 2,
+        requestedConversationId: "a",
+        currentConversationId: "a",
+        streamActive: false,
+      }),
+    ).toBe(true);
+    expect(
+      chatHistoryResponseApplies({
+        responseToken: 1,
+        latestToken: 2,
+        requestedConversationId: "a",
+        currentConversationId: "a",
+        streamActive: false,
+      }),
+    ).toBe(false);
+    expect(
+      chatHistoryResponseApplies({
+        responseToken: 2,
+        latestToken: 2,
+        requestedConversationId: "a",
+        currentConversationId: "b",
+        streamActive: false,
+      }),
+    ).toBe(false);
+    expect(
+      chatHistoryResponseApplies({
+        responseToken: 2,
+        latestToken: 2,
+        requestedConversationId: "a",
+        currentConversationId: null,
+        streamActive: false,
+      }),
+    ).toBe(false);
+    /* A just-started turn owns the thread; a late history read must not wipe
+       its messages even when the token and selection still match. */
+    expect(
+      chatHistoryResponseApplies({
+        responseToken: 2,
+        latestToken: 2,
+        requestedConversationId: "a",
+        currentConversationId: "a",
+        streamActive: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("chatHistoryDiscardReleasesLoading frees only the owning request", () => {
+    /* The discarded response that owns the loading state releases it (the
+       `complete`-bumped token case that used to wedge "Loading conversation…"
+       forever); a newer request keeps ownership. */
+    expect(
+      chatHistoryDiscardReleasesLoading({ responseToken: 3, loadingToken: 3 }),
+    ).toBe(true);
+    expect(
+      chatHistoryDiscardReleasesLoading({ responseToken: 2, loadingToken: 3 }),
+    ).toBe(false);
+    expect(
+      chatHistoryDiscardReleasesLoading({ responseToken: 3, loadingToken: null }),
+    ).toBe(false);
+  });
+
+  test("classifyChatDeckDiff is representable for same-slide content edits", () => {
+    const before = chatDeckSnapshot([
+      chatDiffSlide("s1", "Intro", "Welcome"),
+      chatDiffSlide("s2", "Agenda", "Topics"),
+    ]);
+    const after = chatDeckSnapshot([
+      chatDiffSlide("s1", "Intro", "Welcome back"),
+      chatDiffSlide("s2", "Agenda", "Topics"),
+    ]);
+
+    const diff = classifyChatDeckDiff(before, after);
+
+    expect(diff.representable).toBe(true);
+    if (!diff.representable) return;
+    expect(diff.changes).toHaveLength(1);
+    expect(diff.changes[0].slideId).toBe("s1");
+    expect(diff.changes[0].slideNumber).toBe(1);
+    expect(diff.changes[0].beforeText).toBe("Intro · Welcome");
+    expect(diff.changes[0].afterText).toBe("Intro · Welcome back");
+  });
+
+  test("classifyChatDeckDiff reports an unchanged deck honestly", () => {
+    const snapshot = chatDeckSnapshot([chatDiffSlide("s1", "Intro", "Hi")]);
+    const diff = classifyChatDeckDiff(snapshot, structuredClone(snapshot));
+
+    expect(diff.representable).toBe(true);
+    if (!diff.representable) return;
+    expect(diff.changes).toEqual([]);
+  });
+
+  test("classifyChatDeckDiff treats an index-only slide change as representable", () => {
+    /* The engine renumbers a slide without touching its body; that is still a
+       stored change and must not read as "No slide changes". */
+    const before = chatDeckSnapshot([
+      { ...chatDiffSlide("s1", "Intro", "Welcome"), index: 0 },
+    ]);
+    const after = chatDeckSnapshot([
+      { ...chatDiffSlide("s1", "Intro", "Welcome"), index: 3 },
+    ]);
+
+    const diff = classifyChatDeckDiff(before, after);
+
+    expect(diff.representable).toBe(true);
+    if (!diff.representable) return;
+    expect(diff.changes).toHaveLength(1);
+    expect(diff.changes[0].slideId).toBe("s1");
+    expect(diff.changes[0].beforeText).toBe("Intro · Welcome");
+  });
+
+  test("classifyChatDeckDiff refuses added, removed or reordered slides", () => {
+    const base = chatDeckSnapshot([
+      chatDiffSlide("s1", "One", "a"),
+      chatDiffSlide("s2", "Two", "b"),
+    ]);
+
+    const added = classifyChatDeckDiff(
+      base,
+      chatDeckSnapshot([
+        chatDiffSlide("s1", "One", "a"),
+        chatDiffSlide("s2", "Two", "b"),
+        chatDiffSlide("s3", "Three", "c"),
+      ]),
+    );
+    expect(added).toEqual({
+      representable: false,
+      reason: "structural",
+      changedSlideCount: 1,
+    });
+
+    const removed = classifyChatDeckDiff(base, chatDeckSnapshot([base.slides[0]]));
+    expect(removed).toEqual({
+      representable: false,
+      reason: "structural",
+      changedSlideCount: 1,
+    });
+
+    const reordered = classifyChatDeckDiff(
+      base,
+      chatDeckSnapshot([chatDiffSlide("s2", "Two", "b"), chatDiffSlide("s1", "One", "a")]),
+    );
+    expect(reordered).toEqual({
+      representable: false,
+      reason: "structural",
+      changedSlideCount: 2,
+    });
+  });
+
+  test("classifyChatDeckDiff refuses theme and title changes", () => {
+    const before = chatDeckSnapshot([chatDiffSlide("s1", "One", "a")]);
+    const themeChanged = classifyChatDeckDiff(before, {
+      ...structuredClone(before),
+      theme: { colors: { primary: "#000000" } },
+    });
+    expect(themeChanged).toEqual({
+      representable: false,
+      reason: "metadata",
+      changedSlideCount: 0,
+    });
+
+    const titleChanged = classifyChatDeckDiff(before, {
+      ...structuredClone(before),
+      title: "A new title",
+    });
+    expect(titleChanged).toEqual({
+      representable: false,
+      reason: "metadata",
+      changedSlideCount: 0,
+    });
+
+    const mixed = classifyChatDeckDiff(before, {
+      ...structuredClone(before),
+      title: "A new title",
+      slides: [chatDiffSlide("s1", "One", "changed")],
+    });
+    expect(mixed).toEqual({
+      representable: false,
+      reason: "mixed",
+      changedSlideCount: 1,
+    });
+  });
+
+  test("slideTextSummary joins the slide's text elements in order", () => {
+    const slide = chatDiffSlide("s1", "Title here", "Body copy", "A note");
+    expect(slideTextSummary(slide)).toBe("Title here · Body copy");
+    expect(slideTextSummary({ ...slide, ui: null })).toBe("");
   });
 });

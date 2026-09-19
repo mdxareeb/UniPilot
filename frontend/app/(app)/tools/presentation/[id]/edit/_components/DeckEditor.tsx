@@ -24,6 +24,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  MessageSquareText,
   Redo2,
   Undo2,
 } from "lucide-react";
@@ -124,6 +125,7 @@ import type {
   TextRunValue,
 } from "@/lib/presentation/types";
 import type { PresentationExportStatusValue } from "@/lib/data/presentationValues";
+import type { ChatDeckSnapshot } from "@/lib/presentation/chatFrames";
 import {
   renamePresentationAction,
   requestExportAction,
@@ -132,6 +134,8 @@ import {
   updateSlideAction,
 } from "@/lib/data/presentationActions";
 import { ChartControls } from "./ChartControls";
+import { ChatPanel } from "./ChatPanel";
+import { getPresentationDeckAction } from "./chatActions";
 import { EditorRail, STRUCTURAL_EDITING_REASON } from "./EditorRail";
 import { IconPickerModal } from "./IconPickerModal";
 import { ImageControls } from "./ImageControls";
@@ -183,6 +187,10 @@ const FALLBACK_SAVE_ERROR =
   "We couldn't save that change. Try again in a moment.";
 const MISSING_THEME_ERROR =
   "This deck has no stored theme, so the structural save wasn't made.";
+const CHAT_EDIT_RACE_ERROR =
+  "The assistant changed the stored deck, but you also edited this deck while it worked. Reload the page to see the stored deck.";
+const CHAT_RESTORE_RELOAD_ERROR =
+  "The original slides were restored, but the deck couldn't be reloaded. Reload the page to see the current deck.";
 
 export type DeckEditorProps = {
   /** The UniPilot presentation row id (owner reads + asset proxy). */
@@ -344,6 +352,10 @@ export function DeckEditor({
     slideId: string;
     reason: string;
   } | null>(null);
+  /* True while the chat panel's settle watcher is running (an aborted turn
+     the route is draining may still commit): deck editing pauses until the
+     stored deck is re-read, so no doomed write can be scheduled. */
+  const [chatSettling, setChatSettling] = useState(false);
 
   const slides = state.slides;
   const selectedSlide = slides[selectedIndex] ?? null;
@@ -539,14 +551,19 @@ export function DeckEditor({
   );
 
   const autosave = useDeckAutosave({ save: runSave, revision });
-  const { schedule, retry, status, error, saving } = autosave;
+  const { schedule, retry, status, error, saving, dirty } = autosave;
 
   const commit = useCallback(
     (next: DeckEditState, reason: string, targets: SaveTarget[]) => {
+      /* Editing is paused while the chat panel waits for the engine's drained
+         turn to settle: the stored deck is about to be re-read, so a write
+         scheduled now would race (or aim at) slide ids the engine may have
+         replaced. */
+      if (chatSettling) return;
       apply(next, reason);
       for (const target of targets) schedule(target);
     },
-    [apply, schedule],
+    [apply, chatSettling, schedule],
   );
 
   /** Schedules whatever differs from the last acknowledged baseline. */
@@ -572,15 +589,116 @@ export function DeckEditor({
     for (const target of targets) schedule(target);
   }, [schedule]);
 
+  // -------------------------------------------------------------------------
+  // Deck assistant (D8): the engine's chat mutates the stored deck, so after
+  // a mutating turn the editor re-reads it and re-bases its baseline on the
+  // stored truth. Undo still reverts, because the pre-chat snapshots stay in
+  // history and the diff against the new baseline re-saves them.
+  // -------------------------------------------------------------------------
+
+  const [chatOpen, setChatOpen] = useState(false);
+  const chatToggleRef = useRef<HTMLButtonElement | null>(null);
+
+  const readChatDeck = useCallback(async (): Promise<{
+    error: string | null;
+    snapshot: ChatDeckSnapshot | null;
+  }> => {
+    let result: Awaited<ReturnType<typeof getPresentationDeckAction>>;
+    try {
+      result = await getPresentationDeckAction({ presentationId });
+    } catch {
+      return { error: FALLBACK_SAVE_ERROR, snapshot: null };
+    }
+    if (result.error !== null || result.deck === null) {
+      return { error: result.error ?? FALLBACK_SAVE_ERROR, snapshot: null };
+    }
+
+    const next: DeckEditState = {
+      slides: result.deck.slides,
+      theme: result.deck.theme ?? null,
+      title: result.deck.title?.trim() || title,
+    };
+    replace(next);
+    bumpRevision();
+    savedRef.current = {
+      title: next.title,
+      theme: next.theme,
+      slides: new Map(next.slides.map((slide) => [slide.id, slide])),
+      order: next.slides.map((slide) => slide.id),
+    };
+    return {
+      error: null,
+      snapshot: {
+        slides: next.slides,
+        theme: next.theme,
+        title: next.title,
+      },
+    };
+  }, [bumpRevision, presentationId, replace, title]);
+
+  const reloadChatDeck = useCallback(
+    async (
+      before: ChatDeckSnapshot,
+    ): Promise<{
+      error: string | null;
+      snapshot: ChatDeckSnapshot | null;
+    }> => {
+      /* The deck was edited while the turn streamed: replacing state now would
+         silently drop that (unsaved) local change, so refuse and say so. */
+      if (getState() !== before) {
+        return { error: CHAT_EDIT_RACE_ERROR, snapshot: null };
+      }
+      return readChatDeck();
+    },
+    [getState, readChatDeck],
+  );
+
+  /** Read-only stored-deck probe (the chat panel's settle watcher). */
+  const probeChatDeck = useCallback(
+    async (): Promise<{
+      error: string | null;
+      deck: PresentationDeck | null;
+    }> => {
+      try {
+        const result = await getPresentationDeckAction({ presentationId });
+        return { error: result.error, deck: result.deck };
+      } catch {
+        return { error: FALLBACK_SAVE_ERROR, deck: null };
+      }
+    },
+    [presentationId],
+  );
+
+  const restoreChatSlides = useCallback(
+    async (restoredSlides: DeckSlide[]): Promise<string | null> => {
+      for (const slide of restoredSlides) {
+        let result: Awaited<ReturnType<typeof updateSlideAction>>;
+        try {
+          result = await updateSlideAction({ presentationId, slide });
+        } catch {
+          return FALLBACK_SAVE_ERROR;
+        }
+        if (result.error !== null) return result.error;
+      }
+      const reload = await readChatDeck();
+      /* The write path has its own copy; a re-read failure after successful
+         writes is a different, honest statement. */
+      return reload.error === null ? null : CHAT_RESTORE_RELOAD_ERROR;
+    },
+    [presentationId, readChatDeck],
+  );
+
   const handleUndo = useCallback(() => {
+    if (chatSettling) return;
     const restored = undo();
     if (restored !== null) scheduleAgainstBaseline(restored);
-  }, [scheduleAgainstBaseline, undo]);
+  }, [chatSettling, scheduleAgainstBaseline, undo]);
 
   const handleRedo = useCallback(() => {
+    if (chatSettling) return;
     const restored = redo();
     if (restored !== null) scheduleAgainstBaseline(restored);
-  }, [redo, scheduleAgainstBaseline]);
+  }, [chatSettling, redo, scheduleAgainstBaseline]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2073,6 +2191,7 @@ export function DeckEditor({
       ref={rootRef}
       data-deck-editor=""
       className="flex min-w-0 flex-col gap-4"
+      inert={chatSettling}
     >
       <Card className="flex flex-wrap items-center justify-between gap-3 bg-glass p-3 backdrop-blur-md">
         <SaveStatus status={status} error={error} onRetry={retry} />
@@ -2087,7 +2206,7 @@ export function DeckEditor({
               variant="outline"
               size="sm"
               aria-label="Undo"
-              disabled={!canUndo}
+              disabled={!canUndo || chatSettling}
               data-editor-undo=""
               onClick={handleUndo}
             >
@@ -2098,7 +2217,7 @@ export function DeckEditor({
               variant="outline"
               size="sm"
               aria-label="Redo"
-              disabled={!canRedo}
+              disabled={!canRedo || chatSettling}
               data-editor-redo=""
               onClick={handleRedo}
             >
@@ -2121,12 +2240,25 @@ export function DeckEditor({
             type="button"
             variant="outline"
             data-editor-export=""
-            disabled={saving || exporting}
+            disabled={saving || exporting || chatSettling}
             onClick={() => void onExport()}
           >
             <Download aria-hidden="true" className="size-4" />
             {exporting ? "Exporting…" : "Export"}
           </Button>
+          <IconButton
+            ref={chatToggleRef}
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Deck assistant"
+            aria-expanded={chatOpen}
+            aria-controls="editor-chat-panel"
+            data-editor-chat-toggle=""
+            onClick={() => setChatOpen((current) => !current)}
+          >
+            <MessageSquareText aria-hidden="true" className="size-4" />
+          </IconButton>
           <ShortcutsPopover />
         </div>
       </Card>
@@ -2137,6 +2269,16 @@ export function DeckEditor({
           className="text-label-sm text-destructive"
         >
           {exportRequestError}
+        </MotionNotice>
+      ) : null}
+      {chatSettling ? (
+        <MotionNotice
+          role="status"
+          data-editor-chat-settling=""
+          className="text-label-sm text-muted-foreground"
+        >
+          The assistant may still be applying changes — editing is paused until
+          the deck is re-read.
         </MotionNotice>
       ) : null}
       {exportStatus === "failed" && exportErrorMessage !== null ? (
@@ -2548,6 +2690,19 @@ export function DeckEditor({
             applyIconSource(element, path),
           )
         }
+      />
+
+      <ChatPanel
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        presentationId={presentationId}
+        savePending={saving || dirty}
+        captureDeck={getState}
+        reloadDeck={reloadChatDeck}
+        probeDeck={probeChatDeck}
+        restoreSlides={restoreChatSlides}
+        onSettlingChange={setChatSettling}
+        triggerRef={chatToggleRef}
       />
     </div>
   );

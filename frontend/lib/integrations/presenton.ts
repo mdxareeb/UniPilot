@@ -51,6 +51,10 @@ import type {
 } from "../presentation/types";
 import { assetContentType, isSafeAssetPath } from "../presentation/assets";
 import {
+  CHAT_MESSAGE_MAX_LENGTH,
+  parseSseBlocks,
+} from "../presentation/chatFrames";
+import {
   DEFAULT_ICON_WEIGHT,
   iconWeightFromPath,
   normalizeIconPath,
@@ -109,6 +113,11 @@ const IMAGE_GENERATE_TIMEOUT_MS = 120_000;
 const IMAGE_UPLOAD_TIMEOUT_MS = 120_000;
 /** One icon-catalog search (the vector store answers once initialized). */
 const ICONS_TIMEOUT_MS = 30_000;
+/**
+ * One chat read (conversation list / history). The chat stream has **no**
+ * timeout by design (spec §7.8: no truncation); only the reads are bounded.
+ */
+const CHAT_READ_TIMEOUT_MS = 15_000;
 
 /** Presenton's async-task lifecycle (mirror of `enums.async_task_status.py`). */
 export type PresentonTaskStatus = "pending" | "processing" | "completed" | "error";
@@ -1468,5 +1477,302 @@ export async function resolveEditorUrl(
     );
   } catch {
     return engineUrl;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task D8 — the editor's chat surface (spec §7.8, §5.4 "AI chat edits")
+//
+// The engine's chat routes (`presenton-main/.../endpoints/chat.py`):
+//   GET  /api/v1/ppt/chat/conversations?presentation_id=…
+//   GET  /api/v1/ppt/chat/history?presentation_id=…&conversation_id=…
+//   POST /api/v1/ppt/chat/message/stream  (SSE)
+//
+// The stream is deliberately unbounded: spec §7.8 requires no timeout
+// truncation, so the only cancellation is the caller's optional `signal`.
+// The route deliberately passes no signal (see its drain-workaround comment):
+// hard-cancelling the engine's chat stream leaves its SQLAlchemy SQLite
+// transaction open and locks the engine. Frames are yielded as the engine's
+// parsed JSON payloads — normalization (including error sanitization) belongs
+// to `lib/presentation/chatFrames.ts`, one pure place shared with the browser
+// panel. Message text and conversation ids are never logged.
+// ---------------------------------------------------------------------------
+
+/** One engine conversation, normalized (`ChatConversationListItem`). */
+export type PresentonChatConversation = {
+  conversationId: string;
+  updatedAt: string | null;
+  lastMessagePreview: string | null;
+};
+
+/** One stored chat message, normalized (`ChatHistoryMessageItem`). */
+export type PresentonChatMessage = {
+  role: string;
+  content: string;
+  createdAt: string | null;
+};
+
+function normalizeNullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/** One conversation entry, or null when it has no usable id (never guessed). */
+export function normalizeChatConversation(
+  value: unknown,
+): PresentonChatConversation | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const conversationId =
+    typeof entry.conversation_id === "string" ? entry.conversation_id.trim() : "";
+  if (conversationId === "") return null;
+  return {
+    conversationId,
+    updatedAt: normalizeNullableString(entry.updated_at),
+    lastMessagePreview: normalizeNullableString(entry.last_message_preview),
+  };
+}
+
+/** One history row, or null when it has no usable role (never guessed). */
+export function normalizeChatMessage(
+  value: unknown,
+): PresentonChatMessage | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? entry.role.trim() : "";
+  if (role === "") return null;
+  return {
+    role,
+    content: typeof entry.content === "string" ? entry.content : "",
+    createdAt: normalizeNullableString(entry.created_at),
+  };
+}
+
+/**
+ * The `/history` envelope (`ChatHistoryResponse`), normalized; null when the
+ * envelope itself is unreadable. Message rows without a role are dropped.
+ */
+export function normalizeChatHistory(value: unknown): {
+  presentationId: string;
+  conversationId: string;
+  messages: PresentonChatMessage[];
+} | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const presentationId =
+    typeof entry.presentation_id === "string" ? entry.presentation_id.trim() : "";
+  const conversationId =
+    typeof entry.conversation_id === "string" ? entry.conversation_id.trim() : "";
+  if (
+    presentationId === "" ||
+    conversationId === "" ||
+    !Array.isArray(entry.messages)
+  ) {
+    return null;
+  }
+  return {
+    presentationId,
+    conversationId,
+    messages: entry.messages
+      .map(normalizeChatMessage)
+      .filter((message): message is PresentonChatMessage => message !== null),
+  };
+}
+
+/**
+ * §5.4/§7.8 — one deck's chat conversations, newest metadata first (the
+ * engine's own order). An environment without a reachable engine answers the
+ * adapter's classified error; an empty list is a valid answer.
+ */
+export async function listPresentationChatConversations(
+  presentationId: string,
+): Promise<PresentonChatConversation[]> {
+  const base = requireBaseUrl();
+  assertSafeSegment(presentationId, "presentation id");
+
+  const response = await fetchWithTimeout(
+    joinUrl(
+      base,
+      `/api/v1/ppt/chat/conversations?presentation_id=${encodeURIComponent(
+        presentationId,
+      )}`,
+    ),
+    { method: "GET", headers: requestHeaders() },
+    CHAT_READ_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const body: unknown = await response.json();
+  if (!Array.isArray(body)) {
+    throw new PresentonError("failed", "The service returned an unreadable response.");
+  }
+  return body
+    .map(normalizeChatConversation)
+    .filter(
+      (conversation): conversation is PresentonChatConversation =>
+        conversation !== null,
+    );
+}
+
+/**
+ * §5.4/§7.8 — one conversation's stored messages. The engine requires both the
+ * deck id and the conversation id (`Query(...)` on both), so both are
+ * validated before any request.
+ */
+export async function getPresentationChatMessages(input: {
+  presentationId: string;
+  conversationId: string;
+}): Promise<PresentonChatMessage[]> {
+  const base = requireBaseUrl();
+  assertSafeSegment(input.presentationId, "presentation id");
+  if (!UUID_PATTERN.test(input.conversationId)) {
+    throw new PresentonError("rejected", "Invalid conversation id.");
+  }
+
+  const response = await fetchWithTimeout(
+    joinUrl(
+      base,
+      `/api/v1/ppt/chat/history?presentation_id=${encodeURIComponent(
+        input.presentationId,
+      )}&conversation_id=${encodeURIComponent(input.conversationId)}`,
+    ),
+    { method: "GET", headers: requestHeaders() },
+    CHAT_READ_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const history = normalizeChatHistory(await response.json());
+  if (history === null) {
+    throw new PresentonError("failed", "The service returned an unreadable response.");
+  }
+  return history.messages;
+}
+
+/**
+ * §7.8 — open the engine's SSE chat turn and yield each parsed frame payload.
+ *
+ * No timeout signal is attached: the route owns cancellation, and the caller's
+ * `signal` aborts the upstream fetch directly. A transport failure throws the
+ * adapter's `unreachable`; an engine 4xx/5xx before the stream starts throws
+ * the usual classified error; anything that fails mid-stream surfaces as
+ * `unreachable` (the route turns it into the sanitized error frame). The
+ * reader is always cancelled so an aborted browser request tears the upstream
+ * response down instead of leaking it.
+ */
+export async function* streamPresentationChat(input: {
+  presentationId: string;
+  message: string;
+  conversationId?: string | null;
+  signal?: AbortSignal;
+}): AsyncGenerator<unknown, void, void> {
+  const base = requireBaseUrl();
+  assertSafeSegment(input.presentationId, "presentation id");
+  const message = input.message.trim();
+  if (message === "") {
+    throw new PresentonError("rejected", "A message is required.");
+  }
+  if (message.length > CHAT_MESSAGE_MAX_LENGTH) {
+    throw new PresentonError("rejected", "The message is too long.");
+  }
+  if (
+    input.conversationId !== undefined &&
+    input.conversationId !== null &&
+    !UUID_PATTERN.test(input.conversationId)
+  ) {
+    throw new PresentonError("rejected", "Invalid conversation id.");
+  }
+
+  const body: Record<string, unknown> = {
+    presentation_id: input.presentationId,
+    presentation_type: "standard",
+    message,
+  };
+  if (input.conversationId) body.conversation_id = input.conversationId;
+
+  let response: Response;
+  try {
+    response = await fetch(joinUrl(base, "/api/v1/ppt/chat/message/stream"), {
+      method: "POST",
+      headers: {
+        ...requestHeaders(),
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+      signal: input.signal,
+    });
+  } catch (error) {
+    if (input.signal?.aborted) throw error;
+    throw new PresentonError("unreachable", "Couldn't reach the presentation service.");
+  }
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+  if (response.body === null) {
+    throw new PresentonError("failed", "The service returned an unreadable response.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  const parseBlock = (block: string): unknown[] => {
+    const payloads: unknown[] = [];
+    const { events } = parseSseBlocks(block);
+    for (const event of events) {
+      if (event.event !== null && event.event !== "response") continue;
+      try {
+        payloads.push(JSON.parse(event.data));
+      } catch {
+        // A malformed frame is dropped; the route never forwards raw bytes.
+      }
+    }
+    return payloads;
+  };
+
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseSseBlocks(buffer);
+      buffer = rest;
+      for (const event of events) {
+        if (event.event !== null && event.event !== "response") continue;
+        try {
+          yield JSON.parse(event.data) as unknown;
+        } catch {
+          // Dropped, same as above.
+        }
+      }
+    }
+    /* The engine always terminates a frame with a blank line; a stream cut
+       right after `data:` still carries a usable last frame. */
+    if (buffer.trim() !== "") {
+      for (const payload of parseBlock(`${buffer}\n\n`)) yield payload;
+    }
+  } catch (error) {
+    if (input.signal?.aborted) return;
+    if (error instanceof PresentonError) throw error;
+    throw new PresentonError("unreachable", "Couldn't reach the presentation service.");
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // The stream was already closed or aborted.
+    }
   }
 }
