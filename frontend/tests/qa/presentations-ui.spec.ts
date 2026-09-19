@@ -111,6 +111,11 @@ import {
   SLIDE_LIMIT_TITLE,
   TOP_LEVEL_GROUP_REPLACE_REASON,
 } from "../../app/(app)/tools/presentation/[id]/edit/_components/layoutPaletteModel";
+import {
+  supportedInfographicCapabilities,
+  UNSUPPORTED_INFOGRAPHIC_NOTE,
+  unsupportedInfographicCapabilities,
+} from "../../lib/presentation/infographicOps";
 import { acquireWorkerLock } from "./workerLock";
 
 const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
@@ -5972,6 +5977,206 @@ test.describe("layout palette helpers (pure)", () => {
       disabled: true,
       title: SLIDE_LIMIT_TITLE,
     });
+  });
+});
+
+/*
+ * Task D9 — infographic insertion (spec §5.4 "Infographics", §6.7, plan D9).
+ *
+ * The palette offers only the three types the native renderer implements; the
+ * other 24 are listed disabled with the honest note and recorded in
+ * `INFOGRAPHIC_CAPABILITIES` for D10's capability checklist. The live case
+ * inserts a gauge through the inspector palette, asserts the new element is
+ * selected, reads the engine's stored component back (one `slide_update`, one
+ * new component frame, the fork's insert defaults), reloads to prove the
+ * native render, and restores the original slide in a `finally`. The rail
+ * menu carries the same dialog behavior as the layout palette (focus in,
+ * Escape out).
+ */
+test.describe("editor infographics — implemented types only (live deck)", () => {
+  test("lists the three implemented types and every unsupported type disabled with its note", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+
+    const palette = page.locator('[data-infographic-palette="inspector"]');
+    await expect(palette).toBeVisible();
+
+    /* Exactly the three implemented renderers are addable. */
+    expect(supportedInfographicCapabilities()).toHaveLength(3);
+    for (const capability of supportedInfographicCapabilities()) {
+      await expect(
+        palette.locator(`[data-infographic-add="${capability.type}"]`),
+        `${capability.type} must be addable`,
+      ).toBeEnabled();
+    }
+
+    /* The unsupported inventory is listed disabled with the exact note. */
+    expect(unsupportedInfographicCapabilities()).toHaveLength(24);
+    await palette.locator("[data-infographic-unsupported-toggle]").click();
+    for (const capability of unsupportedInfographicCapabilities()) {
+      const entry = palette.locator(
+        `[data-infographic-unsupported="${capability.type}"]`,
+      );
+      await expect(entry).toBeVisible();
+      await expect(
+        entry.locator(
+          `[data-infographic-unsupported-note="${capability.type}"]`,
+        ),
+      ).toHaveText(UNSUPPORTED_INFOGRAPHIC_NOTE);
+      const add = entry.locator(
+        `[data-infographic-unsupported-add="${capability.type}"]`,
+      );
+      await expect(add).toBeDisabled();
+      await expect(add).toHaveAttribute(
+        "title",
+        new RegExp(UNSUPPORTED_INFOGRAPHIC_NOTE),
+      );
+    }
+  });
+
+  test("inserts a gauge into the current slide, selects it, and it persists across reload", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    let originalSlide: DeckSlide | null = null;
+
+    try {
+      const current = await readEngineDeck(api, target.deckId);
+      const slide = current.slides[0];
+      if (slide === undefined) {
+        throw new Error("the engine deck lost its first slide mid-test.");
+      }
+      originalSlide = structuredClone(slide);
+      const originalComponents = Array.isArray(slide.ui?.components)
+        ? slide.ui.components
+        : [];
+      const componentIndex = originalComponents.length;
+      const key = `components:${componentIndex}/0`;
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      const palette = page.locator('[data-infographic-palette="inspector"]');
+      await palette.locator('[data-infographic-add="gauge"]').click();
+
+      /* The fresh element is the primary selection immediately. */
+      await expect(
+        page.locator(`[data-editor-selection-frame="${key}"]`),
+      ).toBeVisible();
+
+      /* The single-slide save reaches the engine, which stores one new
+         component frame carrying the fork's insert defaults. */
+      await expect
+        .poll(
+          async () =>
+            (await readEngineDeck(api, target.deckId)).slides[0]?.ui
+              ?.components?.length ?? 0,
+          {
+            timeout: 30_000,
+            message: "the inserted component must reach the engine",
+          },
+        )
+        .toBe(componentIndex + 1);
+
+      const stored = await readEngineDeck(api, target.deckId);
+      const storedSlide = stored.slides[0];
+      const components = storedSlide?.ui?.components ?? [];
+      expect(components.length).toBe(componentIndex + 1);
+      const inserted = components[componentIndex];
+      expect(inserted?.id).toContain("Gauge_Chart");
+      expect(inserted?.position).toEqual({ x: 128, y: 170 });
+      const element = inserted?.elements?.[0] as
+        | Record<string, unknown>
+        | undefined;
+      expect(element?.type).toBe("infographic");
+      expect(element?.position).toEqual({ x: 0, y: 0 });
+      expect(element?.size).toEqual({ width: 320, height: 190 });
+      expect((element?.data as { type?: unknown } | undefined)?.type).toBe(
+        "gauge",
+      );
+      /* Only the current slide changed; its layout, content and existing
+         components travel untouched. */
+      expect(storedSlide?.layout).toBe(originalSlide.layout);
+      expect(storedSlide?.content).toEqual(originalSlide.content);
+      expect(components.slice(0, componentIndex)).toEqual(originalComponents);
+
+      /* The stage renders the implemented type natively — no placeholder. */
+      const stage = page.locator("[data-editor-stage]");
+      await expect(stage.locator('[data-deck-infographic="gauge"]')).toBeVisible();
+      await expect(
+        stage.locator('[data-deck-placeholder="infographic"]'),
+      ).toHaveCount(0);
+
+      /* A reload reads the stored deck back: the element renders again. */
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(
+        page.locator(`[data-editor-element-hit="${key}"]`),
+      ).toBeVisible();
+      await expect(
+        page.locator('[data-editor-stage] [data-deck-infographic="gauge"]'),
+      ).toBeVisible();
+    } finally {
+      if (originalSlide !== null) {
+        await restoreEngineSlide(api, originalSlide);
+      }
+      const restored = await readEngineDeck(api, target.deckId);
+      expect(
+        restored.slides[0]?.ui?.components?.length ?? 0,
+        "the engine slide must be restored to its original component count",
+      ).toBe(
+        Array.isArray(originalSlide?.ui?.components)
+          ? originalSlide.ui.components.length
+          : 0,
+      );
+      await api.dispose();
+    }
+  });
+
+  test("opens the rail element menu as a dialog: focus moves in, Escape returns it", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+
+    const addElement = page.locator("[data-editor-add-element]");
+    const railPalette = page.locator('[data-infographic-palette="rail"]');
+    const firstEntry = supportedInfographicCapabilities()[0];
+
+    await addElement.click();
+    await expect(railPalette).toBeVisible();
+    await expect(
+      railPalette.locator('[data-infographic-group-toggle="supported"]'),
+    ).toBeFocused();
+    await expect(
+      railPalette.locator(`[data-infographic-add="${firstEntry.type}"]`),
+    ).toBeEnabled();
+
+    await page.keyboard.press("Escape");
+    await expect(railPalette).toHaveCount(0);
+    await expect(addElement).toBeFocused();
   });
 });
 

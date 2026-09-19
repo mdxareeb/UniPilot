@@ -17,13 +17,18 @@
  * layout palette (`LayoutPalette`, grouped by `Collapsible`): each entry can
  * insert a new slide after the current one or apply the layout to it, with the
  * hydration module's honest add-only label where it cannot map content.
+ *
+ * Task D9 adds the sibling Add element menu: the infographic palette inserts a
+ * new element into the current slide through the single-slide save (no
+ * structural flag needed), and lists every type the native renderer does not
+ * implement disabled with the honest note.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
   Copy,
   Plus,
+  Shapes,
   Trash2,
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
@@ -33,7 +38,9 @@ import { MotionSelectionRing } from "@/components/motion/MotionSelectionRing";
 import { DeckStage } from "@/components/presentation/DeckStage";
 import { Card } from "@/components/ui/Card";
 import { IconButton } from "@/components/ui/IconButton";
+import type { InsertableInfographicType } from "@/lib/presentation/infographicOps";
 import type { PresentationDeck } from "@/lib/presentation/types";
+import { InfographicPalette } from "./InfographicPalette";
 import { LayoutPalette } from "./LayoutPalette";
 import {
   slideLimitReached,
@@ -41,6 +48,7 @@ import {
   SLIDE_LIMIT_TITLE,
   type LayoutPaletteGroup,
 } from "./layoutPaletteModel";
+import { useDialogPopover } from "./useDialogPopover";
 
 /** Slides either side of the selection that keep a live stage rendered. */
 const LAZY_WINDOW = 4;
@@ -65,6 +73,10 @@ export type EditorRailProps = {
   onDeleteSlide: () => void;
   onMoveSlide: (delta: -1 | 1) => void;
   atSlideLimit: boolean;
+  /** Inserts one implemented infographic type into the current slide. */
+  onInsertInfographic: (type: InsertableInfographicType) => void;
+  /** Why element insertion is paused (the chat settle window), else null. */
+  infographicDisabledReason: string | null;
 };
 
 export function EditorRail({
@@ -81,11 +93,24 @@ export function EditorRail({
   onDeleteSlide,
   onMoveSlide,
   atSlideLimit,
+  onInsertInfographic,
+  infographicDisabledReason,
 }: EditorRailProps) {
   const slides = Array.isArray(deck.slides) ? deck.slides : [];
-  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
-  const addButtonRef = useRef<HTMLButtonElement | null>(null);
-  const palettePanelRef = useRef<HTMLDivElement | null>(null);
+  const {
+    open: layoutMenuOpen,
+    setOpen: setLayoutMenuOpen,
+    close: closeLayoutMenu,
+    triggerRef: addButtonRef,
+    panelRef: palettePanelRef,
+  } = useDialogPopover();
+  const {
+    open: elementMenuOpen,
+    setOpen: setElementMenuOpen,
+    close: closeElementMenu,
+    triggerRef: addElementButtonRef,
+    panelRef: elementPalettePanelRef,
+  } = useDialogPopover();
   const gatedTitle = structuralEditsEnabled
     ? undefined
     : STRUCTURAL_EDITING_REASON;
@@ -93,51 +118,6 @@ export function EditorRail({
   const canDelete = structuralEditsEnabled && slides.length > 1;
   const canAdd = structuralEditsEnabled && !atSlideLimit;
   const canMove = structuralEditsEnabled && slides.length > 1;
-
-  /** Closes the palette popover; focus returns to the trigger when asked. */
-  const closeLayoutMenu = useCallback((returnFocus = true) => {
-    setLayoutMenuOpen(false);
-    if (returnFocus) {
-      window.requestAnimationFrame(() => addButtonRef.current?.focus());
-    }
-  }, []);
-
-  /*
-   * The popover is a `role="dialog"` surface, so it carries the behavior that
-   * role promises: focus moves into the palette on open, Escape closes and
-   * returns focus to the trigger, and a press outside dismisses it (without
-   * stealing focus from where the press landed). The shared `MotionPopover`
-   * owns only the animation; this is the rail's dialog wiring.
-   */
-  useEffect(() => {
-    if (!layoutMenuOpen) return;
-    const focusFrame = window.requestAnimationFrame(() => {
-      palettePanelRef.current
-        ?.querySelector<HTMLElement>(
-          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
-        )
-        ?.focus();
-    });
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      closeLayoutMenu();
-    };
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (target === null) return;
-      if (palettePanelRef.current?.contains(target)) return;
-      if (addButtonRef.current?.parentElement?.contains(target)) return;
-      closeLayoutMenu(false);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("pointerdown", onPointerDown);
-    };
-  }, [closeLayoutMenu, layoutMenuOpen]);
 
   return (
     <Card className="flex min-w-0 flex-col gap-3 bg-glass p-2 backdrop-blur-md xl:w-44 xl:shrink-0">
@@ -217,7 +197,9 @@ export function EditorRail({
               size="sm"
               aria-label="Add slide"
               aria-haspopup={structuralEditsEnabled ? "dialog" : undefined}
-              aria-expanded={structuralEditsEnabled ? layoutMenuOpen : undefined}
+              aria-expanded={
+                structuralEditsEnabled ? layoutMenuOpen : undefined
+              }
               disabled={!canAdd}
               title={
                 !structuralEditsEnabled
@@ -265,6 +247,49 @@ export function EditorRail({
                 </div>
               </MotionPopover>
             ) : null}
+          </div>
+
+          <div className="relative">
+            <IconButton
+              ref={addElementButtonRef}
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label="Add element"
+              aria-haspopup="dialog"
+              aria-expanded={elementMenuOpen}
+              disabled={infographicDisabledReason !== null}
+              title={infographicDisabledReason ?? "Add element"}
+              data-editor-add-element=""
+              onClick={() =>
+                elementMenuOpen
+                  ? closeElementMenu()
+                  : setElementMenuOpen(true)
+              }
+            >
+              <Shapes aria-hidden="true" className="size-4" />
+            </IconButton>
+            <MotionPopover
+              open={elementMenuOpen}
+              direction="down"
+              role="dialog"
+              aria-label="Element palette"
+              className="absolute left-0 top-full z-40 mt-2 max-h-[70vh] w-80 overflow-y-auto"
+            >
+              <div
+                ref={elementPalettePanelRef}
+                className="rounded-card border border-border bg-glass p-1 shadow-overlay backdrop-blur-md"
+              >
+                <InfographicPalette
+                  source="rail"
+                  disabledReason={infographicDisabledReason}
+                  onInsert={(type) => {
+                    closeElementMenu(false);
+                    onInsertInfographic(type);
+                  }}
+                />
+              </div>
+            </MotionPopover>
           </div>
 
           <IconButton

@@ -98,6 +98,10 @@ import {
   applyImageSource,
 } from "@/lib/presentation/imageOps";
 import { applyIconColor, applyIconSource } from "@/lib/presentation/icons";
+import {
+  insertInfographicElement,
+  type InsertableInfographicType,
+} from "@/lib/presentation/infographicOps";
 import { hydrateSlide } from "@/lib/presentation/hydrateSlide";
 import {
   applyRunFont,
@@ -141,6 +145,7 @@ import { IconPickerModal } from "./IconPickerModal";
 import { ImageControls } from "./ImageControls";
 import { ImagePickerModal } from "./ImagePickerModal";
 import { InlineRunsEditor } from "./InlineRunsEditor";
+import { InfographicPalette } from "./InfographicPalette";
 import { InspectorPanel } from "./InspectorPanel";
 import { LayoutPalette } from "./LayoutPalette";
 import {
@@ -191,6 +196,8 @@ const CHAT_EDIT_RACE_ERROR =
   "The assistant changed the stored deck, but you also edited this deck while it worked. Reload the page to see the stored deck.";
 const CHAT_RESTORE_RELOAD_ERROR =
   "The original slides were restored, but the deck couldn't be reloaded. Reload the page to see the current deck.";
+const CHAT_SETTLING_NOTE =
+  "The assistant may still be applying changes — editing is paused until the deck is re-read.";
 
 export type DeckEditorProps = {
   /** The UniPilot presentation row id (owner reads + asset proxy). */
@@ -1197,6 +1204,44 @@ export function DeckEditor({
     (layoutId: string) => applyLayoutToSlide(layoutId),
     [applyLayoutToSlide],
   );
+
+  /* ---------------------------------------------------------------------
+     Element insertion (D9): one fresh infographic component appended to the
+     current slide's ui (the fork's insertion shape, `infographicOps`). The
+     write is a single-slide `slide_update` — element edits are not structural,
+     so the gate does not apply — and the new element becomes the primary
+     selection so its frame and handles are live immediately.
+     --------------------------------------------------------------------- */
+
+  const insertInfographic = useCallback(
+    (type: InsertableInfographicType) => {
+      const current = getState();
+      const slide = current.slides[selectedIndex];
+      if (slide === undefined) return;
+      const { slide: nextSlide, componentIndex } = insertInfographicElement(
+        slide,
+        type,
+      );
+      const nextSlides = current.slides.map((candidate) =>
+        candidate.id === slide.id ? nextSlide : candidate,
+      );
+      const key = elementPathKey({
+        root: "components",
+        indexes: [componentIndex, 0],
+      });
+      setSelectedKeys([key]);
+      setActiveElementKey(key);
+      setInlineFocusKey(null);
+      commit({ ...current, slides: nextSlides }, "element-infographic", [
+        { kind: "slide", slideId: slide.id },
+      ]);
+    },
+    [commit, getState, selectedIndex],
+  );
+
+  /* The palette and the rail's Add element trigger pause with the rest of
+     editing while a chat turn settles (the deck is about to be re-read). */
+  const infographicDisabledReason = chatSettling ? CHAT_SETTLING_NOTE : null;
 
   // -------------------------------------------------------------------------
   // Stage hit boxes, selection and transforms
@@ -2277,8 +2322,7 @@ export function DeckEditor({
           data-editor-chat-settling=""
           className="text-label-sm text-muted-foreground"
         >
-          The assistant may still be applying changes — editing is paused until
-          the deck is re-read.
+          {CHAT_SETTLING_NOTE}
         </MotionNotice>
       ) : null}
       {exportStatus === "failed" && exportErrorMessage !== null ? (
@@ -2309,6 +2353,8 @@ export function DeckEditor({
             onDeleteSlide={onDeleteSlide}
             onMoveSlide={onMoveSlide}
             atSlideLimit={slideLimitReached(slides.length)}
+            onInsertInfographic={insertInfographic}
+            infographicDisabledReason={infographicDisabledReason}
           />
         </div>
 
@@ -2564,6 +2610,13 @@ export function DeckEditor({
                   onApplyLayout={applyLayoutToSlide}
                 />
               ) : undefined
+            }
+            elements={
+              <InfographicPalette
+                source="inspector"
+                disabledReason={infographicDisabledReason}
+                onInsert={insertInfographic}
+              />
             }
             elementOptions={textElements.map((entry, index) => {
               const name = entry.element.name?.trim();

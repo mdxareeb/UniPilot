@@ -42,6 +42,11 @@ export type InspectorPanelProps = {
    * `Collapsible`, each insertable as a new slide or applicable to this one.
    */
   blocks?: ReactNode;
+  /**
+   * The infographic insertion palette (D9): the three implemented renderers as
+   * add actions plus every unsupported type disabled with the honest note.
+   */
+  elements?: ReactNode;
   elementOptions: Array<{ value: string; label: string }>;
   elementValue: string | null;
   onElementChange: (value: string) => void;
@@ -107,6 +112,7 @@ export function InspectorPanel({
   layoutAddOnlyNote,
   layoutChangeNote,
   blocks,
+  elements,
   elementOptions,
   elementValue,
   onElementChange,
@@ -251,6 +257,15 @@ export function InspectorPanel({
           description="The deck template's layouts — insert one as a new slide, or use it on this slide."
         >
           {blocks}
+        </Section>
+      ) : null}
+
+      {elements ? (
+        <Section
+          title="Add element"
+          description="Insert an infographic into this slide — only the types the native renderer implements."
+        >
+          {elements}
         </Section>
       ) : null}
 

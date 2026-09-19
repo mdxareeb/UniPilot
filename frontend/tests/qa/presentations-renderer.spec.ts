@@ -202,6 +202,15 @@ import {
   resetElementPasteSequence,
   serializeElementClipboard,
 } from "../../lib/presentation/clipboardOps";
+import {
+  defaultInfographicElement,
+  INFOGRAPHIC_CAPABILITIES,
+  infographicLabel,
+  insertInfographicElement,
+  supportedInfographicCapabilities,
+  UNSUPPORTED_INFOGRAPHIC_NOTE,
+  unsupportedInfographicCapabilities,
+} from "../../lib/presentation/infographicOps";
 import type {
   ChartElement,
   ChartType,
@@ -6639,5 +6648,239 @@ test.describe("chat frames (pure)", () => {
     const slide = chatDiffSlide("s1", "Title here", "Body copy", "A note");
     expect(slideTextSummary(slide)).toBe("Title here · Body copy");
     expect(slideTextSummary({ ...slide, ui: null })).toBe("");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Task D9 — infographic insertion (spec §5.4 "Infographics", §6.7, plan D9)
+//
+// The palette may offer only the three types the native renderer implements;
+// every other enum value is recorded for D10's capability checklist and listed
+// disabled. The insert defaults mirror the fork's `makeInfographicElement` /
+// `fitInfographicElementToData` and its `insertedElementToComponent` shape, so
+// a fresh insert is a real renderable frame — never placeholder data.
+// ---------------------------------------------------------------------------
+
+test.describe("infographic insertion (D9)", () => {
+  function slideFixture(): DeckSlide {
+    return {
+      id: "11111111-1111-4111-8111-111111111111",
+      presentation: "22222222-2222-4222-8222-222222222222",
+      layout_group: "general",
+      layout: "title_description",
+      index: 0,
+      content: { title: "Deck" },
+      properties: null,
+      speaker_note: "A note",
+      ui: {
+        id: "title_description",
+        description: "Title and description",
+        components: [
+          {
+            id: "title",
+            description: "Title",
+            position: { x: 0, y: 0 },
+            elements: [],
+          },
+          {
+            id: "body",
+            description: "Body",
+            position: { x: 0, y: 0 },
+            elements: [],
+          },
+        ],
+      },
+    };
+  }
+
+  test("records all 27 engine types with exactly the three implemented renderers", () => {
+    expect(INFOGRAPHIC_CAPABILITIES.map((capability) => capability.type)).toEqual([
+      "progress_bar",
+      "gauge",
+      "gantt",
+      "timeline",
+      "roadmap",
+      "milestone_timeline",
+      "staircase",
+      "supply_chain",
+      "stair_step_blocks",
+      "maturity_model",
+      "pillar_framework",
+      "transformation_hub",
+      "diagonal_circles",
+      "risk_matrix",
+      "chevron_process",
+      "radial_cycle",
+      "conversion_funnel",
+      "vertical_funnel",
+      "pyramid",
+      "segmented_wheel",
+      "customer_journey",
+      "before_after",
+      "impact_effort_matrix",
+      "comparison_matrix",
+      "org_chart",
+      "decision_tree",
+      "mind_map",
+    ]);
+    expect(new Set(INFOGRAPHIC_CAPABILITIES.map((c) => c.type)).size).toBe(27);
+    expect(supportedInfographicCapabilities().map((c) => c.type)).toEqual([
+      "progress_bar",
+      "gauge",
+      "vertical_funnel",
+    ]);
+    expect(unsupportedInfographicCapabilities()).toHaveLength(24);
+    expect(UNSUPPORTED_INFOGRAPHIC_NOTE).toBe("not rendered natively yet");
+
+    /* The record and the renderer agree in both directions: every supported
+       type renders, and no unsupported type silently renders. */
+    for (const capability of supportedInfographicCapabilities()) {
+      expect(infographicRenderer(capability.type)).toBe(capability.type);
+    }
+    for (const capability of unsupportedInfographicCapabilities()) {
+      expect(infographicRenderer(capability.type)).toBeNull();
+    }
+    expect(infographicLabel("gauge")).toBe("Gauge Chart");
+  });
+
+  test("defaults each implemented type to the fork's renderable insert payload", () => {
+    const gauge = defaultInfographicElement("gauge");
+    expect(gauge).toMatchObject({
+      type: "infographic",
+      position: { x: 128, y: 170 },
+      size: { width: 320, height: 190 },
+      colors: ["E5E7EB", "2563EB"],
+      text_color: "111111",
+      decorative: false,
+      name: "gauge_chart",
+    });
+    expect(gauge.data).toEqual({
+      type: "gauge",
+      min_value: 0,
+      max_value: 100,
+      value: 76,
+    });
+
+    const progress = defaultInfographicElement("progress_bar");
+    expect(progress).toMatchObject({
+      position: { x: 128, y: 170 },
+      size: { width: 420, height: 74 },
+      colors: ["E5E7EB", "2563EB"],
+      text_color: "111111",
+      name: "progress_bar",
+    });
+    expect(progress.data).toEqual({
+      type: "progress_bar",
+      min_value: 0,
+      max_value: 100,
+      value: 68,
+    });
+
+    const funnel = defaultInfographicElement("vertical_funnel");
+    expect(funnel).toMatchObject({
+      position: { x: 128, y: 170 },
+      size: { width: 620, height: 480 },
+      colors: ["FFFFFF", "102E79", "24468E", "4D73BE", "7CA2E5"],
+      text_color: null,
+      name: "vertical_funnel",
+    });
+    expect(funnel.data.type).toBe("vertical_funnel");
+    const items =
+      (funnel.data as { items?: Array<{ value?: unknown; heading?: unknown }> })
+        .items ?? [];
+    expect(items.map((item) => [item.value, item.heading])).toEqual([
+      [100, "Awareness"],
+      [60, "Interest"],
+      [35, "Consideration"],
+      [20, "Conversion"],
+    ]);
+
+    /* Every call builds fresh objects: no insert can mutate another payload. */
+    const again = defaultInfographicElement("gauge");
+    expect(again).not.toBe(gauge);
+    expect(again.data).not.toBe(gauge.data);
+    expect(again.colors).not.toBe(gauge.colors);
+    expect(again.position).not.toBe(gauge.position);
+  });
+
+  test("appends one component frame per insert and keeps the input slide untouched", () => {
+    const slide = slideFixture();
+    const first = insertInfographicElement(slide, "gauge");
+
+    /* The fork's `insertedElementToComponent`: the component carries the
+       insert position, the element sits at 0,0 inside the frame. */
+    expect(first.componentIndex).toBe(2);
+    expect(first.component.id).toBe("Gauge_Chart_3");
+    expect(first.component.description).toBe("Gauge Chart");
+    expect(first.component.position).toEqual({ x: 128, y: 170 });
+    expect(first.component.elements).toHaveLength(1);
+    expect(first.component.elements[0]).toMatchObject({
+      type: "infographic",
+      position: { x: 0, y: 0 },
+      size: { width: 320, height: 190 },
+    });
+
+    /* The write is immutable and every other slide field survives. */
+    expect(slide.ui?.components).toHaveLength(2);
+    expect(first.slide).not.toBe(slide);
+    expect(first.slide.ui?.components).toHaveLength(3);
+    expect(first.slide.layout).toBe(slide.layout);
+    expect(first.slide.content).toEqual(slide.content);
+    expect(first.slide.speaker_note).toBe(slide.speaker_note);
+    expect(first.slide.ui?.components.slice(0, 2)).toEqual(slide.ui?.components);
+
+    /* A second insert appends after the first with a fresh identity. */
+    const second = insertInfographicElement(first.slide, "gauge");
+    expect(second.componentIndex).toBe(3);
+    expect(second.component.id).toBe("Gauge_Chart_4");
+    expect(second.slide.ui?.components).toHaveLength(4);
+    expect(second.slide.ui?.components.slice(0, 3)).toEqual(
+      first.slide.ui?.components,
+    );
+
+    /* A base id already taken at the append slot takes the fork's `_2`
+       suffix instead of colliding. */
+    const colliding: DeckSlide = {
+      ...slide,
+      ui: {
+        id: "title_description",
+        description: "Title and description",
+        components: [
+          {
+            id: "title",
+            description: "Title",
+            position: { x: 0, y: 0 },
+            elements: [],
+          },
+          {
+            id: "Gauge_Chart_3",
+            description: "Existing",
+            position: { x: 0, y: 0 },
+            elements: [],
+          },
+        ],
+      },
+    };
+    const collision = insertInfographicElement(colliding, "gauge");
+    expect(collision.component.id).toBe("Gauge_Chart_3_2");
+  });
+
+  test("creates a minimal ui when the slide has none", () => {
+    const slide = { ...slideFixture(), ui: null };
+    const result = insertInfographicElement(slide, "progress_bar");
+    expect(result.slide.ui).toEqual({ components: [result.component] });
+    expect(result.slide.ui?.id).toBeUndefined();
+    expect(slide.ui).toBeNull();
+  });
+
+  test("treats a malformed components bag as empty instead of throwing", () => {
+    const slide = {
+      ...slideFixture(),
+      ui: { id: "malformed", components: "not-an-array" },
+    } as unknown as DeckSlide;
+    const result = insertInfographicElement(slide, "vertical_funnel");
+    expect(result.slide.ui?.components).toHaveLength(1);
+    expect(result.componentIndex).toBe(0);
   });
 });
