@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * The editor's thumbnail rail and structural toolbar (Task C4, spec §8.2/§8.5).
+ * The editor's thumbnail rail and structural toolbar (Task C4, spec §8.2/§8.5;
+ * the Add control's grouped layout palette is Task D6).
  *
  * The rail is the viewer rail's editor sibling: `MotionListItem` thumbnails in
  * `AnimatePresence` around the selection (lazy stages near the selection), a
@@ -12,11 +13,12 @@
  * Structural editing is `[!]` gated by the engine's owner scope
  * (`PRESENTON_STRUCTURAL_EDITS`): when the flag is off every structural control
  * renders disabled with the same honest inline reason, and nothing here can
- * fake a structural edit. When the flag is on, Add opens a `MotionPopover`
- * layout chooser; every action hydrates or reorders locally and hands the
- * whole array to the editor's structural save.
+ * fake a structural edit. When the flag is on, Add opens the deck template's
+ * layout palette (`LayoutPalette`, grouped by `Collapsible`): each entry can
+ * insert a new slide after the current one or apply the layout to it, with the
+ * hydration module's honest add-only label where it cannot map content.
  */
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -32,6 +34,13 @@ import { DeckStage } from "@/components/presentation/DeckStage";
 import { Card } from "@/components/ui/Card";
 import { IconButton } from "@/components/ui/IconButton";
 import type { PresentationDeck } from "@/lib/presentation/types";
+import { LayoutPalette } from "./LayoutPalette";
+import {
+  slideLimitReached,
+  SLIDE_LIMIT_NOTE,
+  SLIDE_LIMIT_TITLE,
+  type LayoutPaletteGroup,
+} from "./layoutPaletteModel";
 
 /** Slides either side of the selection that keep a live stage rendered. */
 const LAZY_WINDOW = 4;
@@ -46,9 +55,12 @@ export type EditorRailProps = {
   slideIndex: number;
   onSelect: (index: number) => void;
   structuralEditsEnabled: boolean;
-  /** Layout choices for the add-slide popover (flag on only). */
-  layoutOptions: Array<{ id: string; label: string }>;
+  /** The template's grouped layout palette (flag on only). */
+  layoutGroups: LayoutPaletteGroup[];
+  /** Why the palette cannot act (gate off / layouts unavailable), else null. */
+  layoutDisabledReason: string | null;
   onAddSlide: (layoutId: string) => void;
+  onApplyLayout: (layoutId: string) => void;
   onDuplicateSlide: () => void;
   onDeleteSlide: () => void;
   onMoveSlide: (delta: -1 | 1) => void;
@@ -61,8 +73,10 @@ export function EditorRail({
   slideIndex,
   onSelect,
   structuralEditsEnabled,
-  layoutOptions,
+  layoutGroups,
+  layoutDisabledReason,
   onAddSlide,
+  onApplyLayout,
   onDuplicateSlide,
   onDeleteSlide,
   onMoveSlide,
@@ -70,6 +84,8 @@ export function EditorRail({
 }: EditorRailProps) {
   const slides = Array.isArray(deck.slides) ? deck.slides : [];
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  const palettePanelRef = useRef<HTMLDivElement | null>(null);
   const gatedTitle = structuralEditsEnabled
     ? undefined
     : STRUCTURAL_EDITING_REASON;
@@ -77,6 +93,51 @@ export function EditorRail({
   const canDelete = structuralEditsEnabled && slides.length > 1;
   const canAdd = structuralEditsEnabled && !atSlideLimit;
   const canMove = structuralEditsEnabled && slides.length > 1;
+
+  /** Closes the palette popover; focus returns to the trigger when asked. */
+  const closeLayoutMenu = useCallback((returnFocus = true) => {
+    setLayoutMenuOpen(false);
+    if (returnFocus) {
+      window.requestAnimationFrame(() => addButtonRef.current?.focus());
+    }
+  }, []);
+
+  /*
+   * The popover is a `role="dialog"` surface, so it carries the behavior that
+   * role promises: focus moves into the palette on open, Escape closes and
+   * returns focus to the trigger, and a press outside dismisses it (without
+   * stealing focus from where the press landed). The shared `MotionPopover`
+   * owns only the animation; this is the rail's dialog wiring.
+   */
+  useEffect(() => {
+    if (!layoutMenuOpen) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      palettePanelRef.current
+        ?.querySelector<HTMLElement>(
+          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+        )
+        ?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      closeLayoutMenu();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target === null) return;
+      if (palettePanelRef.current?.contains(target)) return;
+      if (addButtonRef.current?.parentElement?.contains(target)) return;
+      closeLayoutMenu(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [closeLayoutMenu, layoutMenuOpen]);
 
   return (
     <Card className="flex min-w-0 flex-col gap-3 bg-glass p-2 backdrop-blur-md xl:w-44 xl:shrink-0">
@@ -150,23 +211,27 @@ export function EditorRail({
         >
           <div className="relative">
             <IconButton
+              ref={addButtonRef}
               type="button"
               variant="outline"
               size="sm"
               aria-label="Add slide"
-              aria-haspopup={structuralEditsEnabled ? "menu" : undefined}
+              aria-haspopup={structuralEditsEnabled ? "dialog" : undefined}
               aria-expanded={structuralEditsEnabled ? layoutMenuOpen : undefined}
               disabled={!canAdd}
               title={
                 !structuralEditsEnabled
                   ? gatedTitle
                   : atSlideLimit
-                    ? "Slide limit reached (50)"
+                    ? SLIDE_LIMIT_TITLE
                     : "Add slide"
               }
               data-editor-add-slide=""
               onClick={() =>
-                structuralEditsEnabled && setLayoutMenuOpen((open) => !open)
+                structuralEditsEnabled &&
+                (layoutMenuOpen
+                  ? closeLayoutMenu()
+                  : setLayoutMenuOpen(true))
               }
             >
               <Plus aria-hidden="true" className="size-4" />
@@ -175,34 +240,28 @@ export function EditorRail({
               <MotionPopover
                 open={layoutMenuOpen}
                 direction="down"
-                className="absolute left-0 top-full z-40 mt-2 w-56"
+                role="dialog"
+                aria-label="Layout palette"
+                className="absolute left-0 top-full z-40 mt-2 max-h-[70vh] w-80 overflow-y-auto"
               >
                 <div
-                  role="menu"
-                  aria-label="Add slide from layout"
+                  ref={palettePanelRef}
                   className="rounded-card border border-border bg-glass p-1 shadow-overlay backdrop-blur-md"
                 >
-                  {layoutOptions.length === 0 ? (
-                    <p className="px-2 py-1.5 text-label-sm text-muted-foreground">
-                      The template&rsquo;s layouts weren&rsquo;t available, so
-                      no layout can be chosen.
-                    </p>
-                  ) : (
-                    layoutOptions.map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        role="menuitem"
-                        className="block w-full min-w-0 truncate rounded-base px-2.5 py-2 text-left text-label-sm text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        onClick={() => {
-                          setLayoutMenuOpen(false);
-                          onAddSlide(option.id);
-                        }}
-                      >
-                        {option.label}
-                      </button>
-                    ))
-                  )}
+                  <LayoutPalette
+                    source="rail"
+                    groups={layoutGroups}
+                    atSlideLimit={atSlideLimit}
+                    disabledReason={layoutDisabledReason}
+                    onAddSlide={(layoutId) => {
+                      closeLayoutMenu(false);
+                      onAddSlide(layoutId);
+                    }}
+                    onApplyLayout={(layoutId) => {
+                      closeLayoutMenu(false);
+                      onApplyLayout(layoutId);
+                    }}
+                  />
                 </div>
               </MotionPopover>
             ) : null}
@@ -282,8 +341,8 @@ export function EditorRail({
           </p>
         ) : (
           <p className="text-label-sm text-muted-foreground">
-            {slides.length >= 50
-              ? "Slide limit reached (50)."
+            {slideLimitReached(slides.length)
+              ? SLIDE_LIMIT_NOTE
               : `${slides.length} slides · structural saves use fresh slide ids.`}
           </p>
         )}

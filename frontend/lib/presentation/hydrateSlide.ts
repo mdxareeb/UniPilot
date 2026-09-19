@@ -16,11 +16,21 @@
  * (zero-based `_<n>` suffixes when an id repeats, :523-557), element values are
  * looked up by name candidates (:697-729), repeated names prefer `name_<n>`
  * (:825-836), `container.child` / `flex|grid|group.children` recurse
- * (:661-692), and each generated element type maps its value onto the wire
- * shape (text → first run's style; text-list → items; image → data/prompt;
- * table → cells; chart → camelCase vocabulary; infographic → data/colors).
- * Cases the engine handles that this module deliberately does not map are
- * recorded in the Task C2 report.
+ * (:661-692), an **array** value on a `flex`/`grid`/`group` expands one child
+ * per item (:741-754, `repeated_child_source_index` / `_normalize_repeated_names`
+ * at content.py:12-23 and :764-801), and each generated element type maps its
+ * value onto the wire shape (text → first run's style; text-list → items;
+ * image → data/prompt; table → cells; chart → camelCase vocabulary;
+ * infographic → data/colors).
+ *
+ * Task D6 closed the two gapped paths named in the C2 report: repeated-children
+ * arrays (above) and markdown/LaTeX run parsing (`_template_text_runs_from_markdown`
+ * :1131-1169 with `_parse_template_markdown_text` :1195-1245 and
+ * `utils/latex_text.py`). The remaining recorded gap is the engine's
+ * schema-derived top-level repeated-group expansion
+ * (`hydrate_repeated_top_level_groups`, `templates/v2/content.py:26-56`), whose
+ * field-name detection is not mapped; the block palette labels those layouts
+ * replace-layout-only instead of guessing (`layoutReplaceSupport`).
  */
 import type {
   SlideComponent,
@@ -38,7 +48,12 @@ export type HydrateSlideInput = {
   content: Record<string, unknown>;
 };
 
-/** The element types the engine generates content for (presentation.py:488). */
+/**
+ * The element types generated content can land on (presentation.py:488's set,
+ * minus `math`): the wire union and renderer model no math element, so a math
+ * value keeps its template default instead of being placed — the C2 report's
+ * recorded gap, unchanged by D6.
+ */
 const GENERATED_VALUE_ELEMENT_TYPES = new Set([
   "text",
   "image",
@@ -244,7 +259,7 @@ export function hydrateSlide({ layout, content }: HydrateSlideInput): SlideUi {
         elements,
         componentContent ?? {},
         false,
-        new Map(),
+        null,
       );
     }
   });
@@ -256,14 +271,21 @@ export function hydrateSlide({ layout, content }: HydrateSlideInput): SlideUi {
   };
 }
 
+/**
+ * One element list. The engine's `_apply_template_content_to_element_list`
+ * (presentation.py:804-822) seeds a fresh occurrence scope when it receives
+ * `None`; a scope passed down from an outer list is shared. `null` therefore
+ * means "no scope yet", never "empty map".
+ */
 function hydrateElementList(
   elements: unknown[],
   content: unknown,
   directValue: boolean,
-  nameOccurrences: Map<string, number>,
+  nameOccurrences: Map<string, number> | null,
 ): unknown[] {
+  const scoped = nameOccurrences ?? new Map<string, number>();
   return elements.map((element) =>
-    hydrateElement(element, content, directValue, nameOccurrences),
+    hydrateElement(element, content, directValue, scoped),
   );
 }
 
@@ -271,7 +293,7 @@ function hydrateElement(
   element: unknown,
   content: unknown,
   directValue: boolean,
-  nameOccurrences: Map<string, number>,
+  nameOccurrences: Map<string, number> | null,
 ): unknown {
   const record = asRecord(element);
   if (!record) return element;
@@ -284,7 +306,10 @@ function hydrateElement(
   let hasValue = false;
   let value: unknown;
   if (name) {
-    const preferred = repeatedContentKeys(name, contentValues, nameOccurrences);
+    const preferred =
+      nameOccurrences !== null
+        ? repeatedContentKeys(name, contentValues, nameOccurrences)
+        : undefined;
     [hasValue, value] = templateContentValue(contentValues, name, preferred);
   }
 
@@ -331,16 +356,108 @@ function hydrateElement(
   ) {
     const updated = clone(record);
     const children = Array.isArray(record.children) ? record.children : [];
-    updated.children = hydrateElementList(
+    updated.children = hydrateChildren(
       children,
+      value,
       nestedContent,
       nestedDirectValue,
       nestedOccurrences,
+      elementType === "group",
     );
     return updated;
   }
 
   return clone(record);
+}
+
+/**
+ * The engine's `_apply_template_content_to_children` (presentation.py:732-761):
+ * when the matched value is an array, the children become one repeated copy per
+ * item (each item is the child's direct value); otherwise the element list
+ * hydrates normally. `centerWhenReduced` is the engine's group-only centering
+ * (`center_repeated_children=element_type == "group"`).
+ */
+function hydrateChildren(
+  children: unknown[],
+  value: unknown,
+  content: unknown,
+  directValue: boolean,
+  nameOccurrences: Map<string, number> | null,
+  centerWhenReduced: boolean,
+): unknown[] {
+  if (Array.isArray(value) && children.length > 0) {
+    /* The engine's repeated items hydrate with `name_occurrences=None`
+       (presentation.py:743-752): no occurrence scope crosses into an item, so
+       a nested list starts fresh instead of inheriting the outer count. */
+    return value.map((item, index) =>
+      hydrateElement(
+        repeatedChildForIndex(
+          children,
+          index,
+          value.length,
+          centerWhenReduced,
+        ),
+        item,
+        true,
+        null,
+      ),
+    );
+  }
+  return hydrateElementList(children, content, directValue, nameOccurrences);
+}
+
+/** content.py:12-23 — which template child a repeated item copies. */
+function repeatedChildSourceIndex(
+  index: number,
+  templateCount: number,
+  contentCount: number,
+  centerWhenReduced: boolean,
+): number {
+  if (centerWhenReduced && contentCount < templateCount) {
+    return Math.floor((templateCount - contentCount) / 2) + index;
+  }
+  return Math.min(index, templateCount - 1);
+}
+
+/**
+ * The engine's `_repeated_child_for_index` (presentation.py:764-784): deep-copy
+ * the source child, drop the manual-position marker, and re-suffix names when
+ * the content adds items beyond the template's children.
+ */
+function repeatedChildForIndex(
+  children: unknown[],
+  index: number,
+  contentCount: number,
+  centerWhenReduced: boolean,
+): unknown {
+  const sourceIndex = repeatedChildSourceIndex(
+    index,
+    children.length,
+    contentCount,
+    centerWhenReduced,
+  );
+  const source = clone(children[sourceIndex]);
+  const record = asRecord(source);
+  if (!record) return source;
+  delete record.__presenton_manual_position;
+  if (index >= children.length) normalizeRepeatedNames(source, index);
+  return source;
+}
+
+/** presentation.py:787-801 — `_<digits>` tokens become the item's number. */
+function normalizeRepeatedNames(value: unknown, index: number): void {
+  if (Array.isArray(value)) {
+    for (const item of value) normalizeRepeatedNames(item, index);
+    return;
+  }
+  const record = asRecord(value);
+  if (!record) return;
+  if (typeof record.name === "string") {
+    record.name = record.name.replace(/_\d+(?=_|$)/g, `_${index + 1}`);
+  }
+  for (const nested of Object.values(record)) {
+    normalizeRepeatedNames(nested, index);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -389,34 +506,534 @@ function firstTextRun(runs: unknown): JsonRecord {
   return {};
 }
 
+/** The engine's inline-markdown delimiters (presentation.py:515-520). */
+const STRONG_MARKDOWN_DELIMITERS = ["**", "__"];
+const EMPHASIS_MARKDOWN_DELIMITERS = ["*", "_"];
+const MARKDOWN_DELIMITERS = [
+  ...STRONG_MARKDOWN_DELIMITERS,
+  ...EMPHASIS_MARKDOWN_DELIMITERS,
+];
+
+/** latex_text.py:134-148 — the engine's stored LaTeX normalization. */
+function normalizeLatex(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.startsWith("$$") &&
+    normalized.endsWith("$$") &&
+    normalized.length > 4
+  ) {
+    return normalized.slice(2, -2).trim().slice(0, 4000);
+  }
+  if (
+    normalized.startsWith("\\[") &&
+    normalized.endsWith("\\]") &&
+    normalized.length > 4
+  ) {
+    return normalized.slice(2, -2).trim().slice(0, 4000);
+  }
+  return normalized.slice(0, 4000);
+}
+
+const TAG_NAME_END = /[\t\n\r\f />]/;
+
+type ScannedStartTag = {
+  name: string;
+  raw: string;
+  selfClosing: boolean;
+  end: number;
+};
+
+/** The tolerant whole-start-tag scan (html.parser `locatetagend`). */
+function readStartTag(text: string, i: number): ScannedStartTag | null {
+  const n = text.length;
+  let j = i + 1;
+  if (j >= n || !/[a-zA-Z]/.test(text[j])) return null;
+  const nameStart = j;
+  j += 1;
+  while (j < n && !TAG_NAME_END.test(text[j])) j += 1;
+  const name = text.slice(nameStart, j).toLowerCase();
+  while (j < n) {
+    let k = j;
+    while (
+      k < n &&
+      /[\t\n\r\f /]/.test(text[k]) &&
+      !(text[k] === "/" && text[k + 1] === ">")
+    ) {
+      k += 1;
+    }
+    if (k >= n) return null;
+    if (text[k] === ">") {
+      return { name, raw: text.slice(i, k + 1), selfClosing: false, end: k + 1 };
+    }
+    if (text[k] === "/" && text[k + 1] === ">") {
+      return { name, raw: text.slice(i, k + 2), selfClosing: true, end: k + 2 };
+    }
+    let nameEnd = k + 1;
+    while (nameEnd < n && !/[\t\n\r\f /=>]/.test(text[nameEnd])) nameEnd += 1;
+    let p = nameEnd;
+    while (p < n && /[\t\n\r\f ]/.test(text[p])) p += 1;
+    let valueEnd = nameEnd;
+    if (p < n && text[p] === "=") {
+      p += 1;
+      while (p < n && /[\t\n\r\f ]/.test(text[p])) p += 1;
+      if (p >= n) return null;
+      if (text[p] === "'" || text[p] === '"') {
+        const close = text.indexOf(text[p], p + 1);
+        if (close === -1) return null;
+        valueEnd = close + 1;
+      } else {
+        valueEnd = p;
+        while (valueEnd < n && !/[>\t\n\r\f ]/.test(text[valueEnd])) valueEnd += 1;
+      }
+    }
+    j = valueEnd;
+  }
+  return null;
+}
+
+type ScannedEndTag = {
+  name?: string;
+  ignored?: boolean;
+  bogus?: boolean;
+  data?: string;
+  end: number;
+};
+
+/** The tolerant end-tag scan (html.parser `parse_endtag`). */
+function readEndTag(text: string, i: number): ScannedEndTag | null {
+  const n = text.length;
+  const gt = text.indexOf(">", i + 2);
+  if (gt === -1) return null;
+  const first = text[i + 2];
+  if (first === undefined) return null;
+  if (!/[a-zA-Z]/.test(first)) {
+    if (first === ">") return { ignored: true, end: i + 3 };
+    return { bogus: true, data: text.slice(i + 2, gt), end: gt + 1 };
+  }
+  let j = i + 3;
+  while (j < n && !/[\t\n\r\f />]/.test(text[j])) j += 1;
+  return { name: text.slice(i + 2, j).toLowerCase(), end: gt + 1 };
+}
+
 /**
- * The engine's `_template_base_run_for_markdown` + run assembly for plain
- * text: the first run's style (with the element font merged underneath it),
- * the value as its text. Markdown/Latex parsing is deliberately not mapped.
+ * The engine's `parse_latex_tags` (latex_text.py:8-89), a bounded port of the
+ * HTMLParser walk it uses: `<latex>…</latex>` spans become latex runs,
+ * surrounding/other tags stay raw text, nested or unclosed latex is invalid
+ * (null) exactly like the engine, and an input with no latex tag answers null.
  */
-function templateTextRuns(
+function parseLatexTags(text: string): JsonRecord[] | null {
+  const runs: JsonRecord[] = [];
+  const buffer: string[] = [];
+  let inLatex = false;
+  let sawLatex = false;
+  let invalid = false;
+
+  const isLatexRun = (run: JsonRecord): boolean => run.type === "latex";
+  const pushRun = (run: JsonRecord): void => {
+    const previous = runs.length > 0 ? runs[runs.length - 1] : null;
+    if (previous !== null && isLatexRun(previous) === isLatexRun(run)) {
+      const key = isLatexRun(run) ? "latex" : "text";
+      previous[key] = String(previous[key] ?? "") + String(run[key] ?? "");
+      return;
+    }
+    runs.push(run);
+  };
+  const flush = (): void => {
+    const content = buffer.join("");
+    buffer.length = 0;
+    if (content === "") return;
+    if (inLatex) {
+      const latex = normalizeLatex(content);
+      if (latex === "") {
+        invalid = true;
+        return;
+      }
+      pushRun({ type: "latex", latex });
+      return;
+    }
+    pushRun({ text: content });
+  };
+
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const lt = text.indexOf("<", i);
+    if (lt === -1) {
+      buffer.push(text.slice(i));
+      break;
+    }
+    if (lt > i) buffer.push(text.slice(i, lt));
+    i = lt;
+
+    if (/[a-zA-Z]/.test(text[i + 1] ?? "")) {
+      const tag = readStartTag(text, i);
+      if (tag === null) {
+        i = n; // Incomplete start tag: the parse drops the remainder.
+        continue;
+      }
+      i = tag.end;
+      if (tag.selfClosing || tag.name !== "latex") {
+        buffer.push(tag.raw);
+      } else if (inLatex) {
+        invalid = true;
+      } else {
+        flush();
+        inLatex = true;
+        sawLatex = true;
+      }
+      continue;
+    }
+
+    if (text.startsWith("</", i)) {
+      const tag = readEndTag(text, i);
+      if (tag === null) {
+        if (i + 2 === n) buffer.push("</");
+        else if (!/[a-zA-Z]/.test(text[i + 2] ?? "")) {
+          buffer.push(`<!--${text.slice(i + 2)}-->`);
+        }
+        i = n;
+        continue;
+      }
+      i = tag.end;
+      if (tag.ignored) continue;
+      if (tag.bogus) {
+        buffer.push(`<!--${tag.data}-->`);
+        continue;
+      }
+      if (tag.name === "latex") {
+        if (!inLatex) invalid = true;
+        else {
+          flush();
+          inLatex = false;
+        }
+      } else {
+        buffer.push(`</${tag.name}>`);
+      }
+      continue;
+    }
+
+    if (text.startsWith("<!--", i)) {
+      const rest = text.slice(i + 4);
+      const close = /--!?>/.exec(rest);
+      if (close !== null) {
+        buffer.push(`<!--${rest.slice(0, close.index)}-->`);
+        i = i + 4 + close.index + close[0].length;
+        continue;
+      }
+      const abrupt = /-?>/.exec(rest);
+      if (abrupt !== null && abrupt.index === 0) {
+        buffer.push("<!---->");
+        i = i + 4 + abrupt[0].length;
+        continue;
+      }
+      let j = n;
+      for (const suffix of ["--!", "--", "-"]) {
+        if (text.endsWith(suffix) && text.length - suffix.length >= i + 4) {
+          j = text.length - suffix.length;
+          break;
+        }
+      }
+      buffer.push(`<!--${text.slice(i + 4, j)}-->`);
+      i = n;
+      continue;
+    }
+
+    if (text.startsWith("<![CDATA[", i)) {
+      const close = text.indexOf("]]>", i + 9);
+      i = close === -1 ? n : close + 3; // unknown_decl drops the section
+      continue;
+    }
+
+    if (text.slice(i, i + 9).toLowerCase() === "<!doctype") {
+      const gt = text.indexOf(">", i + 9);
+      if (gt === -1) {
+        buffer.push(`<!${text.slice(i + 2)}>`);
+        i = n;
+      } else {
+        buffer.push(`<!${text.slice(i + 2, gt)}>`);
+        i = gt + 1;
+      }
+      continue;
+    }
+
+    if (text.startsWith("<!", i)) {
+      const gt = text.indexOf(">", i + 2);
+      if (gt === -1) {
+        buffer.push(`<!--${text.slice(i + 2)}-->`);
+        i = n;
+      } else {
+        buffer.push(`<!--${text.slice(i + 2, gt)}-->`);
+        i = gt + 1;
+      }
+      continue;
+    }
+
+    if (text.startsWith("<?", i)) {
+      const gt = text.indexOf(">", i + 2);
+      i = gt === -1 ? n : gt + 1; // handle_pi drops the instruction
+      continue;
+    }
+
+    buffer.push("<");
+    i += 1;
+  }
+
+  if (inLatex) invalid = true;
+  flush();
+  if (invalid || !sawLatex) return null;
+  return runs;
+}
+
+/** latex_text.py:151-211 — `replace_text_runs` and its run builders. */
+function isLatexRun(run: JsonRecord): boolean {
+  return run.type === "latex";
+}
+
+function applyFallbackFont(run: JsonRecord, fallbackFont: unknown): void {
+  if (asRecord(fallbackFont) && !asRecord(run.font)) {
+    run.font = clone(fallbackFont as JsonRecord);
+  }
+}
+
+function replaceSingleRun(
+  template: JsonRecord | null,
+  value: string,
+  fallbackFont: unknown,
+): JsonRecord {
+  const run = template ? clone(template) : {};
+  applyFallbackFont(run, fallbackFont);
+  if (isLatexRun(run)) {
+    run.latex = normalizeLatex(value);
+    delete run.text;
+  } else {
+    run.text = value;
+  }
+  return run;
+}
+
+function matchingTemplateRun(
+  templates: JsonRecord[],
+  parsedRun: JsonRecord,
+  index: number,
+): JsonRecord | null {
+  const latex = isLatexRun(parsedRun);
+  if (index < templates.length && isLatexRun(templates[index]) === latex) {
+    return templates[index];
+  }
+  for (const template of templates) {
+    if (isLatexRun(template) === latex) return template;
+  }
+  if (index < templates.length) return templates[index];
+  return templates.length > 0 ? templates[0] : null;
+}
+
+function buildParsedRun(
+  parsedRun: JsonRecord,
+  template: JsonRecord | null,
+  fallbackFont: unknown,
+): JsonRecord {
+  const run = template ? clone(template) : {};
+  applyFallbackFont(run, fallbackFont);
+  if (isLatexRun(parsedRun)) {
+    const wasLatex = isLatexRun(run);
+    run.type = "latex";
+    run.latex = parsedRun.latex;
+    delete run.text;
+    if (!wasLatex) run.display_mode = false;
+  } else {
+    delete run.type;
+    delete run.latex;
+    delete run.display_mode;
+    run.text = parsedRun.text;
+  }
+  return run;
+}
+
+function replaceTextRuns(
+  existingRuns: unknown,
+  value: string,
+  fallbackFont: unknown,
+): JsonRecord[] {
+  const parsedRuns = parseLatexTags(value);
+  const templates = Array.isArray(existingRuns)
+    ? existingRuns.filter((run) => asRecord(run) !== null)
+    : [];
+  if (parsedRuns === null) {
+    return [
+      replaceSingleRun(templates.length > 0 ? templates[0] : null, value, fallbackFont),
+    ];
+  }
+  return parsedRuns.map((parsedRun, index) =>
+    buildParsedRun(
+      parsedRun,
+      matchingTemplateRun(templates, parsedRun, index),
+      fallbackFont,
+    ),
+  );
+}
+
+/** presentation.py:1195-1245 — `_parse_template_markdown_text`. */
+function parseTemplateMarkdownText(
+  text: string,
+): Array<[string, Record<string, boolean>]> {
+  const parsed: Array<[string, Record<string, boolean>]> = [];
+  let index = 0;
+  const readDelimiter = (delimiters: string[]): string | null => {
+    for (const delimiter of delimiters) {
+      if (text.startsWith(delimiter, index)) return delimiter;
+    }
+    return null;
+  };
+  while (index < text.length) {
+    const strong = readDelimiter(STRONG_MARKDOWN_DELIMITERS);
+    if (strong !== null) {
+      const close = text.indexOf(strong, index + strong.length);
+      if (close > index + strong.length) {
+        parsed.push([text.slice(index + strong.length, close), { bold: true }]);
+        index = close + strong.length;
+        continue;
+      }
+    }
+    const emphasis = readDelimiter(EMPHASIS_MARKDOWN_DELIMITERS);
+    if (emphasis !== null) {
+      const close = text.indexOf(emphasis, index + emphasis.length);
+      if (close > index + emphasis.length) {
+        parsed.push([
+          text.slice(index + emphasis.length, close),
+          { italic: true },
+        ]);
+        index = close + emphasis.length;
+        continue;
+      }
+    }
+    let next = -1;
+    for (const delimiter of MARKDOWN_DELIMITERS) {
+      const found = text.indexOf(delimiter, index + 1);
+      if (found !== -1 && (next === -1 || found < next)) next = found;
+    }
+    parsed.push([text.slice(index, next === -1 ? text.length : next), {}]);
+    index = next === -1 ? text.length : next;
+  }
+  return parsed;
+}
+
+/** Key-order-insensitive JSON equality (the engine compares dicts). */
+function sameJsonValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((value, index) => sameJsonValue(value, b[index]));
+  }
+  const recordA = asRecord(a);
+  const recordB = asRecord(b);
+  if (recordA || recordB) {
+    if (!recordA || !recordB) return false;
+    const keys = Object.keys(recordA);
+    if (keys.length !== Object.keys(recordB).length) return false;
+    return keys.every(
+      (key) => key in recordB && sameJsonValue(recordA[key], recordB[key]),
+    );
+  }
+  return false;
+}
+
+/** presentation.py:1271-1287 — `_append_template_text_run` (merge adjacent). */
+function appendTemplateTextRun(textRuns: JsonRecord[], run: JsonRecord): void {
+  const text = run.text;
+  if (typeof text !== "string" || text === "") return;
+  const previous = textRuns.length > 0 ? textRuns[textRuns.length - 1] : null;
+  if (previous !== null && typeof previous.text === "string") {
+    const previousStyle: JsonRecord = {};
+    for (const [key, value] of Object.entries(previous)) {
+      if (key !== "text") previousStyle[key] = value;
+    }
+    const nextStyle: JsonRecord = {};
+    for (const [key, value] of Object.entries(run)) {
+      if (key !== "text") nextStyle[key] = value;
+    }
+    if (sameJsonValue(previousStyle, nextStyle)) {
+      previous.text += text;
+      return;
+    }
+  }
+  textRuns.push(run);
+}
+
+/** presentation.py:1172-1192 — `_template_base_run_for_markdown`. */
+function templateBaseRunForMarkdown(
+  baseRun: JsonRecord,
+  fallbackFont: unknown,
+  stripInlineEmphasis: boolean,
+): JsonRecord {
+  const font = baseRun.font;
+  const fallback = asRecord(fallbackFont);
+  if (fallback) {
+    baseRun.font = {
+      ...clone(fallback),
+      ...(asRecord(font) ? clone(font as JsonRecord) : {}),
+    };
+  } else if (asRecord(font)) {
+    baseRun.font = clone(font as JsonRecord);
+  }
+  if (stripInlineEmphasis && asRecord(baseRun.font)) {
+    delete (baseRun.font as JsonRecord).bold;
+    delete (baseRun.font as JsonRecord).italic;
+  }
+  return baseRun;
+}
+
+/**
+ * The engine's `_template_text_runs_from_markdown` (presentation.py:1131-1169):
+ * a LaTeX-tagged (or LaTeX-typed) value keeps the run's style through
+ * `replace_text_runs`; otherwise inline `**`/`__`/`*`/`_` emphasis splits the
+ * text into runs over the first run's style (emphasis stripped from the base
+ * when any style applies), adjacent equal-style runs merge, and an empty parse
+ * falls back to a single space run.
+ */
+function templateTextRunsFromMarkdown(
   text: string,
   firstRun: unknown,
   fallbackFont: unknown,
 ): JsonRecord[] {
-  const base = asRecord(firstRun) ? clone(firstRun as JsonRecord) : {};
-  const fallback = asRecord(fallbackFont);
-  if (fallback) {
-    base.font = {
-      ...clone(fallback),
-      ...(asRecord(base.font) ? clone(base.font as JsonRecord) : {}),
-    };
-  } else if (asRecord(base.font)) {
-    base.font = clone(base.font);
+  const first = asRecord(firstRun) ?? {};
+  const parsedLatex = parseLatexTags(text);
+  if (parsedLatex !== null || first.type === "latex") {
+    return replaceTextRuns([first], text, fallbackFont);
   }
-  return [{ ...base, text }];
+
+  const parsed = parseTemplateMarkdownText(text);
+  const hasMarkdownStyle = parsed.some(
+    ([, style]) => Object.keys(style).length > 0,
+  );
+  const base = templateBaseRunForMarkdown(
+    clone(first),
+    fallbackFont,
+    hasMarkdownStyle,
+  );
+
+  const textRuns: JsonRecord[] = [];
+  for (const [parsedText, style] of parsed) {
+    const run = clone(base);
+    run.text = parsedText;
+    if (Object.keys(style).length > 0) {
+      run.font = {
+        ...(asRecord(run.font) ? clone(run.font as JsonRecord) : {}),
+        ...clone(style),
+      };
+    }
+    appendTemplateTextRun(textRuns, run);
+  }
+  if (textRuns.length > 0) return textRuns;
+  return [{ ...base, text: " " }];
 }
 
 function applyTextContent(element: JsonRecord, value: unknown): JsonRecord {
   const text = readTemplateText(value);
   if (text === null || text === "") return clone(element);
   const updated = clone(element);
-  updated.runs = templateTextRuns(text, firstTextRun(element.runs), element.font);
+  updated.runs = templateTextRunsFromMarkdown(text, firstTextRun(element.runs), element.font);
   delete updated.text;
   return updated;
 }
@@ -504,7 +1121,7 @@ function applyTextListContent(
       : null;
     const firstRun =
       existingRuns && existingRuns.length > 0 ? existingRuns[0] : {};
-    items.push(templateTextRuns(text, firstRun, element.font));
+    items.push(templateTextRunsFromMarkdown(text, firstRun, element.font));
   });
   const updated = clone(element);
   updated.items = items;
@@ -617,7 +1234,7 @@ function replaceTemplateTableCellText(
       color: clone(GENERATED_TABLE_CELL_FILL),
       stroke: clone(GENERATED_TABLE_CELL_STROKE),
       font: clone(defaultFont),
-      runs: templateTextRuns(text, { font: clone(defaultFont) }, null),
+      runs: templateTextRunsFromMarkdown(text, { font: clone(defaultFont) }, null),
     };
   }
 
@@ -631,7 +1248,7 @@ function replaceTemplateTableCellText(
   updated.stroke =
     firstRecord(cellRecord.stroke) ?? clone(GENERATED_TABLE_CELL_STROKE);
   updated.font = firstRecord(cellRecord.font) ?? nextFont;
-  updated.runs = templateTextRuns(text, firstRun, nextFont);
+  updated.runs = templateTextRunsFromMarkdown(text, firstRun, nextFont);
   delete updated.text;
   delete updated.fill;
   return updated;

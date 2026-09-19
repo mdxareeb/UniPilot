@@ -3007,6 +3007,396 @@ test.describe("hydrateSlide — engine parity (general/title_description_image)"
 });
 
 // ---------------------------------------------------------------------------
+// Task D6 — hydration gaps closed: repeated children + markdown/LaTeX runs
+//
+// The C2 report parked two engine paths on the critical path for block
+// insertion: an array value on a flex/grid/group expands one repeated child per
+// item (`_apply_template_content_to_children`, presentation.py:732-761, with
+// `repeated_child_source_index`/`_normalize_repeated_names` in
+// `templates/v2/content.py`) and text values parse markdown/LaTeX into styled
+// runs (`_template_text_runs_from_markdown`, :1131-1169, and
+// `utils/latex_text.py`). Both are ported in `hydrateSlide.ts`; every expected
+// value below was produced by running the engine's own functions on these
+// fixtures. The third C2 gap — the schema-derived top-level repeated-group
+// expansion — stays recorded: the block palette labels those layouts
+// replace-disabled (`layoutReplaceSupport`), never guesses.
+// ---------------------------------------------------------------------------
+
+function d6CardText(
+  name: string,
+  placeholder: string,
+  font: Record<string, unknown>,
+): SlideElement {
+  return {
+    type: "text",
+    name,
+    decorative: false,
+    position: { x: 0, y: 0 },
+    size: { width: 200, height: 40 },
+    font,
+    runs: [{ text: placeholder, font }],
+  } as SlideElement;
+}
+
+function d6StepGroup(index: number, manual = false): SlideElement {
+  const group: Record<string, unknown> = {
+    type: "group",
+    name: `step_${index}`,
+    position: { x: 0, y: index * 90 },
+    children: [
+      d6CardText("card_heading", `Heading ${index}`, {
+        size: 24,
+        bold: true,
+        family: "Inter",
+      }),
+      d6CardText("card_description", `Description ${index}`, {
+        size: 14,
+        family: "Inter",
+      }),
+    ],
+  };
+  if (manual) group.__presenton_manual_position = true;
+  return group as unknown as SlideElement;
+}
+
+function d6TimelineLayout(container: "flex" | "group"): TemplateLayout {
+  return {
+    id: "timeline_layout",
+    description: "Timeline cards.",
+    components: [
+      {
+        id: "connected_timeline_cards",
+        description: "Timeline cards.",
+        position: { x: 10, y: 20 },
+        elements: [
+          {
+            type: "group",
+            name: "timeline",
+            position: { x: 0, y: 0 },
+            children: [
+              {
+                type: container,
+                name: "steps",
+                position: { x: 0, y: 0 },
+                size: { width: 900, height: 400 },
+                children: [d6StepGroup(1, true), d6StepGroup(2), d6StepGroup(3)],
+              },
+            ],
+          } as SlideElement,
+        ],
+      },
+    ],
+  };
+}
+
+test.describe("hydrateSlide — repeated children (D6)", () => {
+  test("expands an array value into one child per item, clamping and re-suffixing like the engine", () => {
+    const layout = d6TimelineLayout("flex");
+    const layoutSnapshot = jsonClone(layout);
+    const ui = hydrateSlide({
+      layout,
+      content: {
+        connected_timeline_cards: {
+          timeline: {
+            steps: [
+              {
+                card_heading: "Capture",
+                card_description: "**Photons** strike the leaf.",
+              },
+              {
+                card_heading: "Transport",
+                card_description: "Electrons move along the *chain*.",
+              },
+              {
+                card_heading: "Synthesis",
+                card_description: "ATP is generated.",
+              },
+              {
+                card_heading: "Extra",
+                card_description: "Beyond the template.",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const timeline = ui.components[0].elements[0] as unknown as {
+      children: Array<{
+        children: Array<{
+          name?: string;
+          position?: unknown;
+          children: SlideElement[];
+        }>;
+      }>;
+    };
+    const steps = timeline.children[0].children;
+    expect(steps).toHaveLength(4);
+    expect(steps.map((step) => step.name)).toEqual([
+      "step_1",
+      "step_2",
+      "step_3",
+      "step_4",
+    ]);
+    // The 4th item clamps to the last template child and its numeric name token
+    // is re-suffixed; the manual-position marker never survives the copy.
+    expect(steps[3].position).toEqual(steps[2].position);
+    expect(
+      (steps[0] as unknown as Record<string, unknown>)
+        .__presenton_manual_position,
+    ).toBeUndefined();
+    expect((steps[0].children[0] as TextElement).runs).toEqual([
+      { text: "Capture", font: { size: 24, bold: true, family: "Inter" } },
+    ]);
+    expect((steps[0].children[1] as TextElement).runs).toEqual([
+      { text: "Photons", font: { size: 14, family: "Inter", bold: true } },
+      { text: " strike the leaf.", font: { size: 14, family: "Inter" } },
+    ]);
+    expect((steps[1].children[1] as TextElement).runs).toEqual([
+      { text: "Electrons move along the ", font: { size: 14, family: "Inter" } },
+      { text: "chain", font: { size: 14, family: "Inter", italic: true } },
+      { text: ".", font: { size: 14, family: "Inter" } },
+    ]);
+
+    // The deep-clone contract holds for the repeated copies too.
+    expect(layout).toEqual(layoutSnapshot);
+    expect(steps[0]).not.toBe(layout.components[0].elements[0]);
+  });
+
+  test("centers a reduced group's children but clamps a flex's, and maps direct item values", () => {
+    const content = {
+      connected_timeline_cards: {
+        timeline: {
+          steps: [{ card_heading: "Only", card_description: "Solo" }],
+        },
+      },
+    };
+
+    const grouped = hydrateSlide({
+      layout: d6TimelineLayout("group"),
+      content,
+    });
+    const groupedSteps = (
+      grouped.components[0].elements[0] as unknown as {
+        children: Array<{
+          children: Array<{ name?: string; children: SlideElement[] }>;
+        }>;
+      }
+    ).children[0].children;
+    // Three template children reduced to one: the group centers on the middle
+    // child (`(3 - 1) // 2`), the flex starts at the first.
+    expect(groupedSteps.map((step) => step.name)).toEqual(["step_2"]);
+
+    const flexed = hydrateSlide({
+      layout: d6TimelineLayout("flex"),
+      content,
+    });
+    const flexedSteps = (
+      flexed.components[0].elements[0] as unknown as {
+        children: Array<{
+          children: Array<{ name?: string; children: SlideElement[] }>;
+        }>;
+      }
+    ).children[0].children;
+    expect(flexedSteps.map((step) => step.name)).toEqual(["step_1"]);
+
+    // A repeated item that is itself a generated value is used directly: two
+    // label children take the array's strings, with the template first-run
+    // style (presentation.py:648-659 in the repeated path).
+    const labels = hydrateElement(
+      {
+        type: "flex",
+        name: "labels",
+        children: [
+          d6CardText("label", "Placeholder 1", { size: 12 }),
+          d6CardText("label", "Placeholder 2", { size: 12 }),
+        ],
+      } as SlideElement,
+      { labels: ["One", "Two"] },
+    ) as FlexElement;
+    expect((labels.children[0] as TextElement).runs).toEqual([
+      { text: "One", font: { size: 12 } },
+    ]);
+    expect((labels.children[1] as TextElement).runs).toEqual([
+      { text: "Two", font: { size: 12 } },
+    ]);
+  });
+
+  test("keeps the outer occurrence scope out of a repeated item (engine passes None)", () => {
+    /* The engine hydrates repeated items with `name_occurrences=None`
+       (presentation.py:743-752), so a nested list starts a fresh scope. A
+       shared scope let the group's own name count as the first occurrence and
+       the nested text then preferred `card_2` over `card`. */
+    const ui = hydrateSlide({
+      layout: {
+        id: "nested_scope_layout",
+        description: "Nested repeated scope.",
+        components: [
+          {
+            id: "c1",
+            description: "Cards.",
+            position: { x: 0, y: 0 },
+            elements: [
+              {
+                type: "flex",
+                name: "cards",
+                children: [
+                  {
+                    type: "group",
+                    name: "card",
+                    children: [
+                      {
+                        type: "text",
+                        name: "card",
+                        decorative: false,
+                        runs: [
+                          { text: "placeholder", font: { size: 12 } },
+                        ],
+                        font: { size: 12 },
+                      },
+                    ],
+                  },
+                ],
+              } as unknown as SlideElement,
+            ],
+          },
+        ],
+      },
+      content: {
+        c1: { cards: [{ card: "item-value", card_2: "other" }] },
+      },
+    });
+
+    const cardGroup = (
+      ui.components[0].elements[0] as unknown as {
+        children: Array<{ children: SlideElement[] }>;
+      }
+    ).children[0];
+    expect((cardGroup.children[0] as TextElement).runs).toEqual([
+      { text: "item-value", font: { size: 12 } },
+    ]);
+  });
+});
+
+test.describe("hydrateSlide — markdown and LaTeX runs (D6)", () => {
+  /** One body text whose first run is bold — the base style the parser uses. */
+  function markdownText(value: string): TextElement {
+    return hydrateElement(
+      {
+        type: "text",
+        name: "body",
+        decorative: false,
+        font: { size: 18, family: "Inter", color: "#111111" },
+        runs: [
+          {
+            text: "placeholder",
+            font: { size: 18, family: "Inter", color: "#111111", bold: true },
+          },
+        ],
+      } as SlideElement,
+      { body: value },
+    ) as TextElement;
+  }
+
+  const plain = { size: 18, family: "Inter", color: "#111111" };
+
+  test("splits **bold** and *italic* over the first run's style", () => {
+    expect(markdownText("**bold** and *italic*").runs).toEqual([
+      { text: "bold", font: { ...plain, bold: true } },
+      { text: " and ", font: { ...plain } },
+      { text: "italic", font: { ...plain, italic: true } },
+    ]);
+  });
+
+  test("keeps literal delimiters honest (markers, products, underscores)", () => {
+    // No style found: the first run's bold survives untouched.
+    expect(markdownText("2 * 3 = 6").runs).toEqual([
+      { text: "2 * 3 = 6", font: { ...plain, bold: true } },
+    ]);
+    // Unclosed markers merge back into one plain run.
+    expect(markdownText("a **unclosed").runs).toEqual([
+      { text: "a **unclosed", font: { ...plain, bold: true } },
+    ]);
+    // The engine's underscore rule still reads `_case_` as emphasis.
+    expect(markdownText("snake_case_name").runs).toEqual([
+      { text: "snake", font: { ...plain } },
+      { text: "case", font: { ...plain, italic: true } },
+      { text: "name", font: { ...plain } },
+    ]);
+    // `***triple***` bolds the `*triple` span and leaves the last star plain
+    // (the strong delimiter consumes the outer pair, exactly like the engine).
+    expect(markdownText("***triple***").runs).toEqual([
+      { text: "*triple", font: { ...plain, bold: true } },
+      { text: "*", font: { ...plain } },
+    ]);
+  });
+
+  test("parses <latex> spans into raw-source latex runs and keeps surrounding text", () => {
+    const formula = hydrateElement(
+      {
+        type: "text",
+        name: "formula",
+        decorative: false,
+        font: { size: 18, family: "Inter" },
+        runs: [
+          { text: "placeholder", font: { size: 18, family: "Inter" } },
+        ],
+      } as SlideElement,
+      { formula: "pre <latex>x^2 + y^2</latex> post" },
+    ) as TextElement;
+    expect(formula.runs).toEqual([
+      { text: "pre ", font: { size: 18, family: "Inter" } },
+      {
+        font: { size: 18, family: "Inter" },
+        type: "latex",
+        latex: "x^2 + y^2",
+        display_mode: false,
+      },
+      { text: " post", font: { size: 18, family: "Inter" } },
+    ]);
+
+    // An empty latex span parses to an empty run list, exactly like the engine.
+    const empty = hydrateElement(
+      {
+        type: "text",
+        name: "formula",
+        decorative: false,
+        runs: [{ text: "placeholder" }],
+      } as SlideElement,
+      { formula: "<latex></latex>" },
+    ) as TextElement;
+    expect(empty.runs).toEqual([]);
+  });
+
+  test("hands text-list items through the same parser", () => {
+    const bullets = hydrateElement(
+      {
+        type: "text-list",
+        name: "bullets",
+        decorative: false,
+        font: { family: "Inter" },
+        items: [[{ text: "old", font: { size: 16 } }]],
+      } as SlideElement,
+      {
+        bullets: ["**First** bullet", "", "snake_case_name", "a **unclosed"],
+      },
+    ) as TextListElement;
+    expect(bullets.items).toEqual([
+      [
+        { text: "First", font: { family: "Inter", size: 16, bold: true } },
+        { text: " bullet", font: { family: "Inter", size: 16 } },
+      ],
+      [
+        { text: "snake", font: { family: "Inter" } },
+        { text: "case", font: { family: "Inter", italic: true } },
+        { text: "name", font: { family: "Inter" } },
+      ],
+      [{ text: "a **unclosed", font: { family: "Inter" } }],
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task D1 — pure editor operations (drag / resize / rotate / z-order / group)
 // ---------------------------------------------------------------------------
 

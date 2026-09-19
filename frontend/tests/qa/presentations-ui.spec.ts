@@ -82,9 +82,22 @@ import type {
   DeckTheme,
   DeckThemePackage,
   PresentationDeck,
+  PresentationTemplate,
   SlideComponent,
   TableElement,
+  TemplateLayout,
 } from "../../lib/presentation/types";
+import {
+  addOnlyLayoutCount,
+  buildLayoutPalette,
+  layoutReplaceSupport,
+  paletteAddState,
+  slideLimitReached,
+  SLIDE_LIMIT,
+  SLIDE_LIMIT_NOTE,
+  SLIDE_LIMIT_TITLE,
+  TOP_LEVEL_GROUP_REPLACE_REASON,
+} from "../../app/(app)/tools/presentation/[id]/edit/_components/layoutPaletteModel";
 import { acquireWorkerLock } from "./workerLock";
 
 const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
@@ -723,6 +736,31 @@ async function restoreEngineSlide(
     data: { slide },
     timeout: 30_000,
   });
+}
+
+/**
+ * Restores the engine deck's whole slide array through the production
+ * structural path (Task D6's live cases add/remove slides). Fresh ids mirror
+ * the editor's save; `n_slides` is the count the route never recomputes. The
+ * theme always travels (the upstream update bug nulls a missing theme).
+ */
+async function restoreEngineDeckSlides(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  deckId: string,
+  slides: DeckSlide[],
+  theme: DeckTheme | DeckThemePackage | null,
+): Promise<void> {
+  if (theme === null || theme === undefined) return;
+  const fresh = slides.map((slide, index) => ({
+    ...slide,
+    id: randomUUID(),
+    index,
+  }));
+  const response = await api.patch("/api/v1/ppt/presentation/update", {
+    data: { id: deckId, theme, slides: fresh, n_slides: fresh.length },
+    timeout: 60_000,
+  });
+  expect(response.ok(), `engine deck restore: ${response.status()}`).toBe(true);
 }
 
 /** One engine metadata restore; the theme must always travel (upstream bug). */
@@ -1767,7 +1805,9 @@ test.describe("viewer route (live deck)", () => {
 
     await page.goto(`/tools/presentation/${presentationId}`);
 
-    const fallback = page.locator("[data-smart-fallback]");
+    // The streamed route can briefly keep a hidden pre-hydration copy of the
+    // panel in the DOM, so the assertion targets the visible one.
+    const fallback = page.locator("[data-smart-fallback]:visible");
     await expect(fallback).toBeVisible();
     await expect(page.locator("[data-smart-label]")).toHaveText("Smart HTML deck");
     await expect(fallback).toContainText("This deck isn't rendered natively");
@@ -1856,7 +1896,11 @@ test.describe("editor route access (never skip)", () => {
     );
 
     expect(response?.status()).toBe(200);
-    await expect(page.locator("[data-editor-unavailable]")).toBeVisible();
+    // The streamed route can briefly keep a hidden pre-hydration copy of the
+    // panel in the DOM, so the assertion targets the visible one.
+    await expect(
+      page.locator("[data-editor-unavailable]:visible"),
+    ).toBeVisible();
   });
 });
 
@@ -5241,3 +5285,476 @@ test.describe("structural editing gate (pure)", () => {
     }
   });
 });
+
+/**
+ * Task D6 — the block palette's live proof. The deck template's layouts are
+ * inserted as new slides after the current one and applied over one, every
+ * save lands through the editor's structural replace path, and the shared
+ * engine deck is restored whole in `finally` (the original slide array with
+ * fresh ids + `n_slides`, the same production write the editor uses).
+ */
+test.describe("editor blocks — template layouts (live deck)", () => {
+  async function readTemplateLayouts(
+    api: Awaited<ReturnType<typeof engineApi>>,
+    templateId: string,
+  ): Promise<TemplateLayout[]> {
+    const response = await api.get(`/api/v1/ppt/template/${templateId}`, {
+      timeout: 30_000,
+    });
+    expect(
+      response.ok(),
+      `engine template read: ${response.status()}`,
+    ).toBe(true);
+    const template = (await response.json()) as PresentationTemplate;
+    return template.layouts?.layouts ?? [];
+  }
+
+  test("inserts two layouts as new slides after the current one and they persist across reload", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    test.skip(
+      target.originalTheme === null,
+      "the discovered deck has no stored theme for a structural save.",
+    );
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    let originalSlides: DeckSlide[] | null = null;
+
+    try {
+      const original = await readEngineDeck(api, target.deckId);
+      originalSlides = structuredClone(original.slides);
+      test.skip(
+        originalSlides.length + 2 > SLIDE_LIMIT,
+        "the discovered deck is too close to the engine's 50-slide cap.",
+      );
+
+      const layouts = await readTemplateLayouts(api, target.templateId);
+      const insertable = layouts.filter(
+        (layout) =>
+          layoutReplaceSupport(layout).replaceable &&
+          layout.id !== originalSlides?.[0]?.layout,
+      );
+      test.skip(
+        insertable.length < 2,
+        `the engine template serves ${insertable.length} insertable layout(s).`,
+      );
+      const first = insertable[0];
+      const second = insertable[1];
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      // The palette is the grouped Collapsible surface in the inspector.
+      const palette = page.locator('[data-layout-palette="inspector"]');
+      await expect(palette).toBeVisible();
+      await expect(
+        page.locator('[data-layout-group-toggle]').first(),
+      ).toBeVisible();
+
+      await palette.locator(`[data-layout-add="${first.id}"]`).click();
+      await expect
+        .poll(
+          async () => (await readEngineDeck(api, target.deckId)).slides.length,
+          {
+            timeout: 30_000,
+            message: "the first inserted slide must reach the engine",
+          },
+        )
+        .toBe(originalSlides.length + 1);
+      await palette.locator(`[data-layout-add="${second.id}"]`).click();
+      await expect
+        .poll(
+          async () => (await readEngineDeck(api, target.deckId)).slides.length,
+          {
+            timeout: 30_000,
+            message: "the second inserted slide must reach the engine",
+          },
+        )
+        .toBe(originalSlides.length + 2);
+
+      // The engine stored both slides in order (each new slide goes directly
+      // after the one selected when it was inserted).
+      const stored = await readEngineDeck(api, target.deckId);
+      expect(stored.slides.length).toBe(originalSlides.length + 2);
+      expect(stored.slides[1]?.layout).toBe(first.id);
+      expect(stored.slides[2]?.layout).toBe(second.id);
+      expect(stored.slides[1]?.ui?.id).toBe(first.id);
+      expect(stored.slides[2]?.ui?.id).toBe(second.id);
+
+      // A reload renders the inserted slides: the rail grows and the layout
+      // select reads each stored layout back.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(page.locator("[data-deck-thumb]")).toHaveCount(
+        originalSlides.length + 2,
+      );
+      await page.locator('[data-deck-thumb="1"]').click();
+      await expect(page.locator("#editor-slide-layout")).toHaveText(
+        first.description.trim(),
+      );
+      await page.locator('[data-deck-thumb="2"]').click();
+      await expect(page.locator("#editor-slide-layout")).toHaveText(
+        second.description.trim(),
+      );
+    } finally {
+      if (originalSlides !== null) {
+        await restoreEngineDeckSlides(
+          api,
+          target.deckId,
+          originalSlides,
+          target.originalTheme,
+        );
+        const restored = await readEngineDeck(api, target.deckId);
+        expect(
+          restored.slides.length,
+          "the engine deck must be restored to its original slide count",
+        ).toBe(originalSlides.length);
+      }
+      await api.dispose();
+    }
+  });
+
+  test("uses a layout on the current slide, keeps its content, and it persists across reload", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    test.skip(
+      target.originalTheme === null,
+      "the discovered deck has no stored theme for a structural save.",
+    );
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    let originalSlides: DeckSlide[] | null = null;
+
+    try {
+      const original = await readEngineDeck(api, target.deckId);
+      originalSlides = structuredClone(original.slides);
+
+      const layouts = await readTemplateLayouts(api, target.templateId);
+      const replaceable = layouts.filter(
+        (layout) =>
+          layoutReplaceSupport(layout).replaceable &&
+          layout.id !== originalSlides?.[0]?.layout,
+      );
+      test.skip(
+        replaceable.length === 0,
+        "the engine template serves no other replaceable layout.",
+      );
+      const replacement = replaceable[0];
+      const flagged = layouts.find(
+        (layout) => !layoutReplaceSupport(layout).replaceable,
+      );
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      const palette = page.locator('[data-layout-palette="inspector"]');
+      await expect(palette).toBeVisible();
+
+      /* The recorded repeated-group gap is labelled, never faked: when the
+         template carries such a layout, its apply action is disabled with the
+         recorded reason and the add action stays available. */
+      if (flagged !== undefined) {
+        await expect(
+          palette.locator(`[data-layout-apply="${flagged.id}"]`),
+        ).toBeDisabled();
+        await expect(
+          palette.locator(`[data-layout-replace-note="${flagged.id}"]`),
+        ).toContainText("top-level group");
+        await expect(
+          palette.locator(`[data-layout-add="${flagged.id}"]`),
+        ).toBeEnabled();
+      }
+
+      await palette.locator(`[data-layout-apply="${replacement.id}"]`).click();
+      await expect
+        .poll(
+          async () =>
+            (await readEngineDeck(api, target.deckId)).slides[0]?.layout,
+          {
+            timeout: 30_000,
+            message: "the replaced layout must reach the engine",
+          },
+        )
+        .toBe(replacement.id);
+
+      const stored = await readEngineDeck(api, target.deckId);
+      expect(stored.slides.length).toBe(originalSlides.length);
+      expect(stored.slides[0]?.layout).toBe(replacement.id);
+      // The hydrated ui is the template layout's ("content + layout → ui").
+      expect(stored.slides[0]?.ui?.id).toBe(replacement.id);
+      // The slide's content travels untouched (nothing silently dropped from
+      // the wire; the hydration merge is what maps it into the new ui).
+      expect(stored.slides[0]?.content).toEqual(originalSlides[0]?.content);
+
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(page.locator("#editor-slide-layout")).toHaveText(
+        replacement.description.trim(),
+      );
+    } finally {
+      if (originalSlides !== null) {
+        await restoreEngineDeckSlides(
+          api,
+          target.deckId,
+          originalSlides,
+          target.originalTheme,
+        );
+        const restored = await readEngineDeck(api, target.deckId);
+        expect(
+          restored.slides.length,
+          "the engine deck must be restored to its original slide count",
+        ).toBe(originalSlides.length);
+      }
+      await api.dispose();
+    }
+  });
+
+  test("opens the rail palette as a dialog: focus moves in, Escape and an outside press close it", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+
+    await page.goto(`/tools/presentation/${presentationId}/edit`);
+    await page.waitForSelector('[data-editor-ready="true"]');
+
+    const addButton = page.locator("[data-editor-add-slide]");
+    const railPalette = page.locator('[data-layout-palette="rail"]');
+
+    await addButton.click();
+    await expect(railPalette).toBeVisible();
+    // Focus moves into the dialog (the group toggle is its first control).
+    await expect(
+      railPalette.locator("[data-layout-group-toggle]").first(),
+    ).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(railPalette).toHaveCount(0);
+    await expect(addButton).toBeFocused();
+
+    await addButton.click();
+    await expect(railPalette).toBeVisible();
+    await page.getByRole("heading", { name: "Edit deck" }).click();
+    await expect(railPalette).toHaveCount(0);
+  });
+});
+
+/**
+ * Task D6 — the palette's pure half: grouping for `Collapsible`, the recorded
+ * add-only rule (the engine's schema-derived top-level repeated-group
+ * expansion is not ported), and the 50-slide cap's existing honesty copy.
+ */
+test.describe("layout palette helpers (pure)", () => {
+  function groupElement(
+    name: string,
+    children: SlideComponent["elements"] = [],
+  ): SlideComponent["elements"][number] {
+    return {
+      type: "group",
+      name,
+      children,
+    } as SlideComponent["elements"][number];
+  }
+
+  function textElement(
+    name: string,
+    constraints: Record<string, unknown> = {},
+  ): SlideComponent["elements"][number] {
+    return {
+      type: "text",
+      name,
+      decorative: false,
+      runs: [{ text: "Placeholder" }],
+      ...constraints,
+    } as SlideComponent["elements"][number];
+  }
+
+  function decorativeImageElement(
+    name: string,
+  ): SlideComponent["elements"][number] {
+    return {
+      type: "image",
+      name,
+      decorative: true,
+      data: "x.svg",
+    } as SlideComponent["elements"][number];
+  }
+
+  function layoutFixture(
+    id: string,
+    description: string,
+    elements: SlideComponent["elements"],
+  ): TemplateLayout {
+    return {
+      id,
+      description,
+      components: [
+        {
+          id: "component",
+          description: "Component",
+          position: { x: 0, y: 0 },
+          elements,
+        },
+      ],
+    };
+  }
+
+  test("groups the template's layouts for Collapsible and drops malformed entries", () => {
+    const groups = buildLayoutPalette({
+      layouts: [
+        layoutFixture("title_intro", "A clean title slide.", [textElement("title")]),
+        layoutFixture("", "No id, dropped.", []),
+        layoutFixture("no_description", "   ", [textElement("title")]),
+      ],
+      groupId: "verdant",
+      groupLabel: "Verdant template",
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].id).toBe("verdant");
+    expect(groups[0].label).toBe("Verdant template");
+    expect(groups[0].layouts.map((entry) => entry.id)).toEqual([
+      "title_intro",
+      "no_description",
+    ]);
+    expect(groups[0].layouts[0].label).toBe("A clean title slide.");
+    // A description-less layout is labelled by its id, never a blank row.
+    expect(groups[0].layouts[1].label).toBe("no_description");
+    expect(
+      groups[0].layouts.every(
+        (entry) => entry.replaceable && entry.replaceReason === null,
+      ),
+    ).toBe(true);
+
+    expect(
+      buildLayoutPalette({ layouts: null, groupId: "x", groupLabel: "x" }),
+    ).toEqual([]);
+    expect(
+      buildLayoutPalette({ layouts: [], groupId: "x", groupLabel: "x" }),
+    ).toEqual([]);
+  });
+
+  test("flags the engine-expandable top-level repeated-group shape, not every all-groups shape", () => {
+    /* These fixtures mirror the discriminating shapes the detector was
+       verified against the engine over all 219 bundled layouts (2026-09-19):
+       the engine refuses the replace exactly for the flagged shapes and for
+       none of the replaceable ones. */
+    const cardFields = () => [
+      textElement("card_heading", { min_length: 4, max_length: 12 }),
+      textElement("card_body", { min_length: 20, max_length: 100 }),
+    ];
+    const layoutOf = (...groups: SlideComponent["elements"]) =>
+      layoutFixture("repeated", "Repeated groups.", groups);
+
+    // Numeric-suffixed group names with identical fields (editorial timeline).
+    expect(
+      layoutReplaceSupport(
+        layoutOf(
+          groupElement("timeline_2", cardFields()),
+          groupElement("timeline_5", cardFields()),
+        ),
+      ),
+    ).toEqual({
+      replaceable: false,
+      reason: TOP_LEVEL_GROUP_REPLACE_REASON,
+    });
+    // Identical group names with identical fields (momentum-style cards).
+    expect(
+      layoutReplaceSupport(
+        layoutOf(
+          groupElement("content_card", cardFields()),
+          groupElement("content_card", cardFields()),
+        ),
+      ).replaceable,
+    ).toBe(false);
+    // Different names still flag when the editable fields match: the engine's
+    // schema comparison does not require the group names to repeat.
+    expect(
+      layoutReplaceSupport(
+        layoutOf(
+          groupElement("top_feature_card", cardFields()),
+          groupElement("bottom_feature_card", cardFields()),
+        ),
+      ).replaceable,
+    ).toBe(false);
+
+    // Constraint mismatch (the momentum false-positive shape): replaceable.
+    expect(
+      layoutReplaceSupport(
+        layoutOf(
+          groupElement("content_card", [
+            textElement("card_title", { min_length: 12, max_length: 24 }),
+          ]),
+          groupElement("content_card", [
+            textElement("card_title", { min_length: 9, max_length: 24 }),
+          ]),
+        ),
+      ).replaceable,
+    ).toBe(true);
+    // A group whose descendants are all decorative yields no editable nodes
+    // (the editorial arch shape): replaceable.
+    expect(
+      layoutReplaceSupport(
+        layoutOf(
+          groupElement("arc_bands", [decorativeImageElement("arc_band")]),
+          groupElement("process_callouts", [
+            textElement("callout_caption", { min_length: 11, max_length: 25 }),
+          ]),
+        ),
+      ).replaceable,
+    ).toBe(true);
+    // A single group is the ported child path, and a mixed element list is not
+    // the engine's top-level repeated-group shape at all.
+    expect(
+      layoutReplaceSupport(
+        layoutOf(groupElement("only_one", cardFields())),
+      ).replaceable,
+    ).toBe(true);
+    expect(
+      layoutReplaceSupport(
+        layoutOf(groupElement("card_1", cardFields()), textElement("heading")),
+      ).replaceable,
+    ).toBe(true);
+
+    expect(
+      addOnlyLayoutCount([
+        layoutOf(
+          groupElement("timeline_2", cardFields()),
+          groupElement("timeline_5", cardFields()),
+        ),
+        layoutFixture("ok", "Fine.", [textElement("heading")]),
+      ]),
+    ).toBe(1);
+    expect(addOnlyLayoutCount(null)).toBe(0);
+  });
+
+  test("caps insertion at the engine's 50 slides with the existing copy", () => {
+    expect(SLIDE_LIMIT).toBe(50);
+    expect(slideLimitReached(49)).toBe(false);
+    expect(slideLimitReached(50)).toBe(true);
+    expect(SLIDE_LIMIT_TITLE).toBe("Slide limit reached (50)");
+    expect(SLIDE_LIMIT_NOTE).toBe("Slide limit reached (50).");
+    expect(paletteAddState(false)).toEqual({
+      disabled: false,
+      title: "Add as a new slide",
+    });
+    expect(paletteAddState(true)).toEqual({
+      disabled: true,
+      title: SLIDE_LIMIT_TITLE,
+    });
+  });
+});
+

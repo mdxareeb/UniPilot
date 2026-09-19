@@ -123,6 +123,13 @@ import { ImageControls } from "./ImageControls";
 import { ImagePickerModal } from "./ImagePickerModal";
 import { InlineRunsEditor } from "./InlineRunsEditor";
 import { InspectorPanel } from "./InspectorPanel";
+import { LayoutPalette } from "./LayoutPalette";
+import {
+  addOnlyLayoutCount,
+  buildLayoutPalette,
+  layoutReplaceSupport,
+  slideLimitReached,
+} from "./layoutPaletteModel";
 import { RunFormatToolbar } from "./RunFormatToolbar";
 import { SaveStatus } from "./SaveStatus";
 import { TableControls } from "./TableControls";
@@ -151,8 +158,6 @@ import {
   updateElementAtPath,
 } from "./elementPath";
 
-/** The engine's slide cap (`PRESENTON_MAX_SLIDES`, spec D11). */
-const SLIDE_LIMIT = 50;
 /** The row poll cadence while an export runs (the documents hub's 4 s). */
 const EXPORT_POLL_MS = 4_000;
 /** How long the click bridge may claim "exporting" before the row speaks. */
@@ -317,9 +322,19 @@ export function DeckEditor({
   const [exportRequestError, setExportRequestError] = useState<string | null>(
     null,
   );
+  /* Why the last layout choice was refused (an add-only layout), tagged with
+     the slide it belongs to: the remark cannot survive a slide change. */
+  const [layoutChangeEntry, setLayoutChangeEntry] = useState<{
+    slideId: string;
+    reason: string;
+  } | null>(null);
 
   const slides = state.slides;
   const selectedSlide = slides[selectedIndex] ?? null;
+  const layoutChangeNote =
+    layoutChangeEntry !== null && layoutChangeEntry.slideId === selectedSlide?.id
+      ? layoutChangeEntry.reason
+      : null;
 
   /* Clears the element selection; used by every slide-level action so a
      stale element key can never survive a slide change. */
@@ -885,26 +900,33 @@ export function DeckEditor({
   const onAddSlide = useCallback(
     (layoutId: string) => {
       if (!structuralEditsEnabled) return;
-      const slide = getState().slides[selectedIndex];
+      const current = getState();
+      const slide = current.slides[selectedIndex];
       const layout = (templateLayouts ?? []).find(
         (candidate) => candidate.id === layoutId,
       );
       if (slide === undefined || layout === undefined) return;
-      const current = getState();
-      if (current.slides.length >= SLIDE_LIMIT) return;
+      if (slideLimitReached(current.slides.length)) return;
+      /* The new slide goes directly after the current one (Presenton's
+         "Use Template +" spot), hydrated from the layout with empty content:
+         template defaults are the truth for a fresh slide. */
       const nextSlide: DeckSlide = {
         id: freshId(),
         presentation: deck.id,
         layout_group: slide.layout_group,
         layout: layout.id,
-        index: current.slides.length,
+        index: selectedIndex + 1,
         content: {},
         properties: null,
         ui: hydrateSlide({ layout, content: {} }),
         speaker_note: null,
       };
-      const next = reindex([...current.slides, nextSlide]);
-      setSelectedIndex(next.length - 1);
+      const next = reindex([
+        ...current.slides.slice(0, selectedIndex + 1),
+        nextSlide,
+        ...current.slides.slice(selectedIndex + 1),
+      ]);
+      setSelectedIndex(selectedIndex + 1);
       clearSelection();
       applyStructure(next, "structure-add");
     },
@@ -923,7 +945,7 @@ export function DeckEditor({
     if (!structuralEditsEnabled) return;
     const current = getState();
     const slide = current.slides[selectedIndex];
-    if (slide === undefined || current.slides.length >= SLIDE_LIMIT) return;
+    if (slide === undefined || slideLimitReached(current.slides.length)) return;
     const copy: DeckSlide = { ...slide, id: freshId() };
     const next = reindex([
       ...current.slides.slice(0, selectedIndex + 1),
@@ -973,13 +995,40 @@ export function DeckEditor({
     [structuralEditsEnabled, templateLayouts],
   );
 
+  /* The palette's groups: one per layout group today (the deck's template),
+     labelled with the template name when the engine served one. */
+  const layoutGroups = useMemo(() => {
+    if (!structuralEditsEnabled || templateLayouts === null) return [];
+    const groupId = deck.slides[0]?.layout_group ?? "template";
+    const groupLabel =
+      templateName !== null && templateName.trim() !== ""
+        ? `${templateName.trim()} template`
+        : `${groupId} template`;
+    return buildLayoutPalette({
+      layouts: templateLayouts,
+      groupId,
+      groupLabel,
+    });
+  }, [deck.slides, structuralEditsEnabled, templateLayouts, templateName]);
+
   const layoutDisabledReason = !structuralEditsEnabled
     ? STRUCTURAL_EDITING_REASON
     : templateLayouts === null
       ? "This deck's template layouts weren't available, so the layout can't be changed."
       : null;
 
-  const onLayoutChange = useCallback(
+  /* The honest count of add-only layouts (the ones the recorded repeated-group
+     gap covers); the palette labels each entry, this is the summary line. */
+  const layoutNote = useMemo(() => {
+    const count = addOnlyLayoutCount(templateLayouts);
+    if (count === 0) return null;
+    return `${count} layout${count === 1 ? "" : "s"} can only be added as new slides — the engine's repeated-group expansion isn't mapped natively.`;
+  }, [templateLayouts]);
+
+  /* The replace path (inspector Select and palette): a layout the hydration
+     module cannot map faithfully refuses with its recorded reason instead of
+     silently dropping content. */
+  const applyLayoutToSlide = useCallback(
     (layoutId: string) => {
       if (!structuralEditsEnabled) return;
       const current = getState();
@@ -988,6 +1037,15 @@ export function DeckEditor({
         (candidate) => candidate.id === layoutId,
       );
       if (slide === undefined || layout === undefined) return;
+      const support = layoutReplaceSupport(layout);
+      if (!support.replaceable) {
+        setLayoutChangeEntry({
+          slideId: slide.id,
+          reason: support.reason ?? "",
+        });
+        return;
+      }
+      setLayoutChangeEntry(null);
       const nextSlide: DeckSlide = {
         ...slide,
         layout: layout.id,
@@ -999,6 +1057,11 @@ export function DeckEditor({
       applyStructure(next, "structure-layout");
     },
     [applyStructure, getState, selectedIndex, structuralEditsEnabled, templateLayouts],
+  );
+
+  const onLayoutChange = useCallback(
+    (layoutId: string) => applyLayoutToSlide(layoutId),
+    [applyLayoutToSlide],
   );
 
   // -------------------------------------------------------------------------
@@ -1851,15 +1914,14 @@ export function DeckEditor({
               clearSelection();
             }}
             structuralEditsEnabled={structuralEditsEnabled}
-            layoutOptions={(templateLayouts ?? []).map((layout) => ({
-              id: layout.id,
-              label: layout.description?.trim() || layout.id,
-            }))}
+            layoutGroups={layoutGroups}
+            layoutDisabledReason={layoutDisabledReason}
             onAddSlide={onAddSlide}
+            onApplyLayout={applyLayoutToSlide}
             onDuplicateSlide={onDuplicateSlide}
             onDeleteSlide={onDeleteSlide}
             onMoveSlide={onMoveSlide}
-            atSlideLimit={slides.length >= SLIDE_LIMIT}
+            atSlideLimit={slideLimitReached(slides.length)}
           />
         </div>
 
@@ -2102,6 +2164,20 @@ export function DeckEditor({
             layoutValue={selectedSlide?.layout ?? ""}
             onLayoutChange={onLayoutChange}
             layoutDisabledReason={layoutDisabledReason}
+            layoutAddOnlyNote={layoutNote}
+            layoutChangeNote={layoutChangeNote}
+            blocks={
+              structuralEditsEnabled ? (
+                <LayoutPalette
+                  source="inspector"
+                  groups={layoutGroups}
+                  atSlideLimit={slideLimitReached(slides.length)}
+                  disabledReason={layoutDisabledReason}
+                  onAddSlide={onAddSlide}
+                  onApplyLayout={applyLayoutToSlide}
+                />
+              ) : undefined
+            }
             elementOptions={textElements.map((entry, index) => {
               const name = entry.element.name?.trim();
               const preview = textOfTextElement(entry.element)

@@ -33,6 +33,15 @@ export type InspectorPanelProps = {
   layoutValue: string;
   onLayoutChange: (value: string) => void;
   layoutDisabledReason: string | null;
+  /** The add-only layout count line (D6), else null. */
+  layoutAddOnlyNote?: string | null;
+  /** Why the last layout choice was refused (D6), else null. */
+  layoutChangeNote?: string | null;
+  /**
+   * The block/layout palette (D6): the template's layouts grouped via
+   * `Collapsible`, each insertable as a new slide or applicable to this one.
+   */
+  blocks?: ReactNode;
   elementOptions: Array<{ value: string; label: string }>;
   elementValue: string | null;
   onElementChange: (value: string) => void;
@@ -95,6 +104,9 @@ export function InspectorPanel({
   layoutValue,
   onLayoutChange,
   layoutDisabledReason,
+  layoutAddOnlyNote,
+  layoutChangeNote,
+  blocks,
   elementOptions,
   elementValue,
   onElementChange,
@@ -195,6 +207,22 @@ export function InspectorPanel({
               [!] {layoutDisabledReason}
             </p>
           ) : null}
+          {layoutDisabledReason === null && layoutAddOnlyNote ? (
+            <p
+              data-editor-layout-add-only=""
+              className="text-label-sm text-muted-foreground"
+            >
+              [!] {layoutAddOnlyNote}
+            </p>
+          ) : null}
+          {layoutDisabledReason === null && layoutChangeNote ? (
+            <p
+              data-editor-layout-change-note=""
+              className="text-label-sm text-muted-foreground"
+            >
+              [!] {layoutChangeNote}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-col gap-1.5">
           <label
@@ -216,6 +244,15 @@ export function InspectorPanel({
           </div>
         </div>
       </Section>
+
+      {blocks ? (
+        <Section
+          title="Blocks"
+          description="The deck template's layouts — insert one as a new slide, or use it on this slide."
+        >
+          {blocks}
+        </Section>
+      ) : null}
 
       <Section
         title="Text"
