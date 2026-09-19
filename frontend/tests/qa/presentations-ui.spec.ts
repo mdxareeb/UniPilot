@@ -71,6 +71,13 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
+import {
+  createElementClipboard,
+  ELEMENT_CLIPBOARD_PREFIX,
+  ELEMENT_PASTE_OFFSET,
+  parseElementClipboardText,
+  pasteElementClipboard,
+} from "../../lib/presentation/clipboardOps";
 import { collectAssetPaths } from "../../lib/presentation/elements";
 import { getElementAtPath } from "../../lib/presentation/editorOps";
 import { classifyAssetPath } from "../../lib/presentation/assets";
@@ -5755,6 +5762,877 @@ test.describe("layout palette helpers (pure)", () => {
       disabled: true,
       title: SLIDE_LIMIT_TITLE,
     });
+  });
+});
+
+/*
+ * Task D7 — in-app clipboard, duplicate, delete and the shortcuts sheet
+ * (spec §5.4 copy/paste/duplicate, §8.3 motion, §8.5 keyboard equivalents).
+ *
+ * Every live case appends one deterministic scratch component to the
+ * discovered deck's first slide (`slide_update`), drives the real editor with
+ * the same keyboard path a user has (select the hit target, focus the stage,
+ * press the chord), asserts the engine's stored slide, reloads to prove the
+ * render, and restores the original slide in a `finally`. The cross-slide case
+ * restores its second slide too. The OS clipboard is best-effort: the case
+ * grants the browser permission, asserts the custom MIME/text form when the
+ * browser allows it, and otherwise skips with the recorded limitation — the
+ * in-app buffer never depends on it.
+ */
+test.describe("editor clipboard, duplicate and shortcuts (live deck)", () => {
+  /** One deterministic text pair for the clipboard cases. */
+  function clipboardScratchComponent(): SlideComponent {
+    return {
+      id: "qa-d7-clipboard-scratch",
+      description: "QA D7 clipboard scratch",
+      position: { x: 120, y: 360 },
+      elements: [
+        {
+          type: "text",
+          name: "qa_d7_alpha",
+          position: { x: 0, y: 0 },
+          size: { width: 300, height: 60 },
+          runs: [{ text: "Alpha" }],
+        },
+        {
+          type: "text",
+          name: "qa_d7_beta",
+          position: { x: 0, y: 80 },
+          size: { width: 300, height: 60 },
+          runs: [{ text: "Beta" }],
+        },
+      ],
+    };
+  }
+
+  function clipboardElementName(element: Record<string, unknown>): string {
+    return typeof element.name === "string" ? element.name : "";
+  }
+
+  function clipboardElementPosition(
+    element: Record<string, unknown>,
+  ): { x: number; y: number } | null {
+    const position = element.position;
+    if (typeof position !== "object" || position === null) return null;
+    const { x, y } = position as { x?: unknown; y?: unknown };
+    return typeof x === "number" && typeof y === "number" ? { x, y } : null;
+  }
+
+  /**
+   * The stored scratch component's elements (looked up by its component id).
+   * The **last** match is the one this test seeded: the id is a shared fixture
+   * name, so a component left behind by a failed earlier restore must not
+   * shadow the fresh append.
+   */
+  function storedScratchElements(
+    deck: PresentationDeck,
+    slideIndex: number,
+    componentId: string,
+  ): Array<Record<string, unknown>> {
+    const components = deck.slides[slideIndex]?.ui?.components;
+    if (!Array.isArray(components)) return [];
+    const matches = components.filter(
+      (candidate) => candidate.id === componentId,
+    );
+    const component = matches[matches.length - 1];
+    return Array.isArray(component?.elements)
+      ? (component.elements as unknown as Array<Record<string, unknown>>)
+      : [];
+  }
+
+  /**
+   * The first stored scratch element's first run text — the deleted-guard
+   * case polls this so its wait asserts the **typed text persisted**, not a
+   * pre-existing name list that would pass before any save.
+   */
+  function scratchFirstText(
+    deck: PresentationDeck,
+    slideIndex: number,
+    componentId: string,
+  ): string {
+    const elements = storedScratchElements(deck, slideIndex, componentId);
+    const runs = (elements[0] as
+      | { runs?: Array<{ text?: unknown }> }
+      | undefined)?.runs;
+    return runs !== undefined && typeof runs[0]?.text === "string"
+      ? runs[0].text
+      : "";
+  }
+
+  /** `components:0/1` → the path object `getElementAtPath` consumes. */
+  function clipboardPathFromKey(
+    key: string,
+  ): { root: "components" | "elements"; indexes: number[] } | null {
+    const [root, chain] = key.split(":", 2);
+    if (root !== "components" && root !== "elements") return null;
+    const indexes = (chain ?? "")
+      .split("/")
+      .filter((part) => part !== "")
+      .map((part) => Number(part));
+    if (indexes.some((index) => !Number.isInteger(index) || index < 0)) {
+      return null;
+    }
+    return { root, indexes };
+  }
+
+  /**
+   * Appends the scratch component to the given slide on the engine (the editor
+   * loads it on the next navigation) and answers the seeded slide plus the
+   * component's index, which the element keys are built from. The caller
+   * passes a slide read from the engine **in the test** — Task D6's structural
+   * restores rotate slide ids, so the beforeAll snapshot is stale by the time
+   * the D7 cases run.
+   */
+  async function seedClipboardScratch(
+    api: Awaited<ReturnType<typeof engineApi>>,
+    base: DeckSlide,
+  ): Promise<{ componentIndex: number; seeded: DeckSlide }> {
+    const componentIndex = base.ui?.components?.length ?? 0;
+    const scratch = clipboardScratchComponent();
+    const seeded: DeckSlide = {
+      ...base,
+      ui: base.ui
+        ? {
+            ...base.ui,
+            components: [...base.ui.components, scratch],
+          }
+        : base.ui,
+    };
+    const response = await api.patch("/api/v1/ppt/presentation/slide_update", {
+      data: { slide: seeded },
+      timeout: 30_000,
+    });
+    expect(response.ok(), `seed clipboard slide: ${response.status()}`).toBe(
+      true,
+    );
+    return { componentIndex, seeded };
+  }
+
+  test("duplicates the selection with Mod+D, offsets in place, and persists across reload", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const scratch = clipboardScratchComponent();
+    let originalSlide: DeckSlide | null = null;
+    const scratchNames = async (): Promise<string[]> =>
+      storedScratchElements(await readEngineDeck(api, target.deckId), 0, scratch.id).map(
+        clipboardElementName,
+      );
+
+    try {
+      const current = await readEngineDeck(api, target.deckId);
+      const currentSlide = current.slides[0];
+      if (currentSlide === undefined) {
+        throw new Error("the engine deck lost its first slide mid-test.");
+      }
+      originalSlide = structuredClone(currentSlide);
+      test.skip(
+        originalSlide.ui === null || originalSlide.ui === undefined,
+        "the deck's current first slide has no ui to seed a scratch component into.",
+      );
+      const { componentIndex } = await seedClipboardScratch(
+        api,
+        originalSlide,
+      );
+      const alphaKey = `components:${componentIndex}/0`;
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      await page.locator(`[data-editor-element-hit="${alphaKey}"]`).click({
+        force: true,
+      });
+      // The commands belong to the stage; the caret owns the keys otherwise.
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+d");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      // The clone is selected (the D1 selection layer names it) and lands
+      // directly after the source with one 16 px step.
+      await expect(
+        page.locator(
+          `[data-editor-selection-frame="components:${componentIndex}/1"]`,
+        ),
+      ).toBeVisible();
+
+      const first = await readEngineDeck(api, target.deckId);
+      const firstElements = storedScratchElements(
+        first,
+        0,
+        scratch.id,
+      );
+      expect(firstElements.map(clipboardElementName)).toEqual([
+        "qa_d7_alpha",
+        "qa_d7_alpha",
+        "qa_d7_beta",
+      ]);
+      expect(clipboardElementPosition(firstElements[0]!)).toEqual({
+        x: 0,
+        y: 0,
+      });
+      expect(clipboardElementPosition(firstElements[1]!)).toEqual({
+        x: 16,
+        y: 16,
+      });
+
+      // The clone is selected, so a repeated Mod+D walks it a step further.
+      await page.keyboard.press("Control+d");
+      await expect
+        .poll(scratchNames, { timeout: 20_000 })
+        .toEqual([
+          "qa_d7_alpha",
+          "qa_d7_alpha",
+          "qa_d7_alpha",
+          "qa_d7_beta",
+        ]);
+      const second = await readEngineDeck(api, target.deckId);
+      expect(
+        clipboardElementPosition(
+          storedScratchElements(second, 0, scratch.id)[2]!,
+        ),
+      ).toEqual({ x: 32, y: 32 });
+
+      // A reload renders every stored element again.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      for (const index of [0, 1, 2, 3]) {
+        await expect(
+          page.locator(
+            `[data-editor-element-hit="components:${componentIndex}/${index}"]`,
+          ),
+        ).toBeVisible();
+      }
+    } finally {
+      if (originalSlide !== null) {
+        await restoreEngineSlide(api, originalSlide);
+      }
+      await api.dispose();
+    }
+  });
+
+  test("copies with Mod+C and pastes with Mod+V; a repeated paste walks the offset", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    test.skip(
+      target.originalSlide.ui === null ||
+        target.originalSlide.ui === undefined,
+      "the discovered deck's first slide has no ui to seed a scratch component into.",
+    );
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const scratch = clipboardScratchComponent();
+    let originalSlide: DeckSlide | null = null;
+    const scratchNames = async (): Promise<string[]> =>
+      storedScratchElements(await readEngineDeck(api, target.deckId), 0, scratch.id).map(
+        clipboardElementName,
+      );
+
+    try {
+      const current = await readEngineDeck(api, target.deckId);
+      const currentSlide = current.slides[0];
+      if (currentSlide === undefined) {
+        throw new Error("the engine deck lost its first slide mid-test.");
+      }
+      originalSlide = structuredClone(currentSlide);
+      test.skip(
+        originalSlide.ui === null || originalSlide.ui === undefined,
+        "the deck's current first slide has no ui to seed a scratch component into.",
+      );
+      const { componentIndex } = await seedClipboardScratch(
+        api,
+        originalSlide,
+      );
+      const alphaKey = `components:${componentIndex}/0`;
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      await page.locator(`[data-editor-element-hit="${alphaKey}"]`).click({
+        force: true,
+      });
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+c");
+      await page.keyboard.press("Control+v");
+
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "saved",
+        { timeout: 20_000 },
+      );
+      // The paste lands in the same component (the source component id is the
+      // preferred target) and is the selected set.
+      await expect(
+        page.locator(
+          `[data-editor-selection-frame="components:${componentIndex}/2"]`,
+        ),
+      ).toBeVisible();
+      const first = await readEngineDeck(api, target.deckId);
+      const firstElements = storedScratchElements(first, 0, scratch.id);
+      expect(firstElements.map(clipboardElementName)).toEqual([
+        "qa_d7_alpha",
+        "qa_d7_beta",
+        "qa_d7_alpha",
+      ]);
+      expect(clipboardElementPosition(firstElements[2]!)).toEqual({
+        x: 16,
+        y: 16,
+      });
+
+      // The in-app buffer survives the paste; the second paste walks to 32.
+      await page.keyboard.press("Control+v");
+      await expect
+        .poll(scratchNames, { timeout: 20_000 })
+        .toEqual([
+          "qa_d7_alpha",
+          "qa_d7_beta",
+          "qa_d7_alpha",
+          "qa_d7_alpha",
+        ]);
+      const second = await readEngineDeck(api, target.deckId);
+      expect(
+        clipboardElementPosition(
+          storedScratchElements(second, 0, scratch.id)[3]!,
+        ),
+      ).toEqual({ x: 32, y: 32 });
+
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(
+        page.locator(
+          `[data-editor-element-hit="components:${componentIndex}/3"]`,
+        ),
+      ).toBeVisible();
+    } finally {
+      if (originalSlide !== null) {
+        await restoreEngineSlide(api, originalSlide);
+      }
+      await api.dispose();
+    }
+  });
+
+  test("copies on one slide and pastes onto another through the same-component rule", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    test.skip(
+      target.slideCount < 2,
+      "the discovered deck has a single slide; the cross-slide case needs two.",
+    );
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    let originalSlide: DeckSlide | null = null;
+    let slide2: DeckSlide | null = null;
+
+    try {
+      const before = await readEngineDeck(api, target.deckId);
+      const source = before.slides[0];
+      const second = before.slides[1];
+      if (source === undefined || second === undefined) {
+        throw new Error("the engine deck lost its slides mid-test.");
+      }
+      originalSlide = structuredClone(source);
+      slide2 = structuredClone(second);
+      test.skip(
+        originalSlide.ui === null || originalSlide.ui === undefined,
+        "the deck's current first slide has no ui to seed a scratch component into.",
+      );
+
+      const { componentIndex, seeded } = await seedClipboardScratch(
+        api,
+        originalSlide,
+      );
+      const alphaKey = `components:${componentIndex}/0`;
+
+      /* The same pure rule the editor runs predicts the landing: the source
+         component id when the target slide has it, else the anchor (none after
+         a slide switch), else the first component, else the root list. */
+      const payload = createElementClipboard(seeded, [alphaKey]);
+      expect(payload).not.toBeNull();
+      const predicted = pasteElementClipboard(slide2, payload!, {
+        offset: ELEMENT_PASTE_OFFSET,
+        anchorKey: null,
+      });
+      expect(
+        predicted,
+        "the pure paste rule must predict the cross-slide landing",
+      ).not.toBeNull();
+      const predictedKey = predicted!.keys[0] ?? "";
+      const predictedPath = clipboardPathFromKey(predictedKey);
+      expect(predictedPath).not.toBeNull();
+      const predictedElement = getElementAtPath(
+        predicted!.slide,
+        predictedPath!,
+      );
+      const predictedPosition =
+        predictedElement === null
+          ? null
+          : clipboardElementPosition(
+              predictedElement as unknown as Record<string, unknown>,
+            );
+      expect(predictedPosition).toEqual({ x: 16, y: 16 });
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${alphaKey}"]`).click({
+        force: true,
+      });
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+c");
+
+      // Switching slides clears the selection: the recorded fallback target is
+      // the rule under test, not the anchor.
+      await page.locator('[data-deck-thumb="1"]').click();
+      await expect(page.locator("[data-slide-counter]")).toHaveText(
+        `2 / ${target.slideCount}`,
+      );
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+v");
+
+      await expect
+        .poll(
+          async () => {
+            const deck = await readEngineDeck(api, target.deckId);
+            const element = getElementAtPath(deck.slides[1], predictedPath!);
+            return element === null
+              ? null
+              : clipboardElementName(
+                  element as unknown as Record<string, unknown>,
+                );
+          },
+          {
+            timeout: 20_000,
+            message: "the cross-slide paste must reach the engine",
+          },
+        )
+        .toBe("qa_d7_alpha");
+      const after = await readEngineDeck(api, target.deckId);
+      const pasted = getElementAtPath(after.slides[1], predictedPath!);
+      expect(pasted).not.toBeNull();
+      expect(
+        clipboardElementPosition(pasted as unknown as Record<string, unknown>),
+      ).toEqual(predictedPosition);
+
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator('[data-deck-thumb="1"]').click();
+      await expect(
+        page.locator(`[data-editor-element-hit="${predictedKey}"]`),
+      ).toBeVisible();
+    } finally {
+      if (originalSlide !== null) {
+        await restoreEngineSlide(api, originalSlide);
+      }
+      if (slide2 !== null) {
+        await restoreEngineSlide(api, slide2);
+      }
+      await api.dispose();
+    }
+  });
+
+  test("deletes with Delete and Backspace while inline editing keeps its own keys", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    test.skip(
+      target.originalSlide.ui === null ||
+        target.originalSlide.ui === undefined,
+      "the discovered deck's first slide has no ui to seed a scratch component into.",
+    );
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    const scratch = clipboardScratchComponent();
+    let originalSlide: DeckSlide | null = null;
+    const scratchNames = async (): Promise<string[]> =>
+      storedScratchElements(await readEngineDeck(api, target.deckId), 0, scratch.id).map(
+        clipboardElementName,
+      );
+
+    try {
+      const current = await readEngineDeck(api, target.deckId);
+      const currentSlide = current.slides[0];
+      if (currentSlide === undefined) {
+        throw new Error("the engine deck lost its first slide mid-test.");
+      }
+      originalSlide = structuredClone(currentSlide);
+      test.skip(
+        originalSlide.ui === null || originalSlide.ui === undefined,
+        "the deck's current first slide has no ui to seed a scratch component into.",
+      );
+      const { componentIndex } = await seedClipboardScratch(
+        api,
+        originalSlide,
+      );
+      const alphaKey = `components:${componentIndex}/0`;
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      // An input owns its keys: no duplicate fires and focus stays in the
+      // field (a duplicate would focus the stage and select the clone).
+      await page.locator("[data-editor-title]").focus();
+      await page.keyboard.press("Control+d");
+      await expect(page.locator("[data-editor-title]")).toBeFocused();
+      await expect(
+        page.locator(
+          `[data-editor-selection-frame="components:${componentIndex}/1"]`,
+        ),
+      ).toHaveCount(0);
+
+      await page.locator(`[data-editor-element-hit="${alphaKey}"]`).click({
+        force: true,
+      });
+      const inline = page.locator("[data-editor-inline-text]");
+      await expect(inline).toBeVisible();
+
+      // The caret owns the keys: Backspace edits the text, Mod+D is no
+      // duplicate, and the element survives both.
+      await inline.click();
+      await page.keyboard.press("Control+a");
+      await inline.pressSequentially("Gamma");
+      await page.keyboard.press("Backspace");
+      await expect(inline).toHaveText("Gamm");
+      await page.keyboard.press("Control+d");
+      await expect(inline).toBeVisible();
+      await expect(
+        page.locator(
+          `[data-editor-selection-frame="components:${componentIndex}/1"]`,
+        ),
+      ).toHaveCount(0);
+
+      // Escape leaves editing with the element still selected; Delete removes
+      // it, Backspace removes the next selection. The wait proves the typed
+      // text reached the engine before the deletion overwrites the element.
+      await page.keyboard.press("Escape");
+      await page.locator("[data-editor-stage]").focus();
+      await expect
+        .poll(
+          async () =>
+            scratchFirstText(
+              await readEngineDeck(api, target.deckId),
+              0,
+              scratch.id,
+            ),
+          { timeout: 20_000 },
+        )
+        .toBe("Gamm");
+      await page.keyboard.press("Delete");
+      await expect
+        .poll(scratchNames, { timeout: 20_000 })
+        .toEqual(["qa_d7_beta"]);
+
+      const betaHit = page.locator(
+        `[data-editor-element-hit="components:${componentIndex}/0"]`,
+      );
+      await expect(betaHit).toBeVisible();
+      await betaHit.click({ force: true });
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Backspace");
+      await expect.poll(scratchNames, { timeout: 20_000 }).toEqual([]);
+
+      // The reload renders the empty component: no hit target remains.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await expect(
+        page.locator(
+          `[data-editor-element-hit^="components:${componentIndex}/"]`,
+        ),
+      ).toHaveCount(0);
+    } finally {
+      if (originalSlide !== null) {
+        await restoreEngineSlide(api, originalSlide);
+      }
+      await api.dispose();
+    }
+  });
+
+  test("copies through the OS clipboard best-effort and pastes it back after a reload", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    let originalSlide: DeckSlide | null = null;
+
+    try {
+      await page
+        .context()
+        .grantPermissions(["clipboard-read", "clipboard-write"]);
+      const current = await readEngineDeck(api, target.deckId);
+      const currentSlide = current.slides[0];
+      if (currentSlide === undefined) {
+        throw new Error("the engine deck lost its first slide mid-test.");
+      }
+      originalSlide = structuredClone(currentSlide);
+      test.skip(
+        originalSlide.ui === null || originalSlide.ui === undefined,
+        "the deck's current first slide has no ui to seed a scratch component into.",
+      );
+      const { componentIndex } = await seedClipboardScratch(
+        api,
+        originalSlide,
+      );
+      const alphaKey = `components:${componentIndex}/0`;
+
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator(`[data-editor-element-hit="${alphaKey}"]`).click({
+        force: true,
+      });
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+c");
+
+      // The write is fire-and-forget; poll the OS clipboard briefly. A denial
+      // is the recorded limitation, never a fake pass.
+      let osText = "";
+      for (let attempt = 0; attempt < 20 && osText === ""; attempt += 1) {
+        osText = await page
+          .evaluate(() =>
+            navigator.clipboard.readText().catch(() => ""),
+          )
+          .catch(() => "");
+        if (osText === "") await page.waitForTimeout(150);
+      }
+      test.skip(
+        osText === "",
+        "the browser denied the OS clipboard; the in-app buffer covers paste (recorded limitation).",
+      );
+      expect(osText.startsWith(ELEMENT_CLIPBOARD_PREFIX)).toBe(true);
+      expect(
+        parseElementClipboardText(osText),
+        "the custom MIME text form must parse back to the copied payload",
+      ).not.toBeNull();
+      console.log(
+        "[qa-presentations-ui] OS clipboard round-trip verified through the prefixed text form",
+      );
+
+      // The reload drops the module-level buffer; Mod+V falls back to the OS
+      // clipboard read and pastes through the same pure path.
+      await page.reload();
+      await page.waitForSelector('[data-editor-ready="true"]');
+      await page.locator("[data-editor-stage]").focus();
+      await page.keyboard.press("Control+v");
+
+      await expect
+        .poll(
+          async () =>
+            storedScratchElements(
+              await readEngineDeck(api, target.deckId),
+              0,
+              "qa-d7-clipboard-scratch",
+            ).length,
+          { timeout: 20_000, message: "the OS-clipboard paste must persist" },
+        )
+        .toBe(3);
+      const after = await readEngineDeck(api, target.deckId);
+      const elements = storedScratchElements(
+        after,
+        0,
+        "qa-d7-clipboard-scratch",
+      );
+      expect(elements.map(clipboardElementName)).toEqual([
+        "qa_d7_alpha",
+        "qa_d7_beta",
+        "qa_d7_alpha",
+      ]);
+      expect(clipboardElementPosition(elements[2]!)).toEqual({
+        x: 16,
+        y: 16,
+      });
+    } finally {
+      if (originalSlide !== null) {
+        await restoreEngineSlide(api, originalSlide);
+      }
+      await api.dispose();
+    }
+  });
+
+  test("opens the shortcuts sheet listing exactly the implemented shortcuts and closes on Escape", async ({
+    page,
+  }) => {
+    const target = requireEditorTarget();
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      target.deckId,
+      target.templateId,
+    );
+    const api = await engineApi();
+    let originalSlide: DeckSlide | null = null;
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    try {
+      const current = await readEngineDeck(api, target.deckId);
+      const currentSlide = current.slides[0];
+      if (currentSlide === undefined) {
+        throw new Error("the engine deck lost its first slide mid-test.");
+      }
+      originalSlide = structuredClone(currentSlide);
+
+      const hitPath = clipboardPathFromKey(target.hitKey);
+      const hitComponentIndex = hitPath?.indexes[0] ?? null;
+      const countHitComponentElements = async (): Promise<number> => {
+        const deck = await readEngineDeck(api, target.deckId);
+        const components = deck.slides[0]?.ui?.components;
+        if (!Array.isArray(components) || hitComponentIndex === null) return -1;
+        const component = components[hitComponentIndex];
+        return Array.isArray(component?.elements)
+          ? component.elements.length
+          : -1;
+      };
+      const elementCountBefore = await countHitComponentElements();
+      expect(elementCountBefore).toBeGreaterThan(0);
+
+      await page.setViewportSize({ width: 1280, height: 720 });
+      await page.goto(`/tools/presentation/${presentationId}/edit`);
+      await page.waitForSelector('[data-editor-ready="true"]');
+
+      // The guard is only meaningful with a real selection an element command
+      // could act on: select the discovered element first.
+      await page
+        .locator(`[data-editor-element-hit="${target.hitKey}"]`)
+        .click({ force: true });
+      await expect(
+        page.locator(`[data-editor-selection-frame="${target.hitKey}"]`),
+      ).toBeVisible();
+
+      const toggle = page.locator("[data-editor-shortcuts-toggle]");
+      await expect(toggle).toBeVisible();
+      await toggle.click();
+      const panel = page.locator("[data-editor-shortcuts]");
+      await expect(panel).toBeVisible();
+      // The dialog behavior a role="dialog" surface promises: focus moves in.
+      await expect(panel).toBeFocused();
+
+      for (const id of [
+        "move",
+        "move-large",
+        "z-backward",
+        "z-forward",
+        "z-to-back",
+        "z-to-front",
+        "group",
+        "ungroup",
+        "copy",
+        "paste",
+        "duplicate",
+        "delete",
+        "bold",
+        "italic",
+        "underline",
+        "next-text",
+        "escape",
+        "undo",
+        "redo",
+        "redo-alt",
+      ]) {
+        await expect(
+          page.locator(`[data-editor-shortcut="${id}"]`),
+          `the sheet must list the implemented shortcut "${id}"`,
+        ).toBeVisible();
+      }
+      await expect(page.locator('[data-editor-shortcut="copy"]')).toContainText(
+        "C",
+      );
+      await expect(
+        page.locator('[data-editor-shortcut="paste"]'),
+      ).toContainText("V");
+      await expect(
+        page.locator('[data-editor-shortcut="duplicate"]'),
+      ).toContainText("D");
+      await expect(
+        page.locator('[data-editor-shortcut="delete"]'),
+      ).toContainText("Delete");
+
+      /* `toBeVisible` cannot see occlusion: probe the panel's centre with
+         `elementFromPoint` and require the hit to resolve inside the sheet.
+         The toolbar Card's backdrop-blur context used to paint the rail and
+         the assistant bar over an absolute panel; the portalled fixed sheet
+         must win the hit test at both widths. */
+      const sheetCentreIsHittable = async (): Promise<boolean> =>
+        page.evaluate(() => {
+          const sheet = document.querySelector("[data-editor-shortcuts]");
+          if (sheet === null) return false;
+          const rect = sheet.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2,
+          );
+          return hit !== null && sheet.contains(hit);
+        });
+      await expect
+        .poll(sheetCentreIsHittable, {
+          timeout: 5_000,
+          message: "the sheet must not be occluded at 1280px",
+        })
+        .toBe(true);
+
+      await page.setViewportSize({ width: 768, height: 1024 });
+      await expect
+        .poll(sheetCentreIsHittable, {
+          timeout: 5_000,
+          message: "the sheet must not be occluded (and stay clamped) at 768px",
+        })
+        .toBe(true);
+
+      // A popover owns focus while it is open: element commands must not fire
+      // — the selection stays, nothing saves, the engine is untouched.
+      await page.keyboard.press("Control+d");
+      await page.keyboard.press("Delete");
+      await expect(
+        page.locator(`[data-editor-selection-frame="${target.hitKey}"]`),
+      ).toBeVisible();
+      await expect(page.locator("[data-editor-selection-frame]")).toHaveCount(1);
+      await expect(page.locator("[data-save-status]")).toHaveAttribute(
+        "data-save-status",
+        "idle",
+      );
+      expect(await countHitComponentElements()).toBe(elementCountBefore);
+
+      await page.keyboard.press("Escape");
+      await expect(panel).toHaveCount(0);
+      await expect(toggle).toBeFocused();
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      if (originalSlide !== null) {
+        await restoreEngineSlide(api, originalSlide);
+      }
+      await api.dispose();
+    }
   });
 });
 

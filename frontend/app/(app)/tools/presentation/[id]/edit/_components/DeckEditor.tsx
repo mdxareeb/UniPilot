@@ -63,6 +63,21 @@ import {
   type ZOrderDirection,
 } from "@/lib/presentation/editorOps";
 import {
+  createElementClipboard,
+  deleteElements,
+  duplicateElements,
+  ELEMENT_CLIPBOARD_MIME,
+  ELEMENT_DUPLICATE_OFFSET,
+  elementClipboardText,
+  nextElementPasteOffset,
+  parseElementClipboardText,
+  pasteElementClipboard,
+  readElementClipboard,
+  rememberElementClipboard,
+  serializeElementClipboard,
+  type ElementClipboard,
+} from "@/lib/presentation/clipboardOps";
+import {
   deckFontEntries,
   collectAssetPaths,
   deckAssetUrl,
@@ -132,6 +147,7 @@ import {
 } from "./layoutPaletteModel";
 import { RunFormatToolbar } from "./RunFormatToolbar";
 import { SaveStatus } from "./SaveStatus";
+import { ShortcutsPopover } from "./ShortcutsPopover";
 import { TableControls } from "./TableControls";
 import { mergeStructuralAck } from "./structuralMerge";
 import {
@@ -1521,12 +1537,201 @@ export function DeckEditor({
     ]);
   }, [commit, focusStage, getState, selectedIndex, selectedKeys]);
 
+  // -------------------------------------------------------------------------
+  // Clipboard, duplicate, delete (D7)
+  //
+  // The selection is copied into the module-level buffer (`clipboardOps`),
+  // pasted with a growing offset, duplicated in place and deleted — every
+  // result lands through the same single-slide save path as every other edit
+  // (autosave + undo). The OS clipboard is best-effort only: it is attempted
+  // on copy/paste where the browser allows it, and a failure there never
+  // changes what the in-app buffer does.
+  // -------------------------------------------------------------------------
+
+  /** Stores the selection in the in-app buffer; null when nothing to copy. */
+  const copyElementSelection = useCallback((): ElementClipboard | null => {
+    const current = getState();
+    const slide = current.slides[selectedIndex];
+    if (slide === undefined) return null;
+    const payload = createElementClipboard(slide, selectedKeys);
+    if (payload === null) return null;
+    rememberElementClipboard(payload);
+    return payload;
+  }, [getState, selectedIndex, selectedKeys]);
+
+  /** Applies one payload to the current slide (one slide save). */
+  const applyClipboardPaste = useCallback(
+    (payload: ElementClipboard): boolean => {
+      const current = getState();
+      const slide = current.slides[selectedIndex];
+      if (slide === undefined) return false;
+      const result = pasteElementClipboard(slide, payload, {
+        offset: nextElementPasteOffset(),
+        anchorKey: activeElementKey,
+        makeId: freshId,
+      });
+      if (result === null) return false;
+      const nextSlides = current.slides.map((candidate) =>
+        candidate.id === slide.id ? result.slide : candidate,
+      );
+      setSelectedKeys(result.keys);
+      setActiveElementKey(result.keys[result.keys.length - 1] ?? null);
+      setInlineFocusKey(null);
+      focusStage();
+      commit({ ...current, slides: nextSlides }, "clipboard-paste", [
+        { kind: "slide", slideId: slide.id },
+      ]);
+      return true;
+    },
+    [activeElementKey, commit, focusStage, getState, selectedIndex],
+  );
+
+  const pasteElementSelection = useCallback((): boolean => {
+    const payload = readElementClipboard();
+    if (payload === null) return false;
+    return applyClipboardPaste(payload);
+  }, [applyClipboardPaste]);
+
+  const duplicateElementSelection = useCallback((): boolean => {
+    if (selectedKeys.length === 0) return false;
+    const current = getState();
+    const slide = current.slides[selectedIndex];
+    if (slide === undefined) return false;
+    const result = duplicateElements(slide, selectedKeys, {
+      offset: ELEMENT_DUPLICATE_OFFSET,
+      makeId: freshId,
+    });
+    if (result === null) return false;
+    const nextSlides = current.slides.map((candidate) =>
+      candidate.id === slide.id ? result.slide : candidate,
+    );
+    setSelectedKeys(result.keys);
+    setActiveElementKey(result.keys[result.keys.length - 1] ?? null);
+    setInlineFocusKey(null);
+    focusStage();
+    commit({ ...current, slides: nextSlides }, "element-duplicate", [
+      { kind: "slide", slideId: slide.id },
+    ]);
+    return true;
+  }, [commit, focusStage, getState, selectedIndex, selectedKeys]);
+
+  const deleteElementSelection = useCallback((): boolean => {
+    if (selectedKeys.length === 0) return false;
+    const current = getState();
+    const slide = current.slides[selectedIndex];
+    if (slide === undefined) return false;
+    const result = deleteElements(slide, selectedKeys);
+    if (result === null) return false;
+    const nextSlides = current.slides.map((candidate) =>
+      candidate.id === slide.id ? result.slide : candidate,
+    );
+    clearSelection();
+    focusStage();
+    commit({ ...current, slides: nextSlides }, "element-delete", [
+      { kind: "slide", slideId: slide.id },
+    ]);
+    return true;
+  }, [clearSelection, commit, focusStage, getState, selectedIndex, selectedKeys]);
+
+  /** Best-effort `navigator.clipboard` write (Mod+C); failures are silent. */
+  const writeOsElementClipboard = useCallback((payload: ElementClipboard) => {
+    if (typeof navigator === "undefined") return;
+    if (typeof navigator.clipboard?.writeText !== "function") return;
+    try {
+      void navigator.clipboard
+        .writeText(elementClipboardText(payload))
+        .catch(() => undefined);
+    } catch {
+      /* The in-app buffer still owns paste. */
+    }
+  }, []);
+
+  /**
+   * Best-effort `navigator.clipboard` read for Mod+V when the in-app buffer
+   * is empty. The stage must still own focus when the promise settles, so a
+   * slow permission prompt cannot paste into a surface the user moved on to.
+   */
+  const pasteFromOsClipboard = useCallback(() => {
+    if (typeof navigator === "undefined") return;
+    if (typeof navigator.clipboard?.readText !== "function") return;
+    void (async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        const stage = stageBoxRef.current;
+        const active = document.activeElement;
+        if (stage === null || active === null || !stage.contains(active)) {
+          return;
+        }
+        const payload = parseElementClipboardText(text);
+        if (payload !== null) applyClipboardPaste(payload);
+      } catch {
+        /* A denied or empty OS clipboard changes nothing. */
+      }
+    })();
+  }, [applyClipboardPaste]);
+
+  /* The OS clipboard's copy/paste events (context menu, Edit menu) ride the
+     same buffer. The shortcut path preventDefaults its own keydown, so these
+     listeners only see the menu gestures; both paths are best-effort. */
+  useEffect(() => {
+    const surfaceActive = (target: EventTarget | null): boolean => {
+      if (isEditableTarget(target)) return false;
+      const stage = stageBoxRef.current;
+      const active = document.activeElement;
+      return stage !== null && active !== null && stage.contains(active);
+    };
+
+    const onCopy = (event: ClipboardEvent) => {
+      if (!surfaceActive(event.target)) return;
+      const payload = copyElementSelection();
+      if (payload === null) return;
+      try {
+        event.clipboardData?.setData(
+          ELEMENT_CLIPBOARD_MIME,
+          serializeElementClipboard(payload),
+        );
+        event.clipboardData?.setData(
+          "text/plain",
+          elementClipboardText(payload),
+        );
+        event.preventDefault();
+      } catch {
+        /* The in-app buffer already holds the payload. */
+      }
+    };
+
+    const onPaste = (event: ClipboardEvent) => {
+      if (!surfaceActive(event.target)) return;
+      let payload: ElementClipboard | null = null;
+      try {
+        const custom =
+          event.clipboardData?.getData(ELEMENT_CLIPBOARD_MIME) ?? "";
+        const plain = event.clipboardData?.getData("text/plain") ?? "";
+        payload = parseElementClipboardText(custom !== "" ? custom : plain);
+      } catch {
+        payload = null;
+      }
+      if (payload === null) return;
+      if (applyClipboardPaste(payload)) event.preventDefault();
+    };
+
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+    };
+  }, [applyClipboardPaste, copyElementSelection]);
+
   /* Keyboard equivalents (spec §8.5): arrows move 1px / Shift 10px; the
      fork's layering chords Alt+J/K (and Shift+Alt+J/K); Mod+G / Mod+Shift+G
-     group and ungroup. The commands belong to the stage: focus must actually
-     be inside the stage box (a toolbar button, the shell or the body means
-     the keys are not ours), and never inside a text field. A sticky "stage
-     was used once" flag used to let arrows nudge and autosave from anywhere. */
+     group and ungroup; Mod+C / Mod+V / Mod+D copy, paste and duplicate; Delete
+     and Backspace remove the selection. The commands belong to the stage:
+     focus must actually be inside the stage box (a toolbar button, the shell
+     or the body means the keys are not ours), and never inside a text field —
+     inline text editing and every input keep their own clipboard/undo
+     behavior. A sticky "stage was used once" flag used to let arrows nudge and
+     autosave from anywhere. */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const stage = stageBoxRef.current;
@@ -1544,6 +1749,29 @@ export function DeckEditor({
         return;
       }
 
+      if (mod && !event.altKey && !shift) {
+        if (key === "c") {
+          const payload = copyElementSelection();
+          if (payload !== null) {
+            event.preventDefault();
+            writeOsElementClipboard(payload);
+          }
+          return;
+        }
+        if (key === "v") {
+          event.preventDefault();
+          if (!pasteElementSelection()) pasteFromOsClipboard();
+          return;
+        }
+        if (key === "d") {
+          /* The stage owns the chord even with nothing selected: letting
+             Ctrl+D through would open the browser's bookmark dialog. */
+          event.preventDefault();
+          duplicateElementSelection();
+          return;
+        }
+      }
+
       if (event.altKey && !mod && (key === "j" || key === "k")) {
         event.preventDefault();
         applyZOrder(
@@ -1558,6 +1786,11 @@ export function DeckEditor({
         return;
       }
 
+      if (!mod && !event.altKey && (event.key === "Delete" || event.key === "Backspace")) {
+        if (deleteElementSelection()) event.preventDefault();
+        return;
+      }
+
       const command = commandForArrowKey(event.key, shift);
       if (command !== null && command.kind === "nudge") {
         event.preventDefault();
@@ -1566,7 +1799,18 @@ export function DeckEditor({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [applyGroup, applyUngroup, applyZOrder, moveSelection]);
+  }, [
+    applyGroup,
+    applyUngroup,
+    applyZOrder,
+    copyElementSelection,
+    deleteElementSelection,
+    duplicateElementSelection,
+    moveSelection,
+    pasteElementSelection,
+    pasteFromOsClipboard,
+    writeOsElementClipboard,
+  ]);
 
   /* The move gesture's live values (read outside the memo so the overlay
      only recomputes when the pointer actually moved). */
@@ -1883,6 +2127,7 @@ export function DeckEditor({
             <Download aria-hidden="true" className="size-4" />
             {exporting ? "Exporting…" : "Export"}
           </Button>
+          <ShortcutsPopover />
         </div>
       </Card>
 

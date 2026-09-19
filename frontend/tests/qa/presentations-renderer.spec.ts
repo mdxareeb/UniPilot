@@ -162,6 +162,27 @@ import {
   sanitizeSvgMarkup,
   svgDataUri,
 } from "../../lib/presentation/icons";
+import {
+  clearElementClipboard,
+  cloneElementForClipboard,
+  createElementClipboard,
+  deleteElements,
+  duplicateElements,
+  ELEMENT_CLIPBOARD_MIME,
+  ELEMENT_CLIPBOARD_PREFIX,
+  ELEMENT_DUPLICATE_OFFSET,
+  ELEMENT_PASTE_OFFSET,
+  elementClipboardText,
+  nextElementPasteOffset,
+  parseElementClipboard,
+  parseElementClipboardText,
+  pasteElementClipboard,
+  readElementClipboard,
+  refreshElementIds,
+  rememberElementClipboard,
+  resetElementPasteSequence,
+  serializeElementClipboard,
+} from "../../lib/presentation/clipboardOps";
 import type {
   ChartElement,
   ChartType,
@@ -5456,5 +5477,603 @@ test.describe("table data ops — row and column structure (D5)", () => {
     });
     expect(removeTableColumn(single, 0)).toBe(single);
     expect(removeTableColumn(element, 9)).toBe(element);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task D7 — clipboard, duplicate and delete (pure)
+// ---------------------------------------------------------------------------
+
+/**
+ * One slide with a component holding a text, a vector, a flex (with a flow
+ * child), an occupied container and a group (with an absolute child), plus a
+ * second component — the shapes the D7 targeting rules branch on.
+ */
+function clipboardSlide(): DeckSlide {
+  return {
+    id: "33333333-4444-4555-8666-777777777777",
+    presentation: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    layout_group: "general",
+    layout: "clipboard_fixture",
+    index: 0,
+    content: {},
+    html_content: null,
+    speaker_note: null,
+    properties: null,
+    ui: {
+      components: [
+        {
+          id: "body",
+          description: "Body",
+          position: { x: 100, y: 50 },
+          elements: [
+            {
+              type: "text",
+              name: "heading",
+              position: { x: 10, y: 20 },
+              size: { width: 400, height: 100 },
+              runs: [{ text: "Heading" }],
+            },
+            {
+              type: "vector",
+              points: [
+                { x: 30, y: 260 },
+                { x: 230, y: 260 },
+                { x: 230, y: 300 },
+              ],
+              closed: true,
+              fill: { color: "#111111" },
+            },
+            {
+              type: "flex",
+              name: "stack",
+              direction: "column",
+              children: [
+                {
+                  type: "text",
+                  name: "caption",
+                  position: { x: 5, y: 5 },
+                  size: { width: 100, height: 40 },
+                  runs: [{ text: "Caption" }],
+                },
+              ],
+            },
+            {
+              type: "container",
+              position: { x: 0, y: 0 },
+              size: { width: 220, height: 120 },
+              child: {
+                type: "text",
+                name: "only_child",
+                runs: [{ text: "Inside" }],
+              },
+            },
+            {
+              type: "group",
+              name: "cluster",
+              position: { x: 0, y: 0 },
+              size: { width: 100, height: 100 },
+              children: [
+                {
+                  type: "image",
+                  name: "nested_image",
+                  position: { x: 0, y: 0 },
+                  size: { width: 50, height: 50 },
+                  data: "/app_data/images/n.png",
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "sidebar",
+          description: "Sidebar",
+          position: { x: 900, y: 0 },
+          elements: [
+            {
+              type: "text",
+              name: "side_note",
+              position: { x: 0, y: 0 },
+              size: { width: 100, height: 40 },
+              runs: [{ text: "Side" }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function componentElements(slide: DeckSlide, index = 0): SlideElement[] {
+  const component = slide.ui?.components[index];
+  return component !== undefined && Array.isArray(component.elements)
+    ? component.elements
+    : [];
+}
+
+/** The element's `name`, or its type where the wire shape carries none. */
+function elementName(element: SlideElement): string {
+  const name = (element as { name?: unknown }).name;
+  return typeof name === "string" ? name : element.type;
+}
+
+test.describe("clipboard operations — copy buffer (D7)", () => {
+  test("createElementClipboard deep-clones the selection with its addressing", () => {
+    const slide = clipboardSlide();
+    const before = structuredClone(slide);
+    const payload = createElementClipboard(slide, [
+      "components:0/0",
+      "components:0/2/0",
+      "components:0/9",
+    ]);
+
+    expect(payload).not.toBeNull();
+    expect(payload?.items).toHaveLength(2);
+    const heading = payload?.items[0];
+    const caption = payload?.items[1];
+    expect(heading?.sourceRoot).toBe("components");
+    expect(heading?.sourceComponentId).toBe("body");
+    expect(heading?.parentIndexes).toEqual([]);
+    expect(heading?.parentType).toBeNull();
+    expect(caption?.parentIndexes).toEqual([2]);
+    expect(caption?.parentType).toBe("flex");
+
+    // The clone is a distinct object graph; the slide was not mutated.
+    expect(heading?.element).not.toBe(componentElements(slide)[0]);
+    expect(slide).toEqual(before);
+
+    // Root-level copies carry the root identity instead of a component id.
+    const withRoot = clipboardSlide();
+    withRoot.ui!.elements = [
+      {
+        type: "text",
+        name: "root_title",
+        position: { x: 1, y: 2 },
+        size: { width: 10, height: 10 },
+        runs: [{ text: "Root" }],
+      },
+    ] as unknown;
+    const rootPayload = createElementClipboard(withRoot, ["elements:0"]);
+    expect(rootPayload?.items[0]?.sourceRoot).toBe("elements");
+    expect(rootPayload?.items[0]?.sourceComponentId).toBeNull();
+
+    expect(createElementClipboard(slide, [])).toBeNull();
+    expect(createElementClipboard(null, ["components:0/0"])).toBeNull();
+  });
+
+  test("the module buffer survives navigation and restarts the paste walk", () => {
+    clearElementClipboard();
+    expect(readElementClipboard()).toBeNull();
+
+    const payload = createElementClipboard(clipboardSlide(), ["components:0/0"]);
+    expect(payload).not.toBeNull();
+    rememberElementClipboard(payload!);
+    expect(readElementClipboard()).toBe(payload);
+    expect(ELEMENT_PASTE_OFFSET).toBe(16);
+    expect(nextElementPasteOffset()).toBe(16);
+    expect(nextElementPasteOffset()).toBe(32);
+    // A new copy restarts the walk; the explicit reset does the same.
+    rememberElementClipboard(payload!);
+    expect(nextElementPasteOffset()).toBe(16);
+    resetElementPasteSequence();
+    expect(nextElementPasteOffset()).toBe(16);
+    clearElementClipboard();
+    expect(readElementClipboard()).toBeNull();
+  });
+
+  test("refreshElementIds replaces stored ids deeply and invents none for today's wire", () => {
+    let counter = 0;
+    const makeId = () => `fresh-${(counter += 1)}`;
+    const element = {
+      type: "group",
+      id: "group-old",
+      name: "g",
+      children: [
+        { type: "text", id: "text-old", name: "t", runs: [{ text: "x" }] },
+      ],
+    } as unknown as SlideElement;
+
+    const refreshed = refreshElementIds(element, makeId);
+    expect((refreshed as { id?: string }).id).toBe("fresh-1");
+    const children = (refreshed as { children: Array<{ id?: string }> })
+      .children;
+    expect(children[0]?.id).toBe("fresh-2");
+    // The source element keeps its ids (immutability).
+    expect((element as { id?: string }).id).toBe("group-old");
+
+    // A plain wire element (no `id` anywhere) gains no id field.
+    const plain = refreshElementIds(
+      { type: "text", name: "t", runs: [{ text: "x" }] } as SlideElement,
+      makeId,
+    );
+    expect("id" in (plain as Record<string, unknown>)).toBe(false);
+
+    // The copy keeps stored ids; the fresh ids are assigned at paste time.
+    const clone = cloneElementForClipboard(element);
+    expect((clone as { id?: string }).id).toBe("group-old");
+    expect(clone).not.toBe(element);
+  });
+
+  test("serialize/parse round-trips the payload and rejects every malformed shape", () => {
+    const slide = clipboardSlide();
+    const payload = createElementClipboard(slide, [
+      "components:0/0",
+      "components:0/2/0",
+    ])!;
+    const serialized = serializeElementClipboard(payload);
+    expect(JSON.parse(serialized)).toMatchObject({
+      format: "unipilot/presentation-elements",
+      version: 1,
+    });
+    expect(parseElementClipboard(serialized)?.items).toEqual(payload.items);
+
+    expect(ELEMENT_CLIPBOARD_MIME).toBe(
+      "application/x-unipilot-presentation-elements",
+    );
+    const text = elementClipboardText(payload);
+    expect(text.startsWith(ELEMENT_CLIPBOARD_PREFIX)).toBe(true);
+    expect(parseElementClipboardText(text)?.items).toEqual(payload.items);
+    // Raw custom-MIME JSON parses through the same reader.
+    expect(parseElementClipboardText(serialized)?.items).toEqual(payload.items);
+
+    for (const junk of [
+      null,
+      undefined,
+      "",
+      "   ",
+      "not json",
+      "{}",
+      JSON.stringify({ format: "x", version: 1, items: [] }),
+      JSON.stringify({
+        format: "unipilot/presentation-elements",
+        version: 2,
+        items: payload.items,
+      }),
+      JSON.stringify({
+        format: "unipilot/presentation-elements",
+        version: 1,
+        items: [],
+      }),
+      JSON.stringify({
+        format: "unipilot/presentation-elements",
+        version: 1,
+        items: [{ element: { runs: [] }, sourceRoot: "components" }],
+      }),
+      JSON.stringify({
+        format: "unipilot/presentation-elements",
+        version: 1,
+        items: [
+          {
+            element: { type: "text" },
+            sourceRoot: "elsewhere",
+            sourceComponentId: null,
+            parentIndexes: [],
+          },
+        ],
+      }),
+    ]) {
+      expect(parseElementClipboard(junk as string | null | undefined)).toBeNull();
+    }
+  });
+});
+
+test.describe("clipboard operations — paste targeting (D7)", () => {
+  test("pastes into the same component, offsets absolute targets and selects the clones", () => {
+    const slide = clipboardSlide();
+    const before = structuredClone(slide);
+    const payload = createElementClipboard(slide, [
+      "components:0/0",
+      "components:0/1",
+    ])!;
+
+    const result = pasteElementClipboard(slide, payload, {
+      offset: ELEMENT_PASTE_OFFSET,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.keys).toEqual(["components:0/5", "components:0/6"]);
+    const elements = componentElements(result!.slide);
+    expect(elements).toHaveLength(7);
+    expect((elements[5] as TextElement).position).toEqual({ x: 26, y: 36 });
+    // Vectors translate their points (they carry no position).
+    expect((elements[6] as VectorElement).points[0]).toEqual({
+      x: 46,
+      y: 276,
+    });
+
+    // The source slide and the clipboard payload are untouched.
+    expect(slide).toEqual(before);
+    expect((payload.items[0]?.element as TextElement).position).toEqual({
+      x: 10,
+      y: 20,
+    });
+    expect((elements[5] as TextElement).runs).toEqual(
+      (elements[0] as TextElement).runs,
+    );
+  });
+
+  test("repeated pastes walk the offset and reach another slide's same component", () => {
+    const payload = createElementClipboard(clipboardSlide(), [
+      "components:0/0",
+    ])!;
+    const target: DeckSlide = {
+      ...clipboardSlide(),
+      id: "44444444-5555-4666-8777-888888888888",
+      index: 1,
+      ui: {
+        components: [
+          {
+            id: "body",
+            description: "Body",
+            position: { x: 0, y: 0 },
+            elements: [],
+          },
+        ],
+      },
+    };
+
+    rememberElementClipboard(payload);
+    const first = pasteElementClipboard(target, payload, {
+      offset: nextElementPasteOffset(),
+    })!;
+    const second = pasteElementClipboard(first.slide, payload, {
+      offset: nextElementPasteOffset(),
+    })!;
+
+    expect(first.keys).toEqual(["components:0/0"]);
+    expect(second.keys).toEqual(["components:0/1"]);
+    const elements = componentElements(second.slide);
+    // The heading's own component-local position plus the walked offsets.
+    expect((elements[0] as TextElement).position).toEqual({ x: 26, y: 36 });
+    expect((elements[1] as TextElement).position).toEqual({ x: 42, y: 52 });
+    // The source component's id keeps the clone in the same component; the
+    // component-local geometry is what the offset moves.
+    expect(target.ui?.components[0].elements).toEqual([]);
+  });
+
+  test("falls back to the anchor's component, then the first component, then the root list", () => {
+    const payload = createElementClipboard(clipboardSlide(), [
+      "components:0/0",
+    ])!;
+
+    // No `body` on the target: the anchor (sidebar) receives the paste.
+    const target = clipboardSlide();
+    target.ui!.components[0] = {
+      ...target.ui!.components[0],
+      id: "renamed_body",
+    };
+    const anchored = pasteElementClipboard(target, payload, {
+      offset: 4,
+      anchorKey: "components:1/0",
+    })!;
+    expect(anchored.keys).toEqual(["components:1/1"]);
+    // The heading's position {10,20} plus the 4 px offset.
+    expect(
+      (componentElements(anchored.slide, 1)[1] as TextElement).position,
+    ).toEqual({ x: 14, y: 24 });
+
+    // No anchor: the first component is the recorded fallback.
+    const fallback = pasteElementClipboard(target, payload, { offset: 4 })!;
+    expect(fallback.keys).toEqual(["components:0/5"]);
+
+    // A component-less slide gets the root list (created when absent).
+    const rootTarget: DeckSlide = {
+      ...clipboardSlide(),
+      ui: { components: [] },
+    };
+    const rootPasted = pasteElementClipboard(rootTarget, payload, {
+      offset: 2,
+    })!;
+    expect(rootPasted.keys).toEqual(["elements:0"]);
+    const rootElements = rootPasted.slide.ui?.elements as SlideElement[];
+    expect((rootElements[0] as TextElement).position).toEqual({ x: 12, y: 22 });
+
+    expect(
+      pasteElementClipboard(target, { items: [] }, { offset: 1 }),
+    ).toBeNull();
+  });
+
+  test("preserves a nested flow parent and falls back for an occupied container slot", () => {
+    const slide = clipboardSlide();
+
+    // The flex child copies into the same flex: an appended flow sibling.
+    const captionPayload = createElementClipboard(slide, ["components:0/2/0"])!;
+    const captionPasted = pasteElementClipboard(slide, captionPayload, {
+      offset: 16,
+    })!;
+    expect(captionPasted.keys).toEqual(["components:0/2/1"]);
+    const flex = componentElements(captionPasted.slide)[2] as FlexElement;
+    expect(flex.children).toHaveLength(2);
+    expect((flex.children[1] as TextElement).name).toBe("caption");
+    // Flow children are not offset: the layout places them.
+    expect((flex.children[1] as TextElement).position).toEqual({ x: 5, y: 5 });
+
+    // The container already holds its single child: top-level fallback.
+    const childPayload = createElementClipboard(slide, ["components:0/3/0"])!;
+    const childPasted = pasteElementClipboard(slide, childPayload, {
+      offset: 16,
+    })!;
+    expect(childPasted.keys).toEqual(["components:0/5"]);
+    expect((componentElements(childPasted.slide)[3] as { child?: unknown }).child).not.toBeNull();
+    expect(
+      (componentElements(childPasted.slide)[5] as TextElement).position,
+    ).toEqual({ x: 16, y: 16 });
+
+    // A group child keeps its absolute parent (and takes the offset).
+    const groupPayload = createElementClipboard(slide, ["components:0/4/0"])!;
+    const groupPasted = pasteElementClipboard(slide, groupPayload, {
+      offset: 10,
+    })!;
+    expect(groupPasted.keys).toEqual(["components:0/4/1"]);
+    const group = componentElements(groupPasted.slide)[4] as SlideElement & {
+      children: SlideElement[];
+    };
+    expect(group.children).toHaveLength(2);
+    expect((group.children[1] as ImageElement).position).toEqual({
+      x: 10,
+      y: 10,
+    });
+  });
+
+  test("a stored id never duplicates: each paste and duplicate answers a fresh id", () => {
+    const slide = clipboardSlide();
+    (componentElements(slide)[0] as SlideElement & { id?: string }).id =
+      "heading-id";
+    const payload = createElementClipboard(slide, ["components:0/0"])!;
+    expect((payload.items[0]?.element as { id?: string }).id).toBe(
+      "heading-id",
+    );
+
+    let counter = 0;
+    const makeId = () => `fresh-${(counter += 1)}`;
+    const first = pasteElementClipboard(slide, payload, {
+      offset: 0,
+      makeId,
+    })!;
+    const second = pasteElementClipboard(first.slide, payload, {
+      offset: 0,
+      makeId,
+    })!;
+    expect(
+      (componentElements(first.slide)[5] as { id?: string }).id,
+    ).toBe("fresh-1");
+    expect(
+      (componentElements(second.slide)[6] as { id?: string }).id,
+    ).toBe("fresh-2");
+    // The buffer still holds the copied id, not a used one.
+    expect((payload.items[0]?.element as { id?: string }).id).toBe(
+      "heading-id",
+    );
+  });
+});
+
+test.describe("clipboard operations — duplicate and delete (D7)", () => {
+  test("duplicateElements inserts after the source, offsets, and walks on repeat", () => {
+    const slide = clipboardSlide();
+    const before = structuredClone(slide);
+    expect(ELEMENT_DUPLICATE_OFFSET).toBe(16);
+
+    const result = duplicateElements(
+      slide,
+      ["components:0/0", "components:1/0"],
+      { offset: ELEMENT_DUPLICATE_OFFSET },
+    )!;
+    expect(result.keys).toEqual(["components:0/1", "components:1/1"]);
+    expect((componentElements(result.slide)[1] as TextElement).position).toEqual(
+      { x: 26, y: 36 },
+    );
+    expect(
+      (componentElements(result.slide, 1)[1] as TextElement).position,
+    ).toEqual({ x: 16, y: 16 });
+    expect(slide).toEqual(before);
+
+    // The clone is selected: repeating Mod+D walks it further.
+    const again = duplicateElements(result.slide, result.keys, {
+      offset: ELEMENT_DUPLICATE_OFFSET,
+    })!;
+    expect(again.keys).toEqual(["components:0/2", "components:1/2"]);
+    expect((componentElements(again.slide)[2] as TextElement).position).toEqual(
+      { x: 42, y: 52 },
+    );
+  });
+
+  test("a multi-selection duplicates descending so keys stay adjacent and ordered", () => {
+    const slide = clipboardSlide();
+    const result = duplicateElements(
+      slide,
+      ["components:0/0", "components:0/1"],
+      { offset: 1 },
+    )!;
+    expect(result.keys).toEqual(["components:0/1", "components:0/2"]);
+    expect(componentElements(result.slide).map(elementName)).toEqual([
+      "heading",
+      "heading",
+      "vector",
+      "vector",
+      "stack",
+      "container",
+      "cluster",
+    ]);
+  });
+
+  test("flow children duplicate in flow; a container child has no sibling slot", () => {
+    const slide = clipboardSlide();
+    const caption = duplicateElements(slide, ["components:0/2/0"], {
+      offset: 16,
+    })!;
+    const flex = componentElements(caption.slide)[2] as FlexElement;
+    expect(flex.children.map(elementName)).toEqual(["caption", "caption"]);
+    // Both keep their wire position; the flex layout places them.
+    expect((flex.children[0] as TextElement).position).toEqual({ x: 5, y: 5 });
+    expect((flex.children[1] as TextElement).position).toEqual({ x: 5, y: 5 });
+    expect(caption.keys).toEqual(["components:0/2/1"]);
+
+    // The container's single child cannot gain a sibling in place (recorded).
+    expect(
+      duplicateElements(slide, ["components:0/3/0"], { offset: 16 }),
+    ).toBeNull();
+    // A mixed selection still duplicates the representable keys.
+    const mixed = duplicateElements(
+      slide,
+      ["components:0/3/0", "components:0/0"],
+      { offset: 16 },
+    )!;
+    expect(mixed.keys).toEqual(["components:0/1"]);
+  });
+
+  test("deleteElements removes lists, clears a container slot and reports no-ops", () => {
+    const slide = clipboardSlide();
+    const before = structuredClone(slide);
+
+    const single = deleteElements(slide, ["components:0/1"])!;
+    expect(componentElements(single.slide).map(elementName)).toEqual([
+      "heading",
+      "stack",
+      "container",
+      "cluster",
+    ]);
+
+    const multi = deleteElements(slide, ["components:0/0", "components:0/1"])!;
+    expect(componentElements(multi.slide).map(elementName)).toEqual([
+      "stack",
+      "container",
+      "cluster",
+    ]);
+
+    const nested = deleteElements(slide, ["components:0/2/0"])!;
+    expect(
+      (componentElements(nested.slide)[2] as FlexElement).children,
+    ).toEqual([]);
+
+    const groupChild = deleteElements(slide, ["components:0/4/0"])!;
+    expect(
+      (componentElements(groupChild.slide)[4] as SlideElement & { children: unknown[] })
+        .children,
+    ).toEqual([]);
+
+    // A container's child is removed by clearing the slot (the honest wire).
+    const containerChild = deleteElements(slide, ["components:0/3/0"])!;
+    expect(
+      (componentElements(containerChild.slide)[3] as { child?: unknown }).child,
+    ).toBeNull();
+
+    // The source is untouched; nothing-to-delete answers null (no save).
+    expect(slide).toEqual(before);
+    expect(deleteElements(slide, [])).toBeNull();
+    expect(deleteElements(slide, ["components:9/9"])).toBeNull();
+    expect(deleteElements(slide, ["not-a-key"])).toBeNull();
+  });
+
+  test("deleting a container and its child together removes both (deepest first)", () => {
+    const slide = clipboardSlide();
+    const both = deleteElements(slide, [
+      "components:0/3",
+      "components:0/3/0",
+    ])!;
+    expect(componentElements(both.slide).map(elementName)).toEqual([
+      "heading",
+      "vector",
+      "stack",
+      "cluster",
+    ]);
   });
 });
