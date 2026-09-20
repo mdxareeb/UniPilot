@@ -488,6 +488,11 @@ type EditorTarget = {
   deckId: string;
   templateId: string;
   slideCount: number;
+  /**
+   * Every slide's layout at discovery time, in order — the fixture-deck
+   * residue guard's expected shape (the count alone would miss a swap).
+   */
+  originalLayouts: string[];
   /** `[data-editor-element-hit]` key of the first top-level text element. */
   hitKey: string;
   originalSlide: DeckSlide;
@@ -627,6 +632,7 @@ async function discoverEditorTarget(
               deckId,
               templateId: slide.layout_group || "general",
               slideCount: slides.length,
+              originalLayouts: slides.map((entry) => entry.layout),
               hitKey: `components:${ci}/${ei}`,
               originalSlide: slide,
               originalTitle:
@@ -827,15 +833,59 @@ async function deleteNewEngineConversations(
   }
 }
 
-/** One engine slide restore; a no-op failure is tolerated (best effort). */
+/**
+ * Restores one engine slide to the snapshot a case captured. The snapshot can
+ * predate Task D6's structural restores, which re-insert every stored slide
+ * with a fresh id (the production full-array replace), so the helper first
+ * re-reads the deck and resolves the **current** stored slide: by the
+ * snapshot's id when it is still valid, otherwise by the captured
+ * `index` + `layout` and, as a last resort, by `index` alone. The snapshot's
+ * fields are written under the current ids. A failed lookup or write is a
+ * loud failure, never the silent no-op the stale-id snapshot used to produce
+ * (and the `afterAll` fixture-deck residue guard catches any survivor).
+ */
 async function restoreEngineSlide(
   api: Awaited<ReturnType<typeof engineApi>>,
   slide: DeckSlide,
 ): Promise<void> {
-  await api.patch("/api/v1/ppt/presentation/slide_update", {
-    data: { slide },
+  const deckId =
+    typeof slide.presentation === "string" ? slide.presentation : "";
+  if (deckId === "") {
+    throw new Error(
+      "restoreEngineSlide: the snapshot carries no presentation id.",
+    );
+  }
+
+  const current = await readEngineDeck(api, deckId);
+  const slides = Array.isArray(current.slides) ? current.slides : [];
+  const currentSlide =
+    slides.find((candidate) => candidate.id === slide.id) ??
+    slides.find(
+      (candidate) =>
+        candidate.index === slide.index && candidate.layout === slide.layout,
+    ) ??
+    slides.find((candidate) => candidate.index === slide.index);
+  if (currentSlide === undefined) {
+    throw new Error(
+      `restoreEngineSlide: slide ${slide.id} (index ${slide.index}, layout ${slide.layout}) is not stored on deck ${deckId}.`,
+    );
+  }
+
+  const response = await api.patch("/api/v1/ppt/presentation/slide_update", {
+    data: {
+      slide: {
+        ...slide,
+        id: currentSlide.id,
+        presentation: deckId,
+        index: currentSlide.index,
+      },
+    },
     timeout: 30_000,
   });
+  expect(
+    response.ok(),
+    `engine slide restore (${deckId} → slide ${currentSlide.id}): ${response.status()}`,
+  ).toBe(true);
 }
 
 /**
@@ -891,6 +941,35 @@ async function readEngineDeck(
   });
   expect(response.ok(), `engine deck read: ${response.status()}`).toBe(true);
   return (await response.json()) as PresentationDeck;
+}
+
+/**
+ * Every QA scratch marker a live case seeds and restores: the deterministic
+ * `qa-d*-…` component ids / `qa_d*_…` element names and the `QA-C4`/`QA-D8`
+ * text markers. Used only by the residue guard — a survivor means a restore
+ * no-opped (the stale-snapshot defect this file fixed on 2026-09-20).
+ */
+const FIXTURE_RESIDUE_PATTERN = /qa[-_]d\d|QA-[CD]\d/;
+
+/** The known scratch markers found anywhere in a deck's JSON, de-duplicated. */
+function fixtureResidueMarkers(deck: PresentationDeck): string[] {
+  const markers = new Set<string>();
+  const walk = (value: unknown, depth: number): void => {
+    if (depth > 40 || value === null || value === undefined) return;
+    if (typeof value === "string") {
+      if (FIXTURE_RESIDUE_PATTERN.test(value)) markers.add(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, depth + 1);
+      return;
+    }
+    if (typeof value === "object") {
+      for (const item of Object.values(value)) walk(item, depth + 1);
+    }
+  };
+  walk(deck, 0);
+  return [...markers];
 }
 
 /** Runs the worker once against the live engine (worker-lock serialized). */
@@ -1265,6 +1344,57 @@ test.afterAll(async () => {
       .in("id", [...everCreatedDocumentIds]);
     expect(error, `own document residue read: ${error?.message}`).toBeNull();
     expect(data ?? [], "no document this spec created may survive").toHaveLength(0);
+  }
+
+  /*
+   * Fixture-deck residue guard (test hygiene, 2026-09-20). Every live case
+   * restores what it wrote, but the D1 Mod+G and D8 stubbed-stop cases used to
+   * restore a stale `beforeAll` snapshot whose slide id Task D6's structural
+   * restores had rotated, so the restore silently no-opped and left scratch
+   * content on the shared engine fixture deck. Read it back at rest: the
+   * discovered slide count and layout order, and no QA scratch marker anywhere
+   * in the stored JSON. When no editor deck was discovered (or the engine is
+   * unreachable now) the check records the honest skip instead of failing.
+   */
+  if (editorTarget === null) {
+    console.log(
+      `[qa-presentations-ui] fixture-deck residue check skipped: ${
+        editorSkipReason ?? "no editor deck was discovered"
+      }`,
+    );
+  } else {
+    const fixtureApi = await engineApi();
+    let fixtureDeck: PresentationDeck | null = null;
+    try {
+      fixtureDeck = await readEngineDeck(fixtureApi, editorTarget.deckId);
+    } catch (error) {
+      console.log(
+        `[qa-presentations-ui] fixture-deck residue check skipped: the engine deck read failed (${
+          error instanceof Error ? error.message : "unknown error"
+        })`,
+      );
+    } finally {
+      await fixtureApi.dispose();
+    }
+
+    if (fixtureDeck !== null) {
+      const slides = Array.isArray(fixtureDeck.slides)
+        ? fixtureDeck.slides
+        : [];
+      expect(
+        slides.length,
+        "the fixture deck must be back to the slide count discovery captured",
+      ).toBe(editorTarget.slideCount);
+      expect(
+        slides.map((slide) => slide.layout),
+        "the fixture deck must be back to its discovered layouts",
+      ).toEqual(editorTarget.originalLayouts);
+      const residue = fixtureResidueMarkers(fixtureDeck);
+      expect(
+        residue,
+        `the fixture deck must carry no QA scratch content: ${residue.join(" | ")}`,
+      ).toEqual([]);
+    }
   }
 });
 
