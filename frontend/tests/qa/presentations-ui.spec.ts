@@ -1362,18 +1362,32 @@ async function seedOwnedPresentation(
   userId: string,
   presentonPresentationId: string | null,
   template = "general",
-  extra: { documentId?: string } = {},
+  extra: {
+    documentId?: string;
+    prompt?: string;
+    status?: "queued" | "running" | "succeeded" | "failed";
+    slidesDone?: number;
+    slidesTotal?: number;
+    errorMessage?: string;
+  } = {},
 ): Promise<string> {
   const id = randomUUID();
   const { error } = await service.from("presentations").insert({
     id,
     user_id: userId,
-    prompt: "Asset proxy fixture",
+    prompt: extra.prompt ?? "Asset proxy fixture",
     template,
     format: "pptx",
-    status: "succeeded",
+    status: extra.status ?? "succeeded",
     presenton_presentation_id: presentonPresentationId,
     ...(extra.documentId !== undefined ? { document_id: extra.documentId } : {}),
+    ...(extra.slidesDone !== undefined ? { slides_done: extra.slidesDone } : {}),
+    ...(extra.slidesTotal !== undefined
+      ? { slides_total: extra.slidesTotal }
+      : {}),
+    ...(extra.errorMessage !== undefined
+      ? { error_message: extra.errorMessage }
+      : {}),
   });
   expect(error, `seed presentation: ${error?.message}`).toBeNull();
   createdPresentationIds.push(id);
@@ -2663,7 +2677,13 @@ test.describe("viewer route access (never skip)", () => {
     const response = await page.goto(`/tools/presentation/${presentationId}`);
 
     expect(response?.status()).toBe(200);
-    await expect(page.locator("[data-viewer-not-ready]")).toBeVisible();
+    // Next's streaming can briefly hold the streamed segment (`div#S:n`)
+    // beside the mounted tree (the phase E finding), which makes a bare
+    // `toBeVisible` a strict-mode race. `:visible` + `first()` waits for the
+    // rendered copy instead of the streamed one.
+    await expect(
+      page.locator("[data-viewer-not-ready]:visible").first(),
+    ).toBeVisible();
   });
 });
 
@@ -2827,6 +2847,199 @@ test.describe("templates browser (live engine)", () => {
 
     expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
       [],
+    );
+  });
+});
+
+/**
+ * Task F1 — the tool page's "My decks" list (spec §9): owner-only rows with
+ * the status word, template, slide count and created label, actions that
+ * degrade honestly per row state, and Open landing on the viewer. Rows are
+ * seeded through the service client and removed per test like every other
+ * fixture here; the guest case proves a visitor never sees a list.
+ */
+test.describe("tool page decks list (Task F1)", () => {
+  test.describe("no session", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
+    test("renders no decks list for a guest", async ({ page }) => {
+      await page.goto("/tools/presentation");
+
+      await expect(page.locator("[data-decks-list]")).toHaveCount(0);
+      await expect(page.locator("[data-deck-row]")).toHaveCount(0);
+      if (engineUrl !== "") {
+        await expect(page.getByText("Sign in to keep decks")).toBeVisible();
+      }
+      await expect(page).not.toHaveURL(/\/login/);
+    });
+  });
+
+  test("lists an owned deck with its actions and Open lands on the viewer", async ({
+    page,
+  }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, null, "general", {
+      prompt: "QA F1 deck",
+      slidesTotal: 8,
+    });
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto("/tools/presentation");
+
+    const row = page.locator(`[data-deck-row="${presentationId}"]`);
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("QA F1 deck");
+    await expect(row).toContainText("Ready");
+    await expect(row).toContainText("general");
+    await expect(row).toContainText("8 slides");
+    await expect(row.locator('[data-deck-action="open"]')).toBeVisible();
+    await expect(row.locator('[data-deck-action="edit"]')).toBeVisible();
+    // No stored document yet: the row links to the Documents hub, it does not
+    // claim the deck is already there.
+    await expect(row.getByRole("link", { name: "Documents" })).toBeVisible();
+
+    await row.locator('[data-deck-action="open"]').click();
+    await page.waitForURL(`**/tools/presentation/${presentationId}`);
+    // No engine id was seeded: the viewer owns the honest not-ready panel.
+    // Same strict-safe read as the viewer access case (streaming transient).
+    await expect(
+      page.locator("[data-viewer-not-ready]:visible").first(),
+    ).toBeVisible();
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
+      [],
+    );
+  });
+
+  test("offers Download and Open in Documents once the deck has a document", async ({
+    page,
+  }) => {
+    const { id: documentId } = await seedDeckDocument(qa1Id);
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      randomUUID(),
+      "general",
+      {
+        prompt: "QA F1 documented deck",
+        documentId,
+        slidesTotal: 12,
+      },
+    );
+
+    await page.goto("/tools/presentation");
+
+    const row = page.locator(`[data-deck-row="${presentationId}"]`);
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("Deck.pptx");
+    await expect(row).toContainText("12 slides");
+    await expect(row.getByRole("button", { name: "Download" })).toBeVisible();
+    await expect(
+      row.getByRole("link", { name: "Open in Documents" }),
+    ).toBeVisible();
+  });
+
+  test("never lists another user's deck (owner RLS)", async ({ page }) => {
+    const otherId = await seedOwnedPresentation(qa2Id, randomUUID(), "general", {
+      prompt: "QA2 F1 deck",
+    });
+
+    await page.goto("/tools/presentation");
+
+    await expect(page.locator(`[data-deck-row="${otherId}"]`)).toHaveCount(0);
+  });
+
+  test("degrades in-flight and failed rows honestly", async ({ page }) => {
+    const queuedId = await seedOwnedPresentation(qa1Id, null, "general", {
+      prompt: "QA F1 queued",
+      status: "queued",
+      slidesDone: 2,
+      slidesTotal: 10,
+    });
+    const runningId = await seedOwnedPresentation(
+      qa1Id,
+      randomUUID(),
+      "general",
+      {
+        prompt: "QA F1 running",
+        status: "running",
+        slidesDone: 4,
+        slidesTotal: 10,
+      },
+    );
+    const failedId = await seedOwnedPresentation(qa1Id, null, "general", {
+      prompt: "QA F1 failed",
+      status: "failed",
+      errorMessage: "The presentation service rejected this request.",
+    });
+
+    await page.goto("/tools/presentation");
+
+    // Queued without an engine id: the status word and progress, no Open/Edit.
+    const queuedRow = page.locator(`[data-deck-row="${queuedId}"]`);
+    await expect(queuedRow).toContainText("Queued");
+    await expect(queuedRow).toContainText("2/10 slides");
+    await expect(queuedRow.locator("[data-deck-action]")).toHaveCount(0);
+    await expect(queuedRow.getByRole("button")).toHaveCount(0);
+
+    // Running with an engine id: the deck exists on the service, so Open/Edit
+    // are offered while generation continues.
+    const runningRow = page.locator(`[data-deck-row="${runningId}"]`);
+    await expect(runningRow).toContainText("Generating…");
+    await expect(runningRow).toContainText("4/10 slides");
+    await expect(runningRow.locator('[data-deck-action="open"]')).toBeVisible();
+    await expect(runningRow.locator('[data-deck-action="edit"]')).toBeVisible();
+
+    // Failed: the sanitized stored message and no actions at all.
+    const failedRow = page.locator(`[data-deck-row="${failedId}"]`);
+    await expect(failedRow).toContainText("Failed");
+    await expect(failedRow).toContainText(
+      "The presentation service rejected this request.",
+    );
+    await expect(failedRow.locator("[data-deck-action]")).toHaveCount(0);
+    await expect(failedRow.getByRole("button")).toHaveCount(0);
+    await expect(failedRow.getByRole("link")).toHaveCount(0);
+  });
+
+  test("renders the honest empty state exactly when the caller owns no decks", async ({
+    page,
+  }) => {
+    test.skip(
+      engineUrl === "",
+      "PRESENTON_URL is not set; the workspace renders its unconfigured state instead of the run panel.",
+    );
+
+    // The account-level truth this case asserts against: the list must show
+    // exactly the caller's decks, capped at the page bound (never more, never
+    // invented rows), and the empty copy only when there are none.
+    const { count, error } = await service
+      .from("presentations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id);
+    expect(error, `owned decks count: ${error?.message}`).toBeNull();
+    const owned = count ?? 0;
+
+    await page.goto("/tools/presentation");
+    await expect(page.locator("[data-deck-row]")).toHaveCount(
+      Math.min(owned, 20),
+    );
+
+    if (owned === 0) {
+      await expect(page.locator("[data-decks-list]")).toHaveCount(0);
+      await expect(page.getByText("No decks yet")).toBeVisible();
+      return;
+    }
+
+    // This local account carries legacy Phase A fixture/evidence rows, so the
+    // signed-in empty state cannot be observed without deleting rows this spec
+    // does not own. The non-empty branch above is still asserted; the guest
+    // case proves a data-less visitor sees no list.
+    test.skip(
+      true,
+      `QA1 owns ${owned} pre-existing deck(s) in this local environment; the signed-in empty state is not observable here.`,
     );
   });
 });

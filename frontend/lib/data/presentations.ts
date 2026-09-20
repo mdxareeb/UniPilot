@@ -91,6 +91,55 @@ export async function getLatestPresentation(
   return result.data ? toItem(result.data as PresentationQueryRow, timeZone) : null;
 }
 
+/** The decks list's page bound (Task F1): `listPresentations` refuses more. */
+const PRESENTATION_LIST_MAX = 100;
+
+/**
+ * The owner's requests, newest first (Task F1) — the tool page's "My decks".
+ *
+ * Same read posture as `getPresentation`/`getLatestPresentation`: the
+ * request-scoped cookie client, with the owner-SELECT RLS policy as the
+ * enforcement layer, selecting the item fields plus the generated-document
+ * embed and mapping through `presentationRowToItem` — so a list row renders
+ * from exactly the shape the run panel uses, never a second mapping.
+ *
+ * `limit` is validated rather than clamped: the only caller passes the page's
+ * own size, and a bad value there is a programming error that must be loud,
+ * not a silently different list.
+ */
+export async function listPresentations(
+  userId: string,
+  limit = 20,
+): Promise<PresentationItem[]> {
+  if (
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > PRESENTATION_LIST_MAX
+  ) {
+    throw new Error(
+      `Presentation list limit must be a whole number from 1 to ${PRESENTATION_LIST_MAX}.`,
+    );
+  }
+
+  const supabase = await createClient();
+
+  const [timeZone, result] = await Promise.all([
+    readProfileTimeZone(supabase, userId),
+    supabase
+      .from("presentations")
+      .select(PRESENTATION_SELECT)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .limit(limit),
+  ]);
+
+  if (result.error) throw new Error("Failed to load presentations.");
+  return (result.data ?? []).map((row) =>
+    toItem(row as PresentationQueryRow, timeZone),
+  );
+}
+
 /**
  * Whether the owner has an export in flight that the mirror does not show yet
  * (Task C4).

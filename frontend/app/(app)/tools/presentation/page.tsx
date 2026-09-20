@@ -7,7 +7,12 @@ import {
   type PresentonTemplate,
 } from "@/lib/integrations/presenton";
 import { listDocuments } from "@/lib/data/documents";
-import { getLatestPresentation } from "@/lib/data/presentations";
+import {
+  getLatestPresentation,
+  listPresentations,
+} from "@/lib/data/presentations";
+import type { PresentationItem } from "@/lib/data/presentationValues";
+import { DecksList } from "./_components/DecksList";
 import { PresentationWorkspace } from "./_components/PresentationWorkspace";
 
 const SOURCE_MIME_TYPES = new Set([
@@ -20,11 +25,13 @@ const SOURCE_MIME_TYPES = new Set([
  *
  * The server page owns access and reads, in that order: `getWorkspaceAccess`
  * first (guest-viewable like every workspace route, TASK.md 0.17), then the
- * caller's latest request and their PDF/DOCX documents through the
- * request-scoped, RLS-enforced client. Templates come from the Presenton
- * service when one is configured; an unreachable service degrades to the
- * built-in General template rather than failing the page. The client
- * workspace owns the form, the poll and the result card.
+ * caller's latest request, their deck history and their PDF/DOCX documents
+ * through the request-scoped, RLS-enforced client (F1 adds the history read:
+ * the "My decks" section under the workspace). Templates come from the
+ * Presenton service when one is configured; an unreachable service degrades to
+ * the built-in General template rather than failing the page. The client
+ * workspace owns the form, the poll and the result card; the client decks list
+ * owns the row actions.
  *
  * Honesty posture (GATE 1): `isPresentonConfigured()` is read server-side, and
  * an unconfigured environment renders the honest blocked state — no form, no
@@ -36,17 +43,20 @@ export default async function PresentationToolPage() {
   const configured = isPresentonConfigured();
 
   let latest = null;
+  let decks: PresentationItem[] = [];
   let sourceDocuments: { id: string; name: string }[] = [];
   let templates: PresentonTemplate[] = [];
   let editHref: string | null = null;
   let viewerHref: string | null = null;
 
   if (user) {
-    const [latestPresentation, documents] = await Promise.all([
+    const [latestPresentation, documents, recentDecks] = await Promise.all([
       getLatestPresentation(user.id),
       listDocuments(user.id),
+      listPresentations(user.id),
     ]);
     latest = latestPresentation;
+    decks = recentDecks;
     sourceDocuments = documents
       .filter(
         (document) =>
@@ -101,6 +111,7 @@ export default async function PresentationToolPage() {
         editHref={editHref}
         viewerHref={viewerHref}
       />
+      {user ? <DecksList decks={decks} /> : null}
     </Container>
   );
 }
