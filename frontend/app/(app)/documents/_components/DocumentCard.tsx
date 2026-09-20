@@ -3,8 +3,10 @@
 import { useState, type FormEvent } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Eye, FileText, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { WorkspaceAction } from "@/components/app/WorkspaceAction";
 import { MotionListItem } from "@/components/motion/MotionListItem";
 import { MotionNotice } from "@/components/motion/MotionNotice";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
@@ -17,6 +19,12 @@ import {
 
 type DocumentCardProps = {
   document: DocumentItem;
+  /**
+   * The owning presentation's id when this document is a generated deck
+   * (`presentations.document_id = documents.id`, read owner-scoped by the
+   * page, Task F2). Absent for uploads and for decks the caller cannot link.
+   */
+  deckId?: string;
   onRename: (id: string, name: string) => Promise<string | null>;
   onDelete: (id: string) => Promise<string | null>;
   onRetry: (id: string) => Promise<string | null>;
@@ -29,6 +37,13 @@ type DocumentCardProps = {
  * preview / rename / delete actions. A failed document surfaces the worker's
  * sanitized copy and the 18.15 retry control.
  *
+ * Task F2 (spec §9) adds the provenance half, honestly:
+ * - a `Presentation` badge only when the row itself says
+ *   `source = 'presentation'` — an upload never gets one;
+ * - an "Open deck" link to `/tools/presentation/[id]` only when the server
+ *   page found an owned presentation pointing at this document, so the action
+ *   is proof, never a guess. Both are absent together for ordinary uploads.
+ *
  * The card never renders file content and never invents a status: the status
  * word is the vocabulary the runner writes (`Parsing…` while `indexing`,
  * `Searchable` once `indexed`, `Failed` with the sanitized reason). 18.13's
@@ -38,6 +53,7 @@ type DocumentCardProps = {
  */
 export function DocumentCard({
   document,
+  deckId,
   onRename,
   onDelete,
   onRetry,
@@ -51,6 +67,7 @@ export function DocumentCard({
   const [confirming, setConfirming] = useState(false);
 
   const failed = document.statusValue === "failed";
+  const isDeck = document.source === "presentation";
   const metadata = [
     document.mimeLabel,
     document.sizeLabel,
@@ -137,9 +154,20 @@ export function DocumentCard({
               </Button>
             </form>
           ) : (
-            <p className="wrap-anywhere text-body-md font-medium text-foreground">
-              {document.name}
-            </p>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <p className="wrap-anywhere text-body-md font-medium text-foreground">
+                {document.name}
+              </p>
+              {isDeck ? (
+                <Badge
+                  size="sm"
+                  variant="outline"
+                  data-document-source="presentation"
+                >
+                  Presentation
+                </Badge>
+              ) : null}
+            </div>
           )}
 
           <p className="flex flex-wrap items-center gap-x-1.5 font-mono text-label-caps uppercase text-muted-foreground">
@@ -164,6 +192,17 @@ export function DocumentCard({
             <span aria-hidden="true">·</span>
             <span>{document.createdLabel}</span>
           </p>
+
+          {/* Task F2 — the deck's native surface. Rendered only when the
+              server found the caller's presentation pointing at this row;
+              the viewer route owns its honest not-ready/unavailable panels. */}
+          {deckId !== undefined ? (
+            <div data-document-action="open-deck">
+              <WorkspaceAction href={`/tools/presentation/${deckId}`}>
+                Open deck
+              </WorkspaceAction>
+            </div>
+          ) : null}
 
           {/* 24.12 — the worker's sanitized failure copy, verbatim. */}
           {failed && document.errorMessage ? (

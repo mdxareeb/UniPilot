@@ -141,6 +141,45 @@ export async function listPresentations(
 }
 
 /**
+ * The `documentId → presentationId` links behind `/documents` provenance
+ * (Task F2, spec §9).
+ *
+ * The documents hub needs exactly one fact per generated deck — which
+ * presentation owns this document — so this read selects two columns instead
+ * of `listPresentations`'s full item payload + document embed, through the
+ * same owner-scoped request client (the owner-SELECT RLS policy is the
+ * enforcement layer). Rows without a stored document are dropped by the
+ * query; the result is a plain serializable record because it crosses the
+ * server → client boundary as a workspace prop.
+ *
+ * Newest first, bounded by the deck list's own cap: a user's generated
+ * documents are already bounded by the free-tier document guard (23.12,
+ * 50 rows), so the cap is comfortably above anything this map can hold.
+ */
+export async function listPresentationDocumentLinks(
+  userId: string,
+): Promise<Record<string, string>> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("presentations")
+    .select("id, document_id")
+    .eq("user_id", userId)
+    .not("document_id", "is", null)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: true })
+    .limit(PRESENTATION_LIST_MAX);
+
+  if (error) throw new Error("Failed to load presentation documents.");
+
+  const links: Record<string, string> = {};
+  for (const row of data ?? []) {
+    if (row.document_id !== null) links[row.document_id] = row.id;
+  }
+  return links;
+}
+
+/**
  * Whether the owner has an export in flight that the mirror does not show yet
  * (Task C4).
  *

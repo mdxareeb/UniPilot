@@ -35,7 +35,7 @@ import {
 } from "./documentValues";
 
 const DOCUMENT_COLUMNS =
-  "id, name, storage_path, mime_type, size_bytes, page_count, status, error_message, created_at";
+  "id, name, storage_path, mime_type, size_bytes, page_count, status, error_message, created_at, source";
 
 /** How many bytes the finalize sniff reads; every signature is ≤ 8. */
 const MAGIC_SNIFF_BYTES = 16;

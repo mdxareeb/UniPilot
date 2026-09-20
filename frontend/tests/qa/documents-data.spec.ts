@@ -237,6 +237,7 @@ test.describe("documents data (23.x)", () => {
           status: "uploaded",
           error_message: null,
           created_at: "2026-09-12T09:00:00.000Z",
+          source: "upload",
         },
         "UTC",
       ),
@@ -251,7 +252,28 @@ test.describe("documents data (23.x)", () => {
       statusValue: "uploaded",
       statusLabel: "Uploaded",
       createdLabel: "Sat, Sep 12",
+      source: "upload",
     });
+
+    /* ---- provenance mapping (Task F2, 31.x) ----------------------------- */
+    const deckRow = {
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "Seminar recap.pptx",
+      storage_path: null,
+      mime_type:
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      size_bytes: null,
+      page_count: null,
+      status: "uploaded",
+      error_message: null,
+      created_at: "2026-09-12T09:00:00.000Z",
+      source: "presentation",
+    };
+    expect(documentRowToItem(deckRow, "UTC").source).toBe("presentation");
+    // An unknown stored value is omitted, never guessed into a badge.
+    expect(
+      documentRowToItem({ ...deckRow, source: "imported" }, "UTC").source,
+    ).toBeUndefined();
   });
 
   test("private bucket: own access works, cross-user and anon are denied", async () => {

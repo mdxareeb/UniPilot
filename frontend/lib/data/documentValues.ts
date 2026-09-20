@@ -37,6 +37,7 @@ export type DocumentRow = Pick<
   | "status"
   | "error_message"
   | "created_at"
+  | "source"
 >;
 
 export const DOCUMENT_BUCKET = "documents";
@@ -93,6 +94,15 @@ export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
 };
 
 /**
+ * Where a document came from (31.x, migration `presentation_generator`):
+ * `upload` for the student's own file, `presentation` for a deck the
+ * generator stored. The `/documents` provenance badge reads `presentation`
+ * only; an unknown stored value is omitted rather than defaulted (Task F2).
+ */
+export const DOCUMENT_SOURCES = ["upload", "presentation"] as const;
+export type DocumentSource = (typeof DOCUMENT_SOURCES)[number];
+
+/**
  * What the documents surface renders: display-ready strings mapped by the
  * data layer, plus the machine values a later preview/rename needs.
  */
@@ -109,6 +119,12 @@ export type DocumentItem = {
   sizeLabel?: string;
   statusValue: DocumentStatus;
   statusLabel: string;
+  /**
+   * Provenance (31.x): `upload` for the student's own file, `presentation`
+   * for a generated deck. Omitted when the stored value is not a known one,
+   * so the card badges only what the row actually claims.
+   */
+  source?: DocumentSource;
   /**
    * Sanitized processing failure copy (24.12) — set only for `failed` rows,
    * written by the worker; the UI renders it verbatim, never a raw error.
@@ -269,6 +285,9 @@ export function documentRowToItem(
   };
 
   if (row.storage_path !== null) item.storagePath = row.storage_path;
+  if ((DOCUMENT_SOURCES as readonly string[]).includes(row.source)) {
+    item.source = row.source as DocumentSource;
+  }
   if (row.mime_type !== null) {
     item.mimeType = row.mime_type;
     if (isDocumentMimeType(row.mime_type)) {

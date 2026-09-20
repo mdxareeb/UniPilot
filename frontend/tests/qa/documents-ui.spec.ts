@@ -11,14 +11,18 @@
  * Storage upload with real progress → server-side finalize; a fake PDF is
  * rejected by magic-byte sniffing with its row and object cleaned up; rename
  * keeps the storage path and delete removes object + row (+ chunks). A guest
- * click opens the shared sign-in prompt. Cleanup is prefix-scoped plus a full
- * storage sweep of both QA prefixes, so the spec is repeatable and leaves no
- * residue.
+ * click opens the shared sign-in prompt. Task F2 adds the provenance flow: a
+ * seeded `source='presentation'` document + its `presentations` row must badge
+ * and offer "Open deck" (reaching the viewer), while an upload control row
+ * gets neither. Cleanup is prefix-scoped plus a full storage sweep of both QA
+ * prefixes (presentation rows are tracked by id), so the spec is repeatable
+ * and leaves no residue.
  *
  * Local-only by construction; hosted is never contacted.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
 import { sanitizeStorageName } from "../../lib/data/documentValues";
 
 const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
@@ -36,6 +40,13 @@ const BUCKET = "documents";
 
 /** Every row this spec creates carries this prefix, so teardown is exact. */
 const PREFIX = "UI 23x";
+
+/**
+ * Task F2 provenance fixtures: the generated-deck document is swept by the
+ * same `${PREFIX}%` row/storage cleanup as uploads, but its presentation row
+ * has no name prefix to match, so it is tracked by id.
+ */
+const seededPresentationIds: string[] = [];
 
 let qa1Id = "";
 let qa2Id = "";
@@ -89,6 +100,15 @@ async function sweepStorage(userId: string): Promise<void> {
  * document id, not our title prefix, so they are swept by owner).
  */
 async function cleanup() {
+  if (seededPresentationIds.length > 0) {
+    // The deck rows first (their `document_id` FK would otherwise SET NULL
+    // and leave them behind after the document sweep below).
+    await service
+      .from("presentations")
+      .delete()
+      .in("id", seededPresentationIds);
+    seededPresentationIds.length = 0;
+  }
   for (const userId of [qa1Id, qa2Id]) {
     if (!userId) continue;
     const { data: rows } = await service
@@ -352,6 +372,100 @@ test.describe("documents UI (23.x)", () => {
 
     const object = await service.storage.from(BUCKET).info(storagePath);
     expect(object.error, "object must be gone").not.toBeNull();
+
+    expect(errors, errors.join("\n")).toEqual([]);
+  });
+
+  /* Task F2 (spec §9) — /documents provenance. The generated-deck row pair is
+     seeded exactly as the worker writes it (`documents.source =
+     'presentation'` plus the `presentations` row pointing at it through
+     `document_id`); the control row is an ordinary upload. The badge and
+     "Open deck" must appear only for the deck, and Open deck must reach the
+     viewer. */
+  test("provenance: a generated deck badges and opens its viewer; uploads do not", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const deckName = `${PREFIX} seminar-recap.pptx`;
+    const uploadName = `${PREFIX} provenance-control.pdf`;
+    const deckDocumentId = randomUUID();
+    const uploadDocumentId = randomUUID();
+    const presentationId = randomUUID();
+    seededPresentationIds.push(presentationId);
+
+    const { error: rowsError } = await service.from("documents").insert([
+      {
+        id: deckDocumentId,
+        user_id: qa1Id,
+        name: deckName,
+        mime_type:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        size_bytes: 4096,
+        storage_path: null,
+        status: "uploaded",
+        source: "presentation",
+      },
+      {
+        id: uploadDocumentId,
+        user_id: qa1Id,
+        name: uploadName,
+        mime_type: "application/pdf",
+        size_bytes: 1024,
+        storage_path: null,
+        status: "uploaded",
+        source: "upload",
+      },
+    ]);
+    expect(rowsError, `fixture rows: ${rowsError?.message}`).toBeNull();
+
+    const { error: deckError } = await service.from("presentations").insert({
+      id: presentationId,
+      user_id: qa1Id,
+      prompt: `${PREFIX} provenance fixture`,
+      template: "general",
+      format: "pptx",
+      status: "succeeded",
+      document_id: deckDocumentId,
+    });
+    expect(deckError, `fixture deck: ${deckError?.message}`).toBeNull();
+
+    await page.goto("/documents");
+    await page.waitForLoadState("networkidle");
+
+    const deckCard = page.locator(`[data-document-id="${deckDocumentId}"]`);
+    const uploadCard = page.locator(`[data-document-id="${uploadDocumentId}"]`);
+    await expect(deckCard).toBeVisible({ timeout: 30_000 });
+    await expect(uploadCard).toBeVisible({ timeout: 30_000 });
+
+    // Provenance badge: the presentation row only.
+    const badge = deckCard.locator('[data-document-source="presentation"]');
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText("Presentation");
+    await expect(
+      uploadCard.locator('[data-document-source="presentation"]'),
+    ).toHaveCount(0);
+
+    // Open deck: only where the server map has an entry, pointing at the
+    // owner's presentation.
+    const openDeck = deckCard.locator('[data-document-action="open-deck"] a');
+    await expect(openDeck).toHaveAttribute(
+      "href",
+      `/tools/presentation/${presentationId}`,
+    );
+    await expect(
+      uploadCard.locator('[data-document-action="open-deck"]'),
+    ).toHaveCount(0);
+
+    // It reaches the viewer, which owns the honest not-ready panel (the
+    // fixture stores no engine id).
+    await openDeck.click();
+    await page.waitForURL(`**/tools/presentation/${presentationId}`, {
+      timeout: 30_000,
+    });
+    await expect(
+      page.locator("[data-viewer-not-ready]:visible").first(),
+    ).toBeVisible({ timeout: 30_000 });
 
     expect(errors, errors.join("\n")).toEqual([]);
   });

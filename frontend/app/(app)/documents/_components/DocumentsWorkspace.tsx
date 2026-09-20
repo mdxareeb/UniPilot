@@ -52,6 +52,12 @@ export type PreviewResult = {
 type DocumentsContextValue = {
   /** The hub's live list: server-loaded, then mutated optimistically. */
   documents: DocumentItem[];
+  /**
+   * `documentId → presentationId` for the caller's generated decks (Task F2):
+   * a card with an entry offers "Open deck". Server-read, so it refreshes
+   * with `initialDocuments` on `router.refresh()`.
+   */
+  deckByDocumentId: Record<string, string>;
   phase: UploadPhase;
   /** Real byte progress (0–100), reported by the XHR upload. */
   progress: number;
@@ -161,13 +167,20 @@ const INDEXING_POLL_MS = 4_000;
  * worker owns the status, `revalidatePath` already refreshes after actions,
  * and a bounded interval is the smallest honest mechanism until a realtime
  * channel is justified.
+ *
+ * Task F2: `deckByDocumentId` rides the same server render. It is the
+ * caller's own owner-RLS read (page → here → hub), never guessed client-side,
+ * so a card can only claim a deck that really exists.
  */
 export function DocumentsWorkspace({
   initialDocuments,
+  deckByDocumentId,
   guest,
   children,
 }: {
   initialDocuments: DocumentItem[];
+  /** `documentId → presentationId` for generated decks (Task F2). */
+  deckByDocumentId: Record<string, string>;
   guest: boolean;
   children: ReactNode;
 }) {
@@ -426,6 +439,7 @@ export function DocumentsWorkspace({
   const value = useMemo<DocumentsContextValue>(
     () => ({
       documents,
+      deckByDocumentId,
       phase,
       progress,
       pendingName,
@@ -440,6 +454,7 @@ export function DocumentsWorkspace({
     }),
     [
       documents,
+      deckByDocumentId,
       phase,
       progress,
       pendingName,

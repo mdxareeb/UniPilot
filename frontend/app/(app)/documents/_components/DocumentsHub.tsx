@@ -60,6 +60,7 @@ export function DocumentsHub({
 }) {
   const {
     documents,
+    deckByDocumentId,
     phase,
     progress,
     pendingName,
@@ -355,6 +356,7 @@ export function DocumentsHub({
                 <DocumentCard
                   key={document.id}
                   document={document}
+                  deckId={deckByDocumentId[document.id]}
                   onRename={rename}
                   onDelete={remove}
                   onRetry={retry}
