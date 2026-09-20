@@ -120,6 +120,7 @@ import {
   UNSUPPORTED_INFOGRAPHIC_NOTE,
   unsupportedInfographicCapabilities,
 } from "../../lib/presentation/infographicOps";
+import { PRESENTATION_DELETE_UNREACHABLE_ERROR } from "../../lib/data/presentationErrors";
 import { acquireWorkerLock } from "./workerLock";
 
 const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
@@ -184,6 +185,14 @@ const everCreatedPresentationIds: string[] = [];
  */
 const createdExportJobIds: string[] = [];
 const everCreatedExportJobIds: string[] = [];
+
+/**
+ * Throwaway engine decks the F4 live delete cases create
+ * (`POST /presentation/create/blank`). The delete flow removes them itself;
+ * this list is the failure-path cleanup, and its sweep tolerates the 404 a
+ * successful delete leaves.
+ */
+const engineDeckIds: string[] = [];
 
 /** Enqueue-window slack: Node and Postgres clocks may differ by a little. */
 const ENQUEUE_WINDOW_SLACK_MS = 5_000;
@@ -338,7 +347,7 @@ async function discoverDeckAssets(): Promise<
     return { primary, template: templateAsset };
   } catch (error) {
     return {
-      reason: `engine discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      reason: `engine discovery failed: ${engineErrorText(error)}`,
     };
   } finally {
     await api.dispose();
@@ -676,7 +685,7 @@ async function discoverBrowserTemplates(): Promise<
     };
   } catch (error) {
     return {
-      reason: `template discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      reason: `template discovery failed: ${engineErrorText(error)}`,
     };
   } finally {
     await api.dispose();
@@ -808,7 +817,7 @@ async function discoverViewerDecks(): Promise<
     return { viewer, smartDeckId };
   } catch (error) {
     return {
-      reason: `engine discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      reason: `engine discovery failed: ${engineErrorText(error)}`,
     };
   } finally {
     await api.dispose();
@@ -888,7 +897,7 @@ async function discoverChatRaceTarget(
     return { deckId, conversationIds: [ids[0], ids[1]] };
   } catch (error) {
     return {
-      reason: `chat conversation discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      reason: `chat conversation discovery failed: ${engineErrorText(error)}`,
     };
   } finally {
     await api.dispose();
@@ -926,7 +935,7 @@ async function discoverCustomTheme(): Promise<
     return { id: named.id, label: (named.name as string).trim() };
   } catch (error) {
     return {
-      reason: `custom theme discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      reason: `custom theme discovery failed: ${engineErrorText(error)}`,
     };
   } finally {
     await api.dispose();
@@ -1002,7 +1011,7 @@ async function discoverEditorTarget(
     };
   } catch (error) {
     return {
-      reason: `editor target discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      reason: `editor target discovery failed: ${engineErrorText(error)}`,
     };
   } finally {
     await api.dispose();
@@ -1082,7 +1091,7 @@ async function discoverEditorImageTarget(
     return { reason: "the deck has no top-level image element with a frame." };
   } catch (error) {
     return {
-      reason: `image target discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      reason: `image target discovery failed: ${engineErrorText(error)}`,
     };
   } finally {
     await api.dispose();
@@ -1137,6 +1146,99 @@ async function engineApi() {
       ? { extraHTTPHeaders: { Authorization: `Bearer ${key}` } }
       : {}),
   });
+}
+
+/**
+ * Playwright's APIRequestContext errors embed a request call log that includes
+ * the `Authorization` header. The engine's bearer must never reach a test log,
+ * a skip reason or a report, so callers strip from the call log onward before
+ * the text is logged or embedded in a skip reason.
+ */
+function engineErrorText(error: unknown): string {
+  const message =
+    error instanceof Error && error.message !== ""
+      ? error.message
+      : "unknown error";
+  const callLog = message.indexOf("Call log:");
+  return callLog >= 0 ? message.slice(0, callLog).trim() : message;
+}
+
+/**
+ * Whether this run's engine answers right now. The spec process and the Next
+ * server read the same `PRESENTON_URL` (playwright.config.ts loads the env
+ * file into this process and the webServer inherits it), so this is the fact
+ * the delete action's adapter will see. `false` for an unset URL.
+ */
+let engineReachability: boolean | null = null;
+async function isEngineReachable(): Promise<boolean> {
+  if (engineReachability !== null) return engineReachability;
+  if (engineUrl === "") {
+    engineReachability = false;
+    return false;
+  }
+  try {
+    const response = await fetch(
+      `${engineUrl.replace(/\/+$/, "")}/api/v1/auth/status`,
+      { signal: AbortSignal.timeout(2_000) },
+    );
+    engineReachability = response.ok;
+  } catch {
+    engineReachability = false;
+  }
+  return engineReachability;
+}
+
+/**
+ * Removes every throwaway engine deck the F4 live cases created. Best effort
+ * by design: the live case itself asserts the deck is gone after the UI
+ * delete, and this sweep exists for the failure paths only (a 404 from an
+ * already-deleted deck is a response, not a throw).
+ */
+async function deleteCreatedEngineDecks(): Promise<void> {
+  if (engineDeckIds.length === 0) return;
+  const ids = [...engineDeckIds];
+  engineDeckIds.length = 0;
+  if (engineUrl === "") return;
+
+  let api: Awaited<ReturnType<typeof engineApi>> | null = null;
+  try {
+    api = await engineApi();
+    for (const id of ids) {
+      await api.delete(`/api/v1/ppt/presentation/${id}`, { timeout: 15_000 });
+    }
+  } catch {
+    // Best effort; the residue is recorded by the live case's own assertion.
+  } finally {
+    await api?.dispose();
+  }
+}
+
+/**
+ * Creates one throwaway blank deck on the live engine (F4's delete target).
+ * A failure is a recorded reason, never a fake id: the caller skips honestly.
+ */
+async function createBlankEngineDeck(
+  api: Awaited<ReturnType<typeof engineApi>>,
+): Promise<{ id: string } | { reason: string }> {
+  try {
+    const created = await api.post("/api/v1/ppt/presentation/create/blank", {
+      timeout: 30_000,
+    });
+    if (!created.ok()) {
+      return {
+        reason: `the engine's blank-deck route answered ${created.status()}.`,
+      };
+    }
+    const deck = (await created.json()) as { id?: unknown };
+    if (typeof deck.id !== "string" || deck.id === "") {
+      return { reason: "the engine returned a blank deck without an id." };
+    }
+    return { id: deck.id };
+  } catch (error) {
+    return {
+      reason: `the engine could not create a throwaway deck: ${engineErrorText(error)}`,
+    };
+  }
 }
 
 /**
@@ -1438,6 +1540,18 @@ async function seedDeckDocument(
   return { id, storagePath };
 }
 
+/** Whether one exact bucket key still exists under its owner folder (F4). */
+async function storageObjectExists(storagePath: string): Promise<boolean> {
+  const slash = storagePath.lastIndexOf("/");
+  const { data, error } = await service.storage
+    .from("documents")
+    .list(storagePath.slice(0, slash));
+  expect(error, `storage list for ${storagePath}: ${error?.message}`).toBeNull();
+  return (data ?? []).some(
+    (entry) => entry.name === storagePath.slice(slash + 1),
+  );
+}
+
 /**
  * Waits for the `presentation.export` job the Export click enqueues for
  * `presentationId`, scoped to rows created inside this click's enqueue window
@@ -1644,6 +1758,10 @@ test.beforeAll(async () => {
 });
 
 test.afterEach(async () => {
+  // Throwaway engine decks first (F4): the live delete removes its own, but a
+  // test that failed before the click must not leave one on the service.
+  await deleteCreatedEngineDecks();
+
   // Export jobs first, while the presentation ids that identify their payloads
   // are still tracked: the WhatsApp projects assert absolute zero QA1 job
   // residue, so a row must not survive even a test that failed mid-flow.
@@ -1749,7 +1867,7 @@ test.afterAll(async () => {
     } catch (error) {
       console.log(
         `[qa-presentations-ui] fixture-deck residue check skipped: the engine deck read failed (${
-          error instanceof Error ? error.message : "unknown error"
+          engineErrorText(error)
         })`,
       );
     } finally {
@@ -2978,7 +3096,8 @@ test.describe("tool page decks list (Task F1)", () => {
 
     await page.goto("/tools/presentation");
 
-    // Queued without an engine id: the status word and progress, no Open/Edit.
+    // Queued without an engine id: the status word and progress, no Open/Edit
+    // and no Delete while a worker may still write the row.
     const queuedRow = page.locator(`[data-deck-row="${queuedId}"]`);
     await expect(queuedRow).toContainText("Queued");
     await expect(queuedRow).toContainText("2/10 slides");
@@ -2993,14 +3112,16 @@ test.describe("tool page decks list (Task F1)", () => {
     await expect(runningRow.locator('[data-deck-action="open"]')).toBeVisible();
     await expect(runningRow.locator('[data-deck-action="edit"]')).toBeVisible();
 
-    // Failed: the sanitized stored message and no actions at all.
+    // Failed: the sanitized stored message, no Open/Edit and no Documents
+    // link — Task F4 leaves Delete as the row's one cleanup action.
     const failedRow = page.locator(`[data-deck-row="${failedId}"]`);
     await expect(failedRow).toContainText("Failed");
     await expect(failedRow).toContainText(
       "The presentation service rejected this request.",
     );
-    await expect(failedRow.locator("[data-deck-action]")).toHaveCount(0);
-    await expect(failedRow.getByRole("button")).toHaveCount(0);
+    await expect(failedRow.locator('[data-deck-action="delete"]')).toBeVisible();
+    await expect(failedRow.locator("[data-deck-action]")).toHaveCount(1);
+    await expect(failedRow.getByRole("button")).toHaveCount(1);
     await expect(failedRow.getByRole("link")).toHaveCount(0);
   });
 
@@ -3041,6 +3162,280 @@ test.describe("tool page decks list (Task F1)", () => {
       true,
       `QA1 owns ${owned} pre-existing deck(s) in this local environment; the signed-in empty state is not observable here.`,
     );
+  });
+});
+
+/**
+ * Task F4 — the deck-delete flow (spec §7.4, §10-F).
+ *
+ * The row's Delete opens the shared `Modal` confirmation (never a single
+ * click); the destructive confirm removes the engine deck, the generated
+ * document and the row, and the list drops the row while `/documents` loses
+ * the file. The live case creates its own throwaway engine deck
+ * (`POST /presentation/create/blank`) and never touches a discovered fixture
+ * deck. The unreachable case is the dead-loopback evidence pass's assertion:
+ * when the suite's `PRESENTON_URL` points at an unused loopback port the
+ * delete must answer the permanent honest copy and keep the row whole — in an
+ * engine-up run that case skips with the reason, like every live case.
+ *
+ * Every seeded row/object and engine deck is removed by the flow itself or by
+ * the file's afterEach/afterAll sweeps (both tolerate already-gone items).
+ */
+test.describe("deck delete (Task F4)", () => {
+  test("never single-clicks: Cancel keeps the deck, Delete removes it", async ({
+    page,
+  }) => {
+    const presentationId = await seedOwnedPresentation(qa1Id, null, "general", {
+      prompt: "QA F4 deck without file",
+      slidesTotal: 6,
+    });
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto("/tools/presentation");
+    // `:visible` is the strict-safe read for the streaming transient this spec
+    // documents (a hidden RSC template node can coexist with the live row).
+    const row = page.locator(
+      `[data-deck-row="${presentationId}"]:visible`,
+    );
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("QA F4 deck without file");
+    await expect(row.locator('[data-deck-action="delete"]')).toBeVisible();
+
+    // Cancel is not a delete: the dialog closes and the row stays.
+    await row.locator('[data-deck-action="delete"]').click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Delete this deck?");
+    await expect(dialog).toContainText("QA F4 deck without file");
+    // Let the shared Modal's entrance settle before the evidence frame.
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: "screenshots/phase-f-delete-confirm.png" });
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(row).toBeVisible();
+    const stillThere = await service
+      .from("presentations")
+      .select("id")
+      .eq("id", presentationId);
+    expect(stillThere.error, `cancel read: ${stillThere.error?.message}`).toBeNull();
+    expect(stillThere.data ?? []).toHaveLength(1);
+
+    // The modal is usable at the narrow breakpoint too.
+    await page.setViewportSize({ width: 375, height: 812 });
+    await row.locator('[data-deck-action="delete"]').click();
+    await expect(dialog).toBeVisible();
+    await page.waitForTimeout(300);
+    await page.screenshot({
+      path: "screenshots/phase-f-delete-confirm-375.png",
+    });
+
+    await dialog.locator("[data-deck-delete-confirm]").click();
+    await expect(dialog).not.toBeVisible();
+    await expect(row).toHaveCount(0);
+
+    const deleted = await service
+      .from("presentations")
+      .select("id")
+      .eq("id", presentationId);
+    expect(deleted.error, `deleted read: ${deleted.error?.message}`).toBeNull();
+    expect(deleted.data ?? []).toHaveLength(0);
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.screenshot({ path: "screenshots/phase-f-delete-success.png" });
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
+      [],
+    );
+  });
+
+  test("deletes a live deck, its engine deck and its document", async ({
+    page,
+  }) => {
+    test.skip(
+      engineUrl === "",
+      "PRESENTON_URL is not set; the live engine delete has no service to remove the deck from.",
+    );
+
+    const api = await engineApi();
+    try {
+      // A throwaway blank deck of our own: the delete removes this, never a
+      // discovered fixture deck.
+      const blank = await createBlankEngineDeck(api);
+      if ("reason" in blank) {
+        test.skip(true, blank.reason);
+        return;
+      }
+      engineDeckIds.push(blank.id);
+
+      const { id: documentId, storagePath } = await seedDeckDocument(qa1Id);
+      const presentationId = await seedOwnedPresentation(
+        qa1Id,
+        blank.id,
+        "general",
+        {
+          prompt: "QA F4 live deck",
+          documentId,
+          slidesTotal: 4,
+        },
+      );
+
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      });
+      page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+      await page.goto("/tools/presentation");
+      const row = page.locator(`[data-deck-row="${presentationId}"]:visible`);
+      await expect(row).toBeVisible();
+      await expect(row).toContainText("Deck.pptx");
+
+      await row.locator('[data-deck-action="delete"]').click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+      // The copy names both halves the row's facts actually have.
+      await expect(dialog).toContainText(
+        "will be deleted from the presentation service",
+      );
+      await expect(dialog).toContainText("removed from Documents");
+
+      await dialog.locator("[data-deck-delete-confirm]").click();
+      await expect(dialog).not.toBeVisible();
+      await expect(row).toHaveCount(0);
+
+      // The engine deck is gone for real.
+      const engineRead = await api.get(
+        `/api/v1/ppt/presentation/${blank.id}`,
+        { timeout: 15_000 },
+      );
+      expect(
+        engineRead.status(),
+        "the engine deck must be deleted with the row",
+      ).toBe(404);
+
+      // The row, the document row and the bucket object are all gone.
+      const rowRead = await service
+        .from("presentations")
+        .select("id")
+        .eq("id", presentationId);
+      expect(rowRead.error, `deleted row read: ${rowRead.error?.message}`).toBeNull();
+      expect(rowRead.data ?? []).toHaveLength(0);
+
+      const documentRead = await service
+        .from("documents")
+        .select("id")
+        .eq("id", documentId);
+      expect(
+        documentRead.error,
+        `deleted document read: ${documentRead.error?.message}`,
+      ).toBeNull();
+      expect(documentRead.data ?? []).toHaveLength(0);
+      expect(
+        await storageObjectExists(storagePath),
+        "the deck's bucket object must be removed with its row",
+      ).toBe(false);
+
+      // `/documents` no longer shows the file.
+      await page.goto("/documents");
+      await expect(page.locator(`[data-document-id="${documentId}"]`)).toHaveCount(0);
+      await page.screenshot({
+        path: "screenshots/phase-f-delete-documents-clean.png",
+      });
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  test("never exposes another user's deck and never deletes it", async ({
+    page,
+  }) => {
+    // QA2's row is the object under test; QA1's own deletable row proves the
+    // delete path runs while the foreign row stays untouched.
+    const foreignId = await seedOwnedPresentation(qa2Id, randomUUID(), "general", {
+      prompt: "QA2 F4 deck",
+    });
+    const ownId = await seedOwnedPresentation(qa1Id, null, "general", {
+      prompt: "QA F4 own deck",
+    });
+
+    await page.goto("/tools/presentation");
+    await expect(page.locator(`[data-deck-row="${foreignId}"]`)).toHaveCount(0);
+
+    const ownRow = page.locator(`[data-deck-row="${ownId}"]:visible`);
+    await expect(ownRow).toBeVisible();
+    await ownRow.locator('[data-deck-action="delete"]').click();
+    const dialog = page.getByRole("dialog");
+    await dialog.locator("[data-deck-delete-confirm]").click();
+    await expect(ownRow).toHaveCount(0);
+
+    // The foreign row survived the whole flow (the client DELETE denial and
+    // the service role's user scoping are pinned in qa-presentation-jobs).
+    const foreign = await service
+      .from("presentations")
+      .select("id, user_id")
+      .eq("id", foreignId);
+    expect(foreign.error, `foreign read: ${foreign.error?.message}`).toBeNull();
+    expect(foreign.data ?? []).toHaveLength(1);
+    expect(foreign.data?.[0]?.user_id).toBe(qa2Id);
+  });
+
+  test("fails honestly while the engine is unreachable (dead-loopback evidence run)", async ({
+    page,
+  }) => {
+    test.skip(
+      engineUrl === "",
+      "PRESENTON_URL is not set; the unconfigured delete copy is pinned by the qa-presentation-jobs adapter guards instead.",
+    );
+    test.skip(
+      await isEngineReachable(),
+      "this run's engine is reachable; the unreachable delete copy is proven by the dead-loopback evidence pass (PRESENTON_URL pointing at an unused loopback port).",
+    );
+
+    // The row's engine id makes the action attempt the engine delete, which
+    // fails at the transport; nothing local may be removed afterwards.
+    const presentationId = await seedOwnedPresentation(
+      qa1Id,
+      randomUUID(),
+      "general",
+      { prompt: "QA F4 offline deck", slidesTotal: 3 },
+    );
+
+    await page.goto("/tools/presentation");
+    const row = page.locator(`[data-deck-row="${presentationId}"]:visible`);
+    await expect(row).toBeVisible();
+
+    await row.locator('[data-deck-action="delete"]').click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.locator("[data-deck-delete-confirm]").click();
+
+    // The sanitized permanent failure is shown and the deck survives whole.
+    await expect(dialog.getByRole("alert")).toContainText(
+      PRESENTATION_DELETE_UNREACHABLE_ERROR,
+    );
+    await page.screenshot({ path: "screenshots/phase-f-delete-offline.png" });
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(row).toBeVisible();
+
+    const survived = await service
+      .from("presentations")
+      .select("id")
+      .eq("id", presentationId);
+    expect(survived.error, `survivor read: ${survived.error?.message}`).toBeNull();
+    expect(survived.data ?? []).toHaveLength(1);
   });
 });
 
@@ -3199,7 +3594,9 @@ test.describe("viewer route (live deck)", () => {
     // panel in the DOM, so the assertion targets the visible one.
     const fallback = page.locator("[data-smart-fallback]:visible");
     await expect(fallback).toBeVisible();
-    await expect(page.locator("[data-smart-label]")).toHaveText("Smart HTML deck");
+    await expect(fallback.locator("[data-smart-label]")).toHaveText(
+      "Smart HTML deck",
+    );
     await expect(fallback).toContainText("This deck isn't rendered natively");
     await expect(fallback).toContainText("nothing is faked into the stage");
 

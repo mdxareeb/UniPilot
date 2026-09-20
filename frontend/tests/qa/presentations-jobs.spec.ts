@@ -96,6 +96,7 @@ const STUB_PRESENTATION_ID = "presenton-deck-qa";
 const SEEDED_DECK_BYTES = Buffer.from("old-deck-bytes");
 
 let qa1Id = "";
+let qa2Id = "";
 let service: SupabaseClient;
 let qa1: SupabaseClient;
 let qa2: SupabaseClient;
@@ -483,7 +484,7 @@ test.beforeAll(async () => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   qa1Id = await signIn(qa1, QA1, qa1Password);
-  await signIn(qa2, QA2, qa2Password);
+  qa2Id = await signIn(qa2, QA2, qa2Password);
 });
 
 test.afterEach(async () => {
@@ -614,6 +615,10 @@ test.describe("adapter guards (no Presenton configured)", () => {
       await expect(
         adapter.getPresentationTaskStatus("task-abc"),
       ).rejects.toMatchObject({ code: "not-configured" });
+
+      await expect(
+        adapter.deletePresentation(C3_DECK_ID),
+      ).rejects.toMatchObject({ code: "not-configured" });
     } finally {
       if (savedUrl !== undefined) process.env.PRESENTON_URL = savedUrl;
       if (savedKey !== undefined) process.env.PRESENTON_API_KEY = savedKey;
@@ -637,6 +642,10 @@ test.describe("adapter guards (no Presenton configured)", () => {
 
       await expect(
         adapter.downloadPresentationExport("/app_data/../../secret"),
+      ).rejects.toMatchObject({ code: "rejected" });
+
+      await expect(
+        adapter.deletePresentation("bad/../id"),
       ).rejects.toMatchObject({ code: "rejected" });
     } finally {
       delete process.env.PRESENTON_URL;
@@ -1911,6 +1920,89 @@ test.describe("editor mutation wire (in-process stub)", () => {
   });
 });
 
+/**
+ * Task F4 — the deck-delete wire against a tiny in-process engine: the exact
+ * `DELETE /api/v1/ppt/presentation/{id}` request, the 404 idempotent success,
+ * and the shared failure classification (5xx → `unreachable`, other 4xx →
+ * `rejected`). A dead loopback pins the transport failure the action renders
+ * as its permanent honest copy.
+ */
+test.describe("deck delete wire (in-process stub)", () => {
+  test("DELETEs the deck route, treats 404 as success and classifies the rest", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+
+    const requests: Array<{ method?: string; url?: string; body?: string }> = [];
+    let forcedStatus: number | null = null;
+    const stub = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => {
+        raw += chunk;
+      });
+      req.on("end", () => {
+        requests.push({ method: req.method, url: req.url, body: raw });
+        if (forcedStatus !== null) {
+          res.statusCode = forcedStatus;
+          res.end();
+          return;
+        }
+        res.statusCode = 204;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
+    const address = stub.address();
+    const port =
+      typeof address === "object" && address !== null ? address.port : 0;
+
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedKey = process.env.PRESENTON_API_KEY;
+    process.env.PRESENTON_URL = `http://127.0.0.1:${port}`;
+    delete process.env.PRESENTON_API_KEY;
+    try {
+      await adapter.deletePresentation(C3_DECK_ID);
+
+      // The engine has already forgotten the deck: the delete is a success,
+      // not a failure, so a retry after a partial delete can continue.
+      forcedStatus = 404;
+      await expect(
+        adapter.deletePresentation(C3_DECK_ID),
+      ).resolves.toBeUndefined();
+
+      // Any other 4xx is the permanent rejected class (e.g. a bad key).
+      forcedStatus = 401;
+      await expect(
+        adapter.deletePresentation(C3_DECK_ID),
+      ).rejects.toMatchObject({ code: "rejected" });
+
+      forcedStatus = 500;
+      await expect(
+        adapter.deletePresentation(C3_DECK_ID),
+      ).rejects.toMatchObject({ code: "unreachable" });
+
+      // A dead loopback is the transport failure the F4 honest copy renders.
+      process.env.PRESENTON_URL = "http://127.0.0.1:9";
+      await expect(
+        adapter.deletePresentation(C3_DECK_ID),
+      ).rejects.toMatchObject({ code: "unreachable" });
+
+      expect(
+        requests.map((request) => [request.method, request.url, request.body]),
+      ).toEqual([
+        ["DELETE", `/api/v1/ppt/presentation/${C3_DECK_ID}`, ""],
+        ["DELETE", `/api/v1/ppt/presentation/${C3_DECK_ID}`, ""],
+        ["DELETE", `/api/v1/ppt/presentation/${C3_DECK_ID}`, ""],
+        ["DELETE", `/api/v1/ppt/presentation/${C3_DECK_ID}`, ""],
+      ]);
+    } finally {
+      await new Promise<void>((resolve) => stub.close(() => resolve()));
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.PRESENTON_API_KEY;
+      else process.env.PRESENTON_API_KEY = savedKey;
+    }
+  });
+});
+
 test.describe("worker pass-through (stub engine)", () => {
   test("sends the full request and every source file (stub engine)", async () => {
     const release = await acquireWorkerLock();
@@ -2432,6 +2524,56 @@ test.describe("worker wiring (unconfigured, honest blocked path)", () => {
       .single();
     expect(survivedError, `survivor read: ${survivedError?.message}`).toBeNull();
     expect(survived).toMatchObject({ id: presentationId, status: "running" });
+  });
+
+  /**
+   * Task F4 — the row delete the Server Action runs last. The service-role
+   * function is scoped by the caller's id (the session's own id, never a
+   * request value): a foreign id removes nothing and leaves the row intact,
+   * the owner's call removes exactly one row, and a second call is the
+   * idempotent `false` the action treats as already gone.
+   */
+  test("deletePresentationRow removes only the caller's own row", async () => {
+    const { deletePresentationRow } = await import(
+      "../../lib/data/presentations"
+    );
+    const ownId = await insertPresentation({ status: "succeeded" });
+    const foreignId = await insertPresentation({
+      user_id: qa2Id,
+      status: "succeeded",
+    });
+
+    // Another owner's id removes nothing, even through the service role.
+    expect(await deletePresentationRow(qa2Id, ownId)).toBe(false);
+    const { data: ownSurvivor, error: ownSurvivorError } = await service
+      .from("presentations")
+      .select("id")
+      .eq("id", ownId);
+    expect(ownSurvivorError, `own survivor read: ${ownSurvivorError?.message}`).toBeNull();
+    expect(ownSurvivor ?? []).toHaveLength(1);
+
+    // The owner's own call removes exactly the one row.
+    expect(await deletePresentationRow(qa1Id, ownId)).toBe(true);
+    const { data: gone, error: goneError } = await service
+      .from("presentations")
+      .select("id")
+      .eq("id", ownId);
+    expect(goneError, `deleted read: ${goneError?.message}`).toBeNull();
+    expect(gone ?? []).toHaveLength(0);
+
+    // Already deleted: the idempotent false, never a throw.
+    expect(await deletePresentationRow(qa1Id, ownId)).toBe(false);
+
+    // The foreign row is untouched by either call.
+    const { data: foreignSurvivor, error: foreignSurvivorError } = await service
+      .from("presentations")
+      .select("id")
+      .eq("id", foreignId);
+    expect(
+      foreignSurvivorError,
+      `foreign survivor read: ${foreignSurvivorError?.message}`,
+    ).toBeNull();
+    expect(foreignSurvivor ?? []).toHaveLength(1);
   });
 
   test("insertPresentation writes every draft field and both sources round-trip", async () => {

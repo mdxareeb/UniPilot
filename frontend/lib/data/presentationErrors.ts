@@ -24,3 +24,22 @@ export const PRESENTATION_SOURCE_NOT_FOUND_ERROR =
 
 export const PRESENTATION_SOURCE_UNSUPPORTED_ERROR =
   "Source documents must be a PDF or DOCX.";
+
+/**
+ * Task F4 — the delete flow's sanitized copy. The unreachable line is the
+ * permanent honest failure: the engine did not confirm the deck's removal, so
+ * nothing local was removed either and the deck row survives for a retry. The
+ * document line is the same posture for the half that runs after the engine
+ * delete answered (a retry is idempotent there — the engine answers 404).
+ */
+export const PRESENTATION_DELETE_ERROR =
+  "We couldn't delete this deck. Try again in a moment.";
+
+export const PRESENTATION_DELETE_DOCUMENT_ERROR =
+  "This deck's file couldn't be removed from Documents, so the deck is still listed. Try again to finish deleting it.";
+
+export const PRESENTATION_DELETE_UNREACHABLE_ERROR =
+  "The presentation service didn't answer, so this deck wasn't deleted. Try again in a moment.";
+
+export const PRESENTATION_DELETE_IN_FLIGHT_ERROR =
+  "This deck is still being generated or exported. Try again once it has finished.";

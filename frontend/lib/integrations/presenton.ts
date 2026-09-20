@@ -1134,6 +1134,33 @@ export async function requestPresentationExport(
 }
 
 /**
+ * §7.4 (Task F4) — delete a deck on the engine (`DELETE
+ * /api/v1/ppt/presentation/{id}`, answered 204). A 404 is the idempotent
+ * success: the deck is already gone, which is the outcome the caller asked
+ * for, so a retry after a partial delete can proceed to the local cleanup.
+ * Every other non-2xx answer keeps the shared classification — 5xx/429
+ * `unreachable` (retryable), every other 4xx `rejected` (permanent). The path
+ * segment is guarded before any fetch, exactly like the other deck calls.
+ */
+export async function deletePresentation(
+  presentationId: string,
+): Promise<void> {
+  const base = requireBaseUrl();
+  assertSafeSegment(presentationId, "presentation id");
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, `/api/v1/ppt/presentation/${presentationId}`),
+    { method: "DELETE", headers: requestHeaders() },
+    MUTATION_TIMEOUT_MS,
+  );
+
+  if (response.status === 404) return;
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+}
+
+/**
  * §3.4 — upload one source document (the bytes are read from UniPilot's own
  * private bucket by the worker) and return the Presenton-side paths to pass
  * into `files` on §3.1.

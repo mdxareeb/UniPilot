@@ -21,6 +21,7 @@ import { revalidatePath } from "next/cache";
 import { requireOnboardedUser } from "@/lib/onboarding/gate";
 import { isPresentonConfigured } from "@/lib/integrations/presentonConfig";
 import {
+  deletePresentation,
   deletePresentationImage,
   generatePresentationImage,
   getPresentationDeck,
@@ -54,21 +55,28 @@ import type {
   DeckThemePackage,
 } from "@/lib/presentation/types";
 import { enqueueJob } from "./jobs";
-import { getDocument } from "./documents";
+import { deleteDocument, getDocument } from "./documents";
 import {
+  PRESENTATION_DELETE_DOCUMENT_ERROR,
+  PRESENTATION_DELETE_ERROR,
+  PRESENTATION_DELETE_IN_FLIGHT_ERROR,
+  PRESENTATION_DELETE_UNREACHABLE_ERROR,
   PRESENTATION_INVALID_INPUT_ERROR,
   PRESENTATION_NOT_CONNECTED_ERROR,
+  PRESENTATION_NOT_FOUND_ERROR,
   PRESENTATION_QUEUE_ERROR,
   PRESENTATION_SAVE_ERROR,
   PRESENTATION_SOURCE_NOT_FOUND_ERROR,
   PRESENTATION_SOURCE_UNSUPPORTED_ERROR,
 } from "./presentationErrors";
 import {
+  isPresentationInFlight,
   isPresentationUuid,
   parsePresentationRequest,
   type PresentationDraft,
 } from "./presentationValues";
 import {
+  deletePresentationRow,
   getPresentation,
   hasPendingPresentationExport,
   insertPresentation,
@@ -865,4 +873,95 @@ export async function searchPresentationIconsAction(
       icons: [],
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Task F4 — delete a deck (spec §7.4, §10-F)
+//
+// The one destructive action in the tool. Order is deliberate: the engine deck
+// is removed first (404 = already gone), then the generated document through
+// the owner-session documents service (the same `deleteDocument` path the
+// /documents surface uses), then the row through the service role. A failure
+// at any step stops before the next and answers sanitized copy, so the row
+// survives for a retry; retrying is safe because the engine's 404 and the
+// document service's `false` are both treated as success.
+// ---------------------------------------------------------------------------
+
+export type DeletePresentationResult = { error: string | null };
+
+/**
+ * Deletes one owned deck end to end. The gate runs first and outside the try
+ * block like every action here; the caller's row is read through the owner
+ * RLS policy, and the engine deck id comes from that row — never from the
+ * request — so a forged id cannot reach another owner's deck.
+ *
+ * In-flight refusal: a `queued`/`running` generation, or an export whose
+ * worker job is still pending, means a worker may still write this deck's
+ * document. Deleting underneath it would orphan that file, so the action
+ * refuses honestly and the UI does not offer the control then; once the worker
+ * settles (succeeded or failed) the same row is deletable.
+ */
+export async function deletePresentationAction(
+  presentationId: unknown,
+): Promise<DeletePresentationResult> {
+  const user = await requireOnboardedUser("/tools/presentation");
+
+  if (!isPresentationUuid(presentationId)) {
+    return { error: PRESENTATION_NOT_FOUND_ERROR };
+  }
+  const id = presentationId.trim();
+
+  let presentation: Awaited<ReturnType<typeof getPresentation>>;
+  try {
+    presentation = await getPresentation(user.id, id);
+  } catch {
+    return { error: PRESENTATION_SAVE_ERROR };
+  }
+  if (presentation === null) {
+    return { error: PRESENTATION_NOT_FOUND_ERROR };
+  }
+
+  if (
+    isPresentationInFlight(presentation.statusValue) ||
+    (await hasPendingPresentationExport(user.id, id))
+  ) {
+    return { error: PRESENTATION_DELETE_IN_FLIGHT_ERROR };
+  }
+
+  if (presentation.presentonPresentationId !== undefined) {
+    try {
+      await deletePresentation(presentation.presentonPresentationId);
+    } catch (error) {
+      if (error instanceof PresentonError && error.code === "not-configured") {
+        return { error: PRESENTATION_NOT_CONNECTED_ERROR };
+      }
+      // Unreachable/rejected: nothing local was removed, so the deck survives
+      // whole and a retry can finish the job. This is the permanent honest
+      // failure the UI renders.
+      return { error: PRESENTATION_DELETE_UNREACHABLE_ERROR };
+    }
+  }
+
+  if (presentation.documentId !== undefined) {
+    try {
+      // `false` is the already-deleted case (no owned document row matched),
+      // which is the same outcome the caller asked for; only a throw (Storage
+      // or read failure) leaves the file behind and stops the delete.
+      await deleteDocument(user.id, presentation.documentId);
+    } catch {
+      return { error: PRESENTATION_DELETE_DOCUMENT_ERROR };
+    }
+  }
+
+  try {
+    // `false` — another tab removed the row while this one was open — is the
+    // same outcome the caller asked for; only a throw survives as failure.
+    await deletePresentationRow(user.id, id);
+  } catch {
+    return { error: PRESENTATION_DELETE_ERROR };
+  }
+
+  revalidatePath("/tools/presentation");
+  revalidatePath("/documents");
+  return { error: null };
 }

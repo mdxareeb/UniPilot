@@ -10,8 +10,13 @@ import { Button } from "@/components/ui/Button";
 import { ButtonLink } from "@/components/ui/ButtonLink";
 import { Card } from "@/components/ui/Card";
 import { Divider } from "@/components/ui/Divider";
+import { Modal } from "@/components/ui/Modal";
 import { previewDocumentAction } from "@/lib/data/documentActions";
-import { PRESENTATION_SAVE_ERROR } from "@/lib/data/presentationErrors";
+import { deletePresentationAction } from "@/lib/data/presentationActions";
+import {
+  PRESENTATION_DELETE_ERROR,
+  PRESENTATION_SAVE_ERROR,
+} from "@/lib/data/presentationErrors";
 import {
   isPresentationInFlight,
   type PresentationItem,
@@ -37,21 +42,30 @@ type DecksListProps = {
  *   honest not-ready/unavailable panels. While a request is still being
  *   generated they are offered only when the row already carries a Presenton
  *   id — the proof a deck exists to open;
- * - a failed row shows the sanitized stored message and no actions at all:
- *   its one honest next step is generating again in the form above.
+ * - a failed row shows the sanitized stored message and no Open/Edit — its one
+ *   remaining action is Delete (Task F4);
+ * - Delete (Task F4) opens the `Modal` confirmation and removes the engine
+ *   deck, the generated document and the row. It is offered when no worker can
+ *   still be writing this deck: never while generation is in flight, and never
+ *   while the export mirror says an export is queued/running (the action
+ *   re-checks both server-side).
  *
  * The list renders only when there is something to list — the page's existing
  * "No decks yet" empty state already covers the empty case, so a second empty
  * card is never stacked under it. Motion reuses the shared vocabulary: the
  * section is one `data-enter="scale"` step after the workspace (`motionIndex`),
  * inserted or removed rows drop in / fade out through `MotionListItem` +
- * `AnimatePresence`, and download failures are `MotionNotice`s in the row.
+ * `AnimatePresence`, and download/delete failures are `MotionNotice`s.
  */
 export function DecksList({ decks }: DecksListProps) {
   const [downloadError, setDownloadError] = useState<{
     deckId: string;
     message: string;
   } | null>(null);
+  /** The deck whose delete confirmation is open, or null when it is closed. */
+  const [confirming, setConfirming] = useState<PresentationItem | null>(null);
+  /** Changes on every open; remounts the body so pending/error start fresh. */
+  const [deleteBodyKey, setDeleteBodyKey] = useState(0);
 
   async function onDownload(deckId: string, documentId: string) {
     setDownloadError(null);
@@ -69,6 +83,11 @@ export function DecksList({ decks }: DecksListProps) {
       return;
     }
     window.open(result.preview.url, "_blank", "noopener,noreferrer");
+  }
+
+  function onDelete(deck: PresentationItem) {
+    setDeleteBodyKey((key) => key + 1);
+    setConfirming(deck);
   }
 
   if (decks.length === 0) return null;
@@ -105,6 +124,7 @@ export function DecksList({ decks }: DecksListProps) {
                       : null
                   }
                   onDownload={onDownload}
+                  onDelete={onDelete}
                 />
               );
               // A `Divider` between rows, never after the last one.
@@ -124,6 +144,12 @@ export function DecksList({ decks }: DecksListProps) {
           </AnimatePresence>
         </ul>
       </Card>
+
+      <DeckDeleteModal
+        deck={confirming}
+        bodyKey={deleteBodyKey}
+        onClose={() => setConfirming(null)}
+      />
     </section>
   );
 }
@@ -132,10 +158,12 @@ function DeckRow({
   deck,
   downloadError,
   onDownload,
+  onDelete,
 }: {
   deck: PresentationItem;
   downloadError: string | null;
   onDownload: (deckId: string, documentId: string) => void;
+  onDelete: (deck: PresentationItem) => void;
 }) {
   const inFlight = isPresentationInFlight(deck.statusValue);
   const failed = deck.statusValue === "failed";
@@ -144,6 +172,12 @@ function DeckRow({
      once generation succeeded the viewer/editor routes own the honest
      not-ready state, so the links are offered either way. */
   const revisable = !failed && (!inFlight || hasEngineDeck);
+  /* A worker may still be writing this deck while generation runs or an
+     export is known to be queued/running (the action also refuses a pending
+     export job the mirror does not show yet). */
+  const exporting =
+    deck.exportStatus === "queued" || deck.exportStatus === "running";
+  const deletable = !inFlight && !exporting;
 
   const document = deck.document;
   const title = document?.name ?? deck.prompt;
@@ -194,42 +228,173 @@ function DeckRow({
         ) : null}
       </div>
 
-      {failed ? null : (
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
-          {document !== undefined ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onDownload(deck.id, document.id)}
-            >
-              Download
-            </Button>
-          ) : null}
-          {revisable ? (
-            <ButtonLink
-              size="sm"
-              href={`/tools/presentation/${deck.id}`}
-              data-deck-action="open"
-            >
-              Open
-            </ButtonLink>
-          ) : null}
-          {revisable ? (
-            <ButtonLink
-              size="sm"
-              variant="outline"
-              href={`/tools/presentation/${deck.id}/edit`}
-              data-deck-action="edit"
-            >
-              Edit
-            </ButtonLink>
-          ) : null}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+        {!failed && document !== undefined ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onDownload(deck.id, document.id)}
+          >
+            Download
+          </Button>
+        ) : null}
+        {!failed && revisable ? (
+          <ButtonLink
+            size="sm"
+            href={`/tools/presentation/${deck.id}`}
+            data-deck-action="open"
+          >
+            Open
+          </ButtonLink>
+        ) : null}
+        {!failed && revisable ? (
+          <ButtonLink
+            size="sm"
+            variant="outline"
+            href={`/tools/presentation/${deck.id}/edit`}
+            data-deck-action="edit"
+          >
+            Edit
+          </ButtonLink>
+        ) : null}
+        {!failed ? (
           <WorkspaceAction href="/documents">
             {document !== undefined ? "Open in Documents" : "Documents"}
           </WorkspaceAction>
-        </div>
-      )}
+        ) : null}
+        {/* A failed row has no Open/Edit — the deck never became revisable —
+            but Delete stays: removing the dead request is its cleanup path. */}
+        {deletable ? (
+          <Button
+            size="sm"
+            variant="outline"
+            data-deck-action="delete"
+            onClick={() => onDelete(deck)}
+          >
+            Delete
+          </Button>
+        ) : null}
+      </div>
     </MotionListItem>
+  );
+}
+
+/**
+ * The delete confirmation (Task F4, spec §7.4/§10-F) — the `TaskDeleteModal`
+ * pattern applied to a deck: the row is identified by its real name, staying
+ * is the primary action, and the confirm is the one destructive fill. A
+ * failure keeps the dialog open with the sanitized notice so the user can
+ * retry; success closes it and the revalidated page drops the row through
+ * `AnimatePresence`.
+ */
+function DeckDeleteModal({
+  deck,
+  bodyKey,
+  onClose,
+}: {
+  /** The deck awaiting confirmation, or null when the dialog is closed. */
+  deck: PresentationItem | null;
+  /** Changes on every open; remounts the body so pending/error start fresh. */
+  bodyKey: number;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      open={deck !== null}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+      title="Delete this deck?"
+      description={deck ? deleteDescription(deck) : undefined}
+      showClose={false}
+      className="max-w-sm"
+    >
+      {deck ? (
+        <DeckDeleteBody key={bodyKey} deck={deck} onClose={onClose} />
+      ) : null}
+    </Modal>
+  );
+}
+
+/** The deck's own facts decide the copy — never a generic claim. */
+function deleteDescription(deck: PresentationItem): string {
+  const title = deck.document?.name ?? deck.prompt;
+  const engineDeck = deck.presentonPresentationId !== undefined;
+  const document = deck.document !== undefined;
+  if (engineDeck && document) {
+    return `“${title}” will be deleted from the presentation service, and its file will be removed from Documents. This can’t be undone.`;
+  }
+  if (engineDeck) {
+    return `“${title}” will be deleted from the presentation service. This can’t be undone.`;
+  }
+  if (document) {
+    return `“${title}” and its file in Documents will be removed. This can’t be undone.`;
+  }
+  return `“${title}” will be removed from your deck list. This can’t be undone.`;
+}
+
+function DeckDeleteBody({
+  deck,
+  onClose,
+}: {
+  deck: PresentationItem;
+  onClose: () => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirm() {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+
+    let result: Awaited<ReturnType<typeof deletePresentationAction>>;
+    try {
+      result = await deletePresentationAction(deck.id);
+    } catch {
+      result = { error: PRESENTATION_DELETE_ERROR };
+    }
+
+    setPending(false);
+    if (result.error !== null) {
+      setError(result.error);
+      return;
+    }
+    onClose();
+  }
+
+  return (
+    <>
+      {error !== null ? (
+        <MotionNotice
+          role="alert"
+          className="mb-4 text-label-sm text-destructive"
+        >
+          {error}
+        </MotionNotice>
+      ) : null}
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <Button
+          type="button"
+          variant="primary"
+          onClick={onClose}
+          disabled={pending}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          data-deck-delete-confirm=""
+          onClick={confirm}
+          disabled={pending}
+          aria-busy={pending}
+        >
+          {pending ? "Deleting…" : "Delete deck"}
+        </Button>
+      </div>
+    </>
   );
 }
 

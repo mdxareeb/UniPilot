@@ -264,5 +264,36 @@ export async function markPresentationFailed(
   }
 }
 
+/**
+ * Deletes one owned request row (Task F4) — service role, because the table
+ * carries no client write policy (the same reason `insertPresentation` and
+ * `markPresentationFailed` are here). The `.eq("user_id", userId)` scope is
+ * the belt-and-braces rule every service-role write in this module follows:
+ * the caller's id always comes from the verified session, and a forged id can
+ * still never remove another owner's row. `false` means no owned row matched
+ * — already deleted, which callers treat as success.
+ *
+ * The generated document is deliberately not touched here: its removal runs
+ * through the owner-session documents service (spec §7.4/§10-F), and this
+ * function is the last step after that succeeded.
+ */
+export async function deletePresentationRow(
+  userId: string,
+  presentationId: string,
+): Promise<boolean> {
+  const supabase = createServiceClient();
+
+  const { data, error } = await supabase
+    .from("presentations")
+    .delete()
+    .eq("id", presentationId)
+    .eq("user_id", userId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw new Error("Failed to delete presentation.");
+  return data !== null;
+}
+
 /** The generated-document join type exported for the tool page's clarity. */
 export type PresentationItemRow = Database["public"]["Tables"]["presentations"]["Row"];
