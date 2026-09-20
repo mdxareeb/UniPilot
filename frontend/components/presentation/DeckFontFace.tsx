@@ -10,6 +10,7 @@
  */
 import { deckAssetUrl, deckFontEntries } from "@/lib/presentation/elements";
 import type { PresentationDeck } from "@/lib/presentation/types";
+import type { DeckStageAssetUrl } from "./StageContext";
 
 function fontFormat(url: string): string {
   const path = url.split(/[?#]/, 1)[0]?.toLowerCase() ?? "";
@@ -32,16 +33,20 @@ function cssString(value: string): string {
 export function DeckFontFace({
   id,
   fonts,
+  assetUrl,
 }: {
   id: string;
   fonts: PresentationDeck["fonts"];
+  /** Defaults to the deck's owner-gated proxy; see `DeckStageAssetUrl`. */
+  assetUrl?: DeckStageAssetUrl;
 }) {
+  const resolveAssetUrl = assetUrl ?? ((src: string) => deckAssetUrl(id, src));
   const entries = deckFontEntries(fonts);
   const stylesheets = entries.filter((entry) => entry.kind === "stylesheet");
   const css = entries
     .filter((entry) => entry.kind === "file")
     .map((entry) => {
-      const source = deckAssetUrl(id, entry.url);
+      const source = resolveAssetUrl(entry.url);
       if (!source) return "";
       return `@font-face{font-family:${cssString(
         entry.cssFamily,

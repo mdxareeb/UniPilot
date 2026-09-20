@@ -643,6 +643,43 @@ test.describe("adapter guards (no Presenton configured)", () => {
     }
   });
 
+  test("template-asset reads refuse anything outside the engine-public mounts", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+
+    // A dead loopback port: if a path passed the guard, the fetch would fail
+    // as `unreachable`; every non-public path must answer `rejected` first.
+    process.env.PRESENTON_URL = "http://127.0.0.1:9";
+    try {
+      const refused = [
+        "/app_data/images/user-upload.png",
+        "/app_data/exports/pptx/Deck_7f3a9c2b1d.pptx",
+        "/app_data/pptx-to-abc/temp.png",
+        "/etc/passwd",
+        "/static/../app_data/images/x.png",
+        "/static/%2e%2e/app_data/images/x.png",
+        "",
+      ];
+      for (const path of refused) {
+        await expect(
+          adapter.fetchPresentationTemplateAsset(path),
+          `must refuse ${path}`,
+        ).rejects.toMatchObject({ code: "rejected" });
+      }
+
+      // A public mount passes the guard and reaches the (dead) service.
+      await expect(
+        adapter.fetchPresentationTemplateAsset(
+          "/app_data/templates/general/static/thumbnail.png",
+        ),
+      ).rejects.toMatchObject({ code: "unreachable" });
+      await expect(
+        adapter.fetchPresentationTemplateAsset("/vendor/fonts/inter.ttf"),
+      ).rejects.toMatchObject({ code: "unreachable" });
+    } finally {
+      delete process.env.PRESENTON_URL;
+    }
+  });
+
   test("request parser accepts only the bounded vocabulary", async () => {
     const { parsePresentationRequest } = await import(
       "../../lib/data/presentationValues"
@@ -883,6 +920,51 @@ test.describe("template list query (pure)", () => {
     );
   });
 
+  test("scope expresses built-ins only, all, and custom only", async () => {
+    const { buildTemplateListQuery } = await import(
+      "../../lib/integrations/presenton"
+    );
+
+    expect(buildTemplateListQuery({ scope: "default" })).toBe(
+      "/api/v1/ppt/template/all?default=true&page=1&page_size=100",
+    );
+    expect(buildTemplateListQuery({ scope: "all" })).toBe(
+      "/api/v1/ppt/template/all?page=1&page_size=100",
+    );
+    // The engine's own "custom templates when false" filter, now expressible.
+    expect(buildTemplateListQuery({ scope: "custom" })).toBe(
+      "/api/v1/ppt/template/all?default=false&page=1&page_size=100",
+    );
+    // `scope` wins when both spellings are given.
+    expect(
+      buildTemplateListQuery({ scope: "custom", includeCustom: true }),
+    ).toBe("/api/v1/ppt/template/all?default=false&page=1&page_size=100");
+    expect(
+      buildTemplateListQuery({ scope: "all", includeCustom: false }),
+    ).toBe("/api/v1/ppt/template/all?page=1&page_size=100");
+    // Pagination composes with every scope.
+    expect(
+      buildTemplateListQuery({ scope: "custom", page: 2, pageSize: 10 }),
+    ).toBe("/api/v1/ppt/template/all?default=false&page=2&page_size=10");
+  });
+
+  test("rejects an unknown scope before any fetch", async () => {
+    const { buildTemplateListQuery } = await import(
+      "../../lib/integrations/presenton"
+    );
+
+    let code: string | null = null;
+    try {
+      buildTemplateListQuery({ scope: "other" as never });
+    } catch (error) {
+      code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : null;
+    }
+    expect(code).toBe("rejected");
+  });
+
   test("forwards page and page size exactly as asked", async () => {
     const { buildTemplateListQuery } = await import(
       "../../lib/integrations/presenton"
@@ -1000,10 +1082,18 @@ test.describe("template reads (in-process stub)", () => {
           name: "General",
           description: "  ",
           layout_count: 12,
+          thumbnail: "  /app_data/templates/general/static/thumbnail.png  ",
+          preview_url: "   ",
           is_default: true,
         },
         { id: "", name: "No id" },
-        { id: "custom", name: "Custom", is_default: false },
+        {
+          id: "custom",
+          name: "Custom",
+          is_default: false,
+          thumbnail: "https://engine.test/thumb.png",
+          preview_url: "http://engine.test/template-preview?templateV2Id=custom",
+        },
       ],
       total: 7,
       page: 2,
@@ -1058,6 +1148,8 @@ test.describe("template reads (in-process stub)", () => {
             name: "General",
             description: null,
             layoutCount: 12,
+            thumbnail: "/app_data/templates/general/static/thumbnail.png",
+            previewUrl: null,
             isDefault: true,
           },
           {
@@ -1065,6 +1157,9 @@ test.describe("template reads (in-process stub)", () => {
             name: "Custom",
             description: null,
             layoutCount: 0,
+            thumbnail: "https://engine.test/thumb.png",
+            previewUrl:
+              "http://engine.test/template-preview?templateV2Id=custom",
             isDefault: false,
           },
         ],
@@ -1086,6 +1181,15 @@ test.describe("template reads (in-process stub)", () => {
         "custom",
       ]);
 
+      // The tri-state's custom-only spelling reaches the wire too.
+      const customOnly = await adapter.listPresentationTemplates({
+        scope: "custom",
+      });
+      expect(customOnly.items.map((item) => item.id)).toEqual([
+        "general",
+        "custom",
+      ]);
+
       const read = await adapter.getPresentationTemplate("general");
       expect(read.theme).toEqual(templateTheme);
       expect(read.layouts?.layouts.map((layout) => layout.id)).toEqual([
@@ -1093,6 +1197,7 @@ test.describe("template reads (in-process stub)", () => {
       ]);
       expect(read.fonts).toEqual({ Inter: "/vendor/fonts/inter.ttf" });
       expect(read.preview_url).toBe(template.preview_url);
+      expect(read.thumbnail).toBe("/static/general.png");
 
       // A template whose theme/layouts/fonts are absent is still readable:
       // the fields default to null/{} instead of throwing.
@@ -1107,6 +1212,7 @@ test.describe("template reads (in-process stub)", () => {
       expect(requests).toEqual([
         "/api/v1/ppt/template/all?default=true&page=1&page_size=100",
         "/api/v1/ppt/template/all?page=2&page_size=25",
+        "/api/v1/ppt/template/all?default=false&page=1&page_size=100",
         "/api/v1/ppt/template/general",
         "/api/v1/ppt/template/bare",
         "/api/v1/ppt/template/general/theme",

@@ -80,7 +80,11 @@ import {
 } from "../../lib/presentation/clipboardOps";
 import { collectAssetPaths } from "../../lib/presentation/elements";
 import { getElementAtPath } from "../../lib/presentation/editorOps";
-import { classifyAssetPath } from "../../lib/presentation/assets";
+import {
+  classifyAssetPath,
+  isEnginePublicAssetPath,
+  templateAssetUrl,
+} from "../../lib/presentation/assets";
 import { IMAGE_UPLOAD_MAX_BYTES } from "../../lib/presentation/imageLimits";
 import { isSmartDeck } from "../../lib/presentation/smart";
 import {
@@ -203,6 +207,11 @@ let liveSmartSkipReason: string | null = null;
 
 function assetUrl(presentationId: string, src: string): string {
   return `/api/presentation/${presentationId}/asset?src=${encodeURIComponent(src)}`;
+}
+
+/** The E2 session-gated template-asset route's URL for one engine path. */
+function templateAssetRouteUrl(src: string): string {
+  return `/api/presentation/template-asset?src=${encodeURIComponent(src)}`;
 }
 
 /**
@@ -341,6 +350,350 @@ const REACHABLE_EXTERNAL_HOSTS = new Set([
   "fonts.googleapis.com",
   "fonts.gstatic.com",
 ]);
+
+/**
+ * E2 — one built-in template the browser/preview cases render end to end: its
+ * thumbnail and layouts are engine-servable, and the first layout's images plus
+ * the template's fonts are all reachable in a browser through the
+ * session-gated template-asset route (or a public font host), so the live case
+ * can assert a clean console.
+ *
+ * `switch` is a pair of layouts that reuse one image slot with different bytes
+ * — the preview's deferral case (E2 review fix): switching between them must
+ * render the new image immediately, because the preview has no deck save to
+ * wait for. Discovery prefers a template that has such a pair; `null` records
+ * an honest skip for that one assertion.
+ */
+type LiveTemplateSwitch = {
+  fromLayoutId: string;
+  toLayoutId: string;
+  fromImageData: string;
+  toImageData: string;
+};
+
+type LiveBrowserTemplate = {
+  id: string;
+  name: string;
+  /** The engine-relative (engine-public) thumbnail path. */
+  thumbnail: string;
+  layoutCount: number;
+  switch: LiveTemplateSwitch | null;
+};
+
+let liveBrowserTemplate: LiveBrowserTemplate | null = null;
+let liveBrowserTemplateSkipReason: string | null = null;
+/** Why the reused-image-slot switch assertion is not exercised (null = it is). */
+let liveBrowserSwitchSkipReason: string | null = null;
+/** How many custom templates the engine serves (0 on this engine). */
+let liveBrowserCustomCount = 0;
+
+/** Every engine-relative/absolute asset path an element tree references. */
+function collectElementAssetPaths(value: unknown): string[] {
+  const paths = new Set<string>();
+  const visit = (node: unknown, depth: number): void => {
+    if (depth > 30) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (
+      node.type === "image" &&
+      typeof node.data === "string" &&
+      node.data.trim() !== ""
+    ) {
+      paths.add(node.data.trim());
+    }
+    for (const nested of Object.values(node)) {
+      if (nested !== node && (Array.isArray(nested) || isRecord(nested))) {
+        visit(nested, depth + 1);
+      }
+    }
+  };
+  visit(value, 0);
+  return [...paths];
+}
+
+/** An external URL is browser-reachable when it is a public font service. */
+function isReachableExternalSource(src: string): boolean {
+  try {
+    return REACHABLE_EXTERNAL_HOSTS.has(new URL(src).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** One engine probe: a public mount path the engine answers with non-empty bytes. */
+async function engineServesAsset(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  src: string,
+): Promise<boolean> {
+  if (!isEnginePublicAssetPath(src)) return false;
+  const probe = await api.get(src, { timeout: 30_000 });
+  if (!probe.ok()) return false;
+  return (await probe.body()).byteLength > 0;
+}
+
+/** Every engine asset one layout references must be browser-reachable. */
+async function layoutAssetsReachable(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  layout: TemplateLayout,
+): Promise<boolean> {
+  for (const src of collectElementAssetPaths(layout.components)) {
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(src)) {
+      if (!isReachableExternalSource(src)) return false;
+      continue;
+    }
+    if (!(await engineServesAsset(api, src))) return false;
+  }
+  return true;
+}
+
+/** Every template font must be a public-host stylesheet or a servable file. */
+async function templateFontsReachable(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  fonts: unknown,
+): Promise<boolean> {
+  if (!isRecord(fonts)) return true;
+  for (const value of Object.values(fonts)) {
+    if (typeof value !== "string" || value.trim() === "") continue;
+    const src = value.trim();
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(src)) {
+      if (!isReachableExternalSource(src)) return false;
+      continue;
+    }
+    if (!(await engineServesAsset(api, src))) return false;
+  }
+  return true;
+}
+
+/**
+ * Every image slot in a layout, keyed by the identity React reconciles on:
+ * the component's `id` (DeckStage keys component frames by it) plus the
+ * element's position path. Two layouts sharing a key render the same
+ * `ImageElement` instance, which is exactly when the deferral used to fire.
+ * A slot remembers whether the element renders a recolored data URI instead of
+ * its proxy URL, so the live count assertion never picks such a slot.
+ */
+type TemplateImageSlot = { data: string; recolored: boolean };
+
+function templateImageSlots(layout: TemplateLayout): Map<string, TemplateImageSlot> {
+  const slots = new Map<string, TemplateImageSlot>();
+  const components = Array.isArray(layout.components) ? layout.components : [];
+  const visitElement = (element: unknown, path: string): void => {
+    if (!isRecord(element)) return;
+    if (
+      element.type === "image" &&
+      typeof element.data === "string" &&
+      element.data.trim() !== ""
+    ) {
+      slots.set(path, {
+        data: element.data.trim(),
+        recolored:
+          element.is_icon === true &&
+          typeof element.color === "string" &&
+          element.color.trim() !== "",
+      });
+    }
+    for (const key of ["child", "children"]) {
+      const nested = element[key];
+      if (Array.isArray(nested)) {
+        nested.forEach((child, index) =>
+          visitElement(child, `${path}.${key}${index}`),
+        );
+      } else if (isRecord(nested)) {
+        visitElement(nested, `${path}.${key}`);
+      }
+    }
+  };
+  components.forEach((component, componentIndex) => {
+    const componentKey =
+      typeof component.id === "string" && component.id !== ""
+        ? component.id
+        : `#${componentIndex}`;
+    const elements = Array.isArray(component.elements) ? component.elements : [];
+    elements.forEach((element, elementIndex) => {
+      visitElement(element, `${componentKey}:${elementIndex}`);
+    });
+  });
+  return slots;
+}
+
+/**
+ * Find two layouts that reuse one image slot with different bytes and whose
+ * assets are all browser-reachable. The pair must be unique — exactly one
+ * occurrence of each image in its own layout and none in the other — so the
+ * live case's src-count assertion identifies the reused slot's DOM node
+ * unambiguously, and neither image may render as a recolored data URI. Null
+ * records an honest skip for the deferral assertion (the rest of the live case
+ * still runs).
+ */
+async function findReusedImageSwitch(
+  api: Awaited<ReturnType<typeof engineApi>>,
+  layouts: TemplateLayout[],
+): Promise<LiveTemplateSwitch | null> {
+  const slots = layouts.map((layout) => templateImageSlots(layout));
+  const countData = (
+    map: Map<string, TemplateImageSlot>,
+    data: string,
+  ): number =>
+    [...map.values()].filter((slot) => slot.data === data).length;
+
+  for (let from = 0; from < layouts.length; from += 1) {
+    for (let to = from + 1; to < layouts.length; to += 1) {
+      for (const [slotKey, fromSlot] of slots[from]) {
+        const toSlot = slots[to].get(slotKey);
+        if (toSlot === undefined || toSlot.data === fromSlot.data) continue;
+        if (fromSlot.recolored || toSlot.recolored) continue;
+        if (countData(slots[from], fromSlot.data) !== 1) continue;
+        if (countData(slots[to], fromSlot.data) !== 0) continue;
+        if (countData(slots[to], toSlot.data) !== 1) continue;
+        if (countData(slots[from], toSlot.data) !== 0) continue;
+        if (!(await layoutAssetsReachable(api, layouts[from]))) continue;
+        if (!(await layoutAssetsReachable(api, layouts[to]))) continue;
+        return {
+          fromLayoutId: layouts[from].id,
+          toLayoutId: layouts[to].id,
+          fromImageData: fromSlot.data,
+          toImageData: toSlot.data,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Discover the built-in template the E2 browser cases render. Every built-in
+ * thumbnail the browser page shows must be engine-servable (a card that falls
+ * back to its placeholder would log a resource error), and the chosen
+ * template's first layout + fonts must be browser-reachable for the preview.
+ * A template with a reused-image-slot layout pair is preferred so the
+ * deferral assertion always has a target; the first renderable template is the
+ * fallback with that one assertion recorded as skipped. Absence of any
+ * renderable template records an honest skip reason; the access-guard cases
+ * never skip.
+ */
+async function discoverBrowserTemplates(): Promise<
+  | {
+      template: LiveBrowserTemplate;
+      customCount: number;
+      switchSkipReason: string | null;
+    }
+  | { reason: string }
+> {
+  if (engineUrl === "") {
+    return { reason: "PRESENTON_URL is not set in the spec environment." };
+  }
+
+  const api = await engineApi();
+  try {
+    const list = await api.get(
+      "/api/v1/ppt/template/all?page=1&page_size=100",
+      { timeout: 15_000 },
+    );
+    if (!list.ok()) {
+      return { reason: `the engine template list answered ${list.status()}.` };
+    }
+    const body: unknown = await list.json();
+    const items = isRecord(body) && Array.isArray(body.items) ? body.items : [];
+    const builtIns = items.filter(
+      (item) => isRecord(item) && item.is_default === true,
+    );
+    const customCount = items.filter(
+      (item) => isRecord(item) && item.is_default !== true,
+    ).length;
+
+    if (builtIns.length === 0) {
+      return { reason: "the engine serves no built-in templates." };
+    }
+
+    for (const item of builtIns) {
+      if (!isRecord(item)) continue;
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const thumbnail =
+        typeof item.thumbnail === "string" ? item.thumbnail.trim() : "";
+      if (id === "" || thumbnail === "") {
+        return {
+          reason: `built-in template "${id || "(no id)"}" has no thumbnail to serve.`,
+        };
+      }
+      if (!(await engineServesAsset(api, thumbnail))) {
+        return {
+          reason: `the engine does not serve a thumbnail for built-in template "${id}".`,
+        };
+      }
+    }
+
+    let fallback: { template: LiveBrowserTemplate; customCount: number } | null =
+      null;
+
+    for (const item of builtIns) {
+      if (!isRecord(item)) continue;
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const name = typeof item.name === "string" ? item.name : id;
+      const thumbnail =
+        typeof item.thumbnail === "string" ? item.thumbnail.trim() : "";
+
+      const detail = await api.get(`/api/v1/ppt/template/${id}`, {
+        timeout: 30_000,
+      });
+      if (!detail.ok()) continue;
+      const template = (await detail.json()) as PresentationTemplate;
+      const layouts = (Array.isArray(template.layouts?.layouts)
+        ? template.layouts.layouts
+        : []
+      ).filter((layout) => Array.isArray(layout?.components));
+      if (layouts.length === 0) continue;
+
+      if (!(await layoutAssetsReachable(api, layouts[0]))) continue;
+      if (!(await templateFontsReachable(api, template.fonts))) continue;
+
+      const switchTarget = await findReusedImageSwitch(api, layouts);
+      const candidate: LiveBrowserTemplate = {
+        id,
+        name,
+        thumbnail,
+        layoutCount: layouts.length,
+        switch: switchTarget,
+      };
+      if (switchTarget !== null) {
+        return { template: candidate, customCount, switchSkipReason: null };
+      }
+      if (fallback === null) fallback = { template: candidate, customCount };
+    }
+
+    if (fallback !== null) {
+      return {
+        ...fallback,
+        switchSkipReason:
+          "no built-in template reuses an image slot across two layouts.",
+      };
+    }
+    return {
+      reason:
+        "no built-in template with a browser-reachable first layout was found.",
+    };
+  } catch (error) {
+    return {
+      reason: `template discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    };
+  } finally {
+    await api.dispose();
+  }
+}
+
+/** The E2 live cases skip with a recorded reason when no template qualifies. */
+function requireLiveBrowserTemplate(): LiveBrowserTemplate {
+  if (liveBrowserTemplate !== null) return liveBrowserTemplate;
+  test.skip(
+    true,
+    liveBrowserTemplateSkipReason ??
+      "No engine template with servable art was discovered.",
+  );
+  throw new Error("unreachable");
+}
+
 
 /** Every absolute http(s) URL anywhere in the deck JSON (browser-loaded resources). */
 function collectExternalAssetUrls(value: unknown): string[] {
@@ -1262,6 +1615,18 @@ test.beforeAll(async () => {
       `[qa-presentations-ui] custom theme ${customThemeDiscovery.label}`,
     );
   }
+
+  const browserTemplateDiscovery = await discoverBrowserTemplates();
+  if ("reason" in browserTemplateDiscovery) {
+    liveBrowserTemplateSkipReason = browserTemplateDiscovery.reason;
+  } else {
+    liveBrowserTemplate = browserTemplateDiscovery.template;
+    liveBrowserCustomCount = browserTemplateDiscovery.customCount;
+    liveBrowserSwitchSkipReason = browserTemplateDiscovery.switchSkipReason;
+    console.log(
+      `[qa-presentations-ui] browser template ${browserTemplateDiscovery.template.id} layouts ${browserTemplateDiscovery.template.layoutCount} custom ${browserTemplateDiscovery.customCount} switch ${browserTemplateDiscovery.template.switch ? `${browserTemplateDiscovery.template.switch.fromLayoutId}->${browserTemplateDiscovery.template.switch.toLayoutId}` : "none"}`,
+    );
+  }
 });
 
 test.afterEach(async () => {
@@ -1549,6 +1914,97 @@ test.describe("owner-gated asset proxy", () => {
       await expectJsonError(res, 400);
     });
   }
+});
+
+/**
+ * Task E2 — the session-gated template-asset route (spec §5.1 rows 7–8).
+ *
+ * Template art is engine-public and carries no deck/user data, so the route
+ * has no deck-membership check; it does keep the session gate, the shared
+ * traversal guard and a narrower allowlist (`/app_data/templates/**`,
+ * `/app_data/fonts/**`, `/static/**`, `/vendor/**` — never
+ * `/app_data/images/**`, exports or uploads). Every refusal below is settled
+ * before any engine call, so these rows never skip.
+ */
+test.describe("template asset route (never skip)", () => {
+  test.describe("no session", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
+    test("answers 401 before any engine call", async ({ request }) => {
+      const res = await request.get(
+        templateAssetRouteUrl("/app_data/templates/general/static/thumbnail.png"),
+      );
+
+      await expectJsonError(res, 401);
+    });
+  });
+
+  const unsafeQueries: Array<[string, string]> = [
+    ["missing src", ""],
+    ["empty src", "src="],
+    ["parent traversal", `src=${encodeURIComponent("/app_data/../../etc/passwd")}`],
+    ["percent-encoded traversal", "src=/app_data/%2e%2e/%2e%2e/secret.png"],
+    [
+      "double-encoded traversal",
+      "src=/app_data/templates/%252e%252e/%252e%252e/api/v1/ppt/presentation/all",
+    ],
+    ["backslash", `src=${encodeURIComponent("/app_data/templates/x\\thumb.png")}`],
+    ["double slash", `src=${encodeURIComponent("//app_data/templates/x/thumb.png")}`],
+    ["not rooted", `src=${encodeURIComponent("app_data/templates/x/thumb.png")}`],
+    ["absolute URL", `src=${encodeURIComponent("https://evil.example/thumb.png")}`],
+    ["outside the mounts", `src=${encodeURIComponent("/etc/passwd")}`],
+  ];
+
+  for (const [label, query] of unsafeQueries) {
+    test(`400s an unsafe src (${label})`, async ({ request }) => {
+      const res = await request.get(
+        query === "" ? "/api/presentation/template-asset" : `/api/presentation/template-asset?${query}`,
+      );
+
+      await expectJsonError(res, 400);
+    });
+  }
+
+  const notTemplateAssets: Array<[string, string]> = [
+    ["an image-library path", "/app_data/images/uploaded.png"],
+    ["an export path", "/app_data/exports/pptx/Deck_7f3a9c2b1d.pptx"],
+    ["a conversion scratch path", "/app_data/pptx-to-abc/temp.png"],
+  ];
+
+  for (const [label, src] of notTemplateAssets) {
+    test(`404s ${label} (user data stays behind the owner-gated proxy)`, async ({
+      request,
+    }) => {
+      const res = await request.get(templateAssetRouteUrl(src));
+
+      await expectJsonError(res, 404);
+    });
+  }
+});
+
+/**
+ * Task E2 — the live half of the template-asset route: a real built-in
+ * thumbnail streams through the session gate with the private cache header and
+ * its extension's content type. The engine's template list is probed in
+ * beforeAll; absence records the honest skip.
+ */
+test.describe("template asset route (live thumbnail)", () => {
+  test("serves a real built-in thumbnail with the private cache header", async ({
+    request,
+  }) => {
+    const live = requireLiveBrowserTemplate();
+
+    const res = await request.get(templateAssetRouteUrl(live.thumbnail));
+
+    expect(res.status()).toBe(200);
+    const headers = res.headers();
+    expect(headers["cache-control"]).toContain("private");
+    expect(headers["cache-control"]).toContain("max-age=300");
+    expect(headers["content-type"]).toBe(expectedContentType(live.thumbnail));
+
+    const bytes = await res.body();
+    expect(bytes.byteLength).toBeGreaterThan(0);
+  });
 });
 
 /**
@@ -1867,6 +2323,211 @@ test.describe("classifyAssetPath (pure policy)", () => {
 });
 
 /**
+ * Task E2 — the template-asset route's pure policy and URL builder. The route
+ * and the adapter both call these, so the allowlist and the traversal guard
+ * are provable without an engine.
+ */
+test.describe("template-asset policy (pure)", () => {
+  test("allows only the engine-public mounts", () => {
+    for (const src of [
+      "/app_data/templates/general/static/thumbnail.png",
+      "/app_data/templates/custom-id/fonts/x.ttf",
+      "/app_data/fonts/Inter-Regular.ttf",
+      "/static/images/placeholder.jpg",
+      "/vendor/fonts/sans_serif/poppins/Poppins-Regular.ttf",
+    ]) {
+      expect(isEnginePublicAssetPath(src), src).toBe(true);
+    }
+  });
+
+  test("refuses every other /app_data path and every unsafe shape", () => {
+    const refused = [
+      "/app_data/images/cover.png",
+      "/app_data/uploads/file.png",
+      "/app_data/exports/pptx/Deck.pptx",
+      "/app_data/pptx-to-abc/temp.png",
+      "/etc/passwd",
+      "/app_data/../../etc/passwd",
+      "/app_data/%2e%2e/%2e%2e/api/v1/ppt/presentation/all",
+      "/app_data/templates/%252e%252e/x",
+      "/app_data/templates/x\\thumb.png",
+      "//app_data/templates/x/thumb.png",
+      "app_data/templates/x/thumb.png",
+      "https://evil.example/thumb.png",
+      "",
+      null,
+      undefined,
+    ];
+    for (const src of refused) {
+      expect(isEnginePublicAssetPath(src), String(src)).toBe(false);
+    }
+  });
+
+  test("builds proxy URLs for public paths and passes through absolute sources", () => {
+    expect(
+      templateAssetUrl("/app_data/templates/general/static/thumbnail.png"),
+    ).toBe(
+      "/api/presentation/template-asset?src=%2Fapp_data%2Ftemplates%2Fgeneral%2Fstatic%2Fthumbnail.png",
+    );
+    expect(templateAssetUrl("/vendor/fonts/inter.ttf")).toBe(
+      "/api/presentation/template-asset?src=%2Fvendor%2Ffonts%2Finter.ttf",
+    );
+    // User data and unsafe shapes never get a URL at all.
+    expect(templateAssetUrl("/app_data/images/cover.png")).toBeNull();
+    expect(templateAssetUrl("/app_data/%2e%2e/secret")).toBeNull();
+    expect(templateAssetUrl("")).toBeNull();
+    expect(templateAssetUrl(null)).toBeNull();
+    // Absolute and data sources pass through exactly like the deck proxy.
+    expect(templateAssetUrl("https://cdn.example/art.png")).toBe(
+      "https://cdn.example/art.png",
+    );
+    expect(templateAssetUrl("data:image/png;base64,AAAA")).toBe(
+      "data:image/png;base64,AAAA",
+    );
+  });
+});
+
+/**
+ * Task E2 — the preview's synthetic deck. The preview route renders template
+ * layouts through the existing `DeckStage`, which takes a `PresentationDeck`;
+ * this pins the bridge: one slide per layout, hydrated with empty content so
+ * the template's own defaults render, plus the template's theme and fonts.
+ */
+test.describe("template preview deck (pure)", () => {
+  const layout = (id: string, description: string): TemplateLayout => ({
+    id,
+    description,
+    components: [
+      {
+        id: "frame",
+        description: "Frame",
+        position: { x: 0, y: 0 },
+        elements: [
+          {
+            type: "text",
+            name: "title",
+            decorative: false,
+            position: { x: 10, y: 10 },
+            size: { width: 100, height: 40 },
+            runs: [{ text: "Template default" }],
+          },
+        ],
+      },
+    ],
+  });
+
+  test("builds one v2-standard slide per layout with the theme and fonts", async () => {
+    const { buildTemplatePreviewDeck } = await import(
+      "../../app/(app)/tools/presentation/templates/[templateId]/_components/templatePreviewModel"
+    );
+    const theme = {
+      colors: { primary: "#111111" },
+      fonts: { textFont: { name: "Inter", url: "/vendor/fonts/inter.ttf" } },
+    } as unknown as DeckTheme;
+
+    const deck = buildTemplatePreviewDeck({
+      templateId: "general",
+      name: "General",
+      layouts: [layout("title_intro", "Title"), layout("bullets", "Bullets")],
+      theme,
+      fonts: { Inter: "/vendor/fonts/inter.ttf" },
+    });
+
+    expect(deck).not.toBeNull();
+    expect(deck?.version).toBe("v2-standard");
+    expect(deck?.title).toBe("General");
+    expect(deck?.theme).toBe(theme);
+    expect(deck?.fonts).toEqual({ Inter: "/vendor/fonts/inter.ttf" });
+    expect(deck?.slides.map((slide) => slide.layout)).toEqual([
+      "title_intro",
+      "bullets",
+    ]);
+    expect(deck?.slides.map((slide) => slide.index)).toEqual([0, 1]);
+    // Every slide carries the hydrated layout so the stage has something real
+    // to render; the layout's own default text survives the empty hydration.
+    expect(deck?.slides[0]?.ui?.id).toBe("title_intro");
+    expect(deck?.slides[0]?.ui?.components).toHaveLength(1);
+    expect(
+      JSON.stringify(deck?.slides[0]?.ui?.components[0]?.elements[0]),
+    ).toContain("Template default");
+  });
+
+  test("returns null when the template has no layouts", async () => {
+    const { buildTemplatePreviewDeck } = await import(
+      "../../app/(app)/tools/presentation/templates/[templateId]/_components/templatePreviewModel"
+    );
+
+    expect(
+      buildTemplatePreviewDeck({
+        templateId: "empty",
+        name: "Empty",
+        layouts: [],
+        theme: null,
+        fonts: {},
+      }),
+    ).toBeNull();
+  });
+
+  test("drops layouts whose components aren't a list instead of throwing", async () => {
+    const { buildTemplatePreviewDeck, renderableTemplateLayouts } = await import(
+      "../../app/(app)/tools/presentation/templates/[templateId]/_components/templatePreviewModel"
+    );
+
+    const malformed = [
+      layout("ok", "Ok"),
+      { id: "no-components", description: "Bad", components: null },
+      { id: "missing-components", description: "Bad" },
+      null,
+    ];
+    expect(
+      renderableTemplateLayouts(malformed).map((entry) => entry.id),
+    ).toEqual(["ok"]);
+
+    const deck = buildTemplatePreviewDeck({
+      templateId: "general",
+      name: "General",
+      layouts: malformed as unknown as TemplateLayout[],
+      theme: null,
+      fonts: {},
+    });
+    expect(deck?.slides.map((slide) => slide.layout)).toEqual(["ok"]);
+    expect(deck?.n_slides).toBe(1);
+  });
+});
+
+/**
+ * Task E2 review fix — the image deferral's source predicate. The quiet window
+ * exists for the owner-gated deck proxy only: the template-asset route has no
+ * deck and no save to wait for, so a preview layout switch must never defer
+ * (the reused-slot case the live preview case also exercises).
+ */
+test.describe("deferred image sources (pure)", () => {
+  test("only the owner-gated deck proxy defers; template assets never do", async () => {
+    const { ASSET_INSERT_QUIET_MS, isProxiedSource } = await import(
+      "../../components/presentation/useDeferredImageSource"
+    );
+
+    expect(
+      isProxiedSource(
+        `/api/presentation/${randomUUID()}/asset?src=%2Fapp_data%2Fimages%2Fx.png`,
+      ),
+    ).toBe(true);
+    expect(
+      isProxiedSource(
+        "/api/presentation/template-asset?src=%2Fapp_data%2Ftemplates%2Fgeneral%2Fstatic%2Fimage1.png",
+      ),
+    ).toBe(false);
+    expect(isProxiedSource("/api/presentation/template-asset")).toBe(false);
+    expect(isProxiedSource("/api/presentation/")).toBe(false);
+    expect(isProxiedSource("/api/presentation")).toBe(false);
+    expect(isProxiedSource("/static/images/placeholder.jpg")).toBe(false);
+    expect(isProxiedSource(null)).toBe(false);
+    // The quiet window itself is unchanged.
+    expect(ASSET_INSERT_QUIET_MS).toBe(2_500);
+  });
+});
+
+/**
  * The Smart detector (spec §5.7, §6.10, D7) exercised directly: the
  * deck-level flags and the per-slide `html_content` signal, including the
  * payload shapes the engine stores unvalidated. The viewer routes and this
@@ -2003,6 +2664,170 @@ test.describe("viewer route access (never skip)", () => {
 
     expect(response?.status()).toBe(200);
     await expect(page.locator("[data-viewer-not-ready]")).toBeVisible();
+  });
+});
+
+/**
+ * Task E2 — the templates routes' access contract. The guest and malformed-id
+ * rows are settled before any engine call and never skip; the unknown-id 404
+ * needs the engine's own 4xx, so it records an honest skip when the engine is
+ * unreachable.
+ */
+test.describe("templates routes access (never skip)", () => {
+  test.describe("no session", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
+    test("renders the sign-in prompt on both templates routes, never a redirect", async ({
+      page,
+    }) => {
+      await page.goto("/tools/presentation/templates");
+      await expect(page.getByText("Sign in to browse templates")).toBeVisible();
+      await expect(page).not.toHaveURL(/\/login/);
+
+      await page.goto("/tools/presentation/templates/general");
+      await expect(page.getByText("Sign in to preview templates")).toBeVisible();
+      await expect(page).not.toHaveURL(/\/login/);
+    });
+  });
+
+  test("404s a malformed template id without a 500", async ({ page }) => {
+    const response = await page.goto(
+      "/tools/presentation/templates/not..a..template",
+    );
+
+    expect(response?.status()).not.toBe(500);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+  });
+
+  test("404s an unknown template id for QA1", async ({ page }) => {
+    test.skip(
+      liveBrowserTemplate === null,
+      liveBrowserTemplateSkipReason ??
+        "The engine template list is not reachable in this environment.",
+    );
+
+    const response = await page.goto(
+      `/tools/presentation/templates/${randomUUID()}`,
+    );
+
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText("This page could not be found.")).toBeVisible();
+  });
+});
+
+/**
+ * Task E2 — the templates browser and preview in a real browser: built-in
+ * cards with real art through the session-gated route, the first layout
+ * rendered through the shared `DeckStage`, and "Use this template" landing on
+ * the generator with the picker preselected. Discovery guarantees the engine
+ * art is servable; absence records the honest skip.
+ */
+test.describe("templates browser (live engine)", () => {
+  test("renders built-in cards with art, previews a layout and preselects the template", async ({
+    page,
+  }) => {
+    const live = requireLiveBrowserTemplate();
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto("/tools/presentation/templates");
+    await page.waitForSelector("[data-templates-browser]");
+
+    const cards = page.locator("[data-template-card]");
+    expect(await cards.count()).toBeGreaterThan(0);
+
+    const thumb = page.locator(`[data-template-thumb="${live.id}"]`);
+    await expect(thumb).toBeVisible();
+    await expect
+      .poll(async () =>
+        thumb.evaluate((node) => (node as HTMLImageElement).naturalWidth),
+      )
+      .toBeGreaterThan(0);
+
+    // The Custom tab is real; with no customs on the engine it shows the
+    // honest empty state instead of an invented card.
+    await page.locator('[data-template-tab="custom"]').click();
+    if (liveBrowserCustomCount === 0) {
+      await expect(page.getByText("No custom templates yet")).toBeVisible();
+    } else {
+      await expect(page.locator("[data-template-card]").first()).toBeVisible();
+    }
+    await page.locator('[data-template-tab="built-in"]').click();
+
+    // The preview renders the first layout through the shared DeckStage.
+    await page.locator(`[data-template-card="${live.id}"]`).click();
+    await page.waitForSelector("[data-template-preview-stage] [data-deck-stage]");
+    await expect(page.locator("[data-deck-stage]")).toHaveAttribute(
+      "data-slide-index",
+      "0",
+    );
+    const layoutButtons = page.locator("[data-template-layout]");
+    expect(await layoutButtons.count()).toBeGreaterThan(0);
+    if ((await layoutButtons.count()) > 1) {
+      await layoutButtons.nth(1).click();
+      await expect(page.locator("[data-deck-stage]")).toHaveAttribute(
+        "data-slide-index",
+        "1",
+      );
+    }
+
+    // E2 review fix: a layout switch that reuses an image slot with new bytes
+    // must render the new image immediately — the preview has no deck save, so
+    // the editor's 2.5 s quiet window must not apply. The bounded waits are
+    // below `ASSET_INSERT_QUIET_MS` on purpose: under the old prefix predicate
+    // the reused `<img>` unmounts for 2.5 s and these counts would not settle.
+    // Discovery guarantees each image occurs exactly once in its own layout and
+    // never in the other, so the count identifies the reused slot's node.
+    const switchTarget = live.switch;
+    if (switchTarget !== null) {
+      const fromSrc = templateAssetUrl(switchTarget.fromImageData);
+      const toSrc = templateAssetUrl(switchTarget.toImageData);
+      expect(fromSrc, "the switched image must resolve to a template asset").not.toBeNull();
+      expect(toSrc, "the switched image must resolve to a template asset").not.toBeNull();
+      if (fromSrc !== null && toSrc !== null) {
+        await page
+          .locator(`[data-template-layout="${switchTarget.fromLayoutId}"]`)
+          .click();
+        await expect(
+          page.locator(`[data-deck-stage] img[src="${fromSrc}"]`),
+        ).toHaveCount(1, { timeout: 1_500 });
+        await expect(
+          page.locator(`[data-deck-stage] img[src="${toSrc}"]`),
+        ).toHaveCount(0);
+
+        await page
+          .locator(`[data-template-layout="${switchTarget.toLayoutId}"]`)
+          .click();
+        await expect(
+          page.locator(`[data-deck-stage] img[src="${toSrc}"]`),
+        ).toHaveCount(1, { timeout: 1_500 });
+        await expect(
+          page.locator(`[data-deck-stage] img[src="${fromSrc}"]`),
+        ).toHaveCount(0);
+      }
+    } else {
+      console.log(
+        `[qa-presentations-ui] reused-image-slot switch not exercised: ${
+          liveBrowserSwitchSkipReason ?? "no layout pair discovered"
+        }`,
+      );
+    }
+
+    // "Use this template" lands on the generator with the picker preselected.
+    await page.locator("[data-template-use]").click();
+    await page.waitForURL(/\/tools\/presentation\?template=/);
+    await expect(
+      page.getByRole("combobox", { name: "Presentation template" }),
+    ).toContainText(live.name);
+    await expect(page.locator("[data-template-preselect-miss]")).toHaveCount(0);
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
+      [],
+    );
   });
 });
 

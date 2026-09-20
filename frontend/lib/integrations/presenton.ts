@@ -50,7 +50,11 @@ import type {
   PresentationTemplate,
   TemplateLayouts,
 } from "../presentation/types";
-import { assetContentType, isSafeAssetPath } from "../presentation/assets";
+import {
+  assetContentType,
+  isEnginePublicAssetPath,
+  isSafeAssetPath,
+} from "../presentation/assets";
 import {
   CHAT_MESSAGE_MAX_LENGTH,
   parseSseBlocks,
@@ -173,6 +177,21 @@ export type PresentonTemplate = {
   name: string;
   description: string | null;
   layoutCount: number;
+  /**
+   * The engine's thumbnail asset path (`/app_data/templates/<id>/…`, the
+   * route's `_get_template_thumbnail_from_assets`) or an absolute URL for a
+   * custom template created from slide images; null when the engine stored
+   * none. The browser renders it through the session-gated template-asset
+   * route (`templateAssetUrl`), which allows only engine-public mounts.
+   */
+  thumbnail: string | null;
+  /**
+   * The engine's own preview URL (`TemplateListItem.preview_url`): absolute
+   * and engine-hosted. Carried faithfully for callers that need it; the
+   * native browser renders its own preview route instead, so it is never a
+   * navigation target.
+   */
+  previewUrl: string | null;
   isDefault: boolean;
 };
 
@@ -234,19 +253,27 @@ function joinUrl(base: string, path: string): string {
 }
 
 /**
- * A task id or remote path must be usable as a URL segment and nothing else:
- * a `/` or `..` in either would let a stored value reach a different route on
- * the Presenton host, so both are rejected before any fetch.
+ * Whether a value can be used as one Presenton URL path segment and nothing
+ * else: a `/` or `..` would let a stored or caller value reach a different
+ * route on the Presenton host, so both are rejected before any fetch. Exported
+ * for route pages that must refuse a malformed id before calling the adapter
+ * (the adapter re-checks it anyway).
  */
+export function isSafeSegment(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return !(
+    trimmed === "" ||
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    trimmed.includes("..") ||
+    trimmed.includes("?") ||
+    trimmed.includes("#")
+  );
+}
+
 function assertSafeSegment(value: string, label: string): void {
-  if (
-    value.trim() === "" ||
-    value.includes("/") ||
-    value.includes("\\") ||
-    value.includes("..") ||
-    value.includes("?") ||
-    value.includes("#")
-  ) {
+  if (!isSafeSegment(value)) {
     throw new PresentonError("rejected", `Invalid Presenton ${label}.`);
   }
 }
@@ -447,17 +474,29 @@ export const PRESENTON_TEMPLATE_PAGE_SIZE_DEFAULT = 100;
 /** The engine route's own bound (`Query(default=20, ge=1, le=100)`). */
 export const PRESENTON_TEMPLATE_PAGE_SIZE_MAX = 100;
 
+/**
+ * The engine's `default` filter as its own tri-state (route `template.py:1081`:
+ * "Only include default templates when true, custom templates when false",
+ * absent = no filter):
+ *
+ * - `"default"` → `default=true` — built-in templates only;
+ * - `"all"` → no filter — built-ins and customs in one page;
+ * - `"custom"` → `default=false` — custom templates only.
+ */
+export type PresentonTemplateScope = "default" | "all" | "custom";
+
 /** The §3.5 list request's caller options; the defaults preserve the picker's original query. */
 export type PresentonTemplateListOptions = {
   /** 1-based page; validated before any fetch. */
   page?: number;
   /** Entries per page; the engine accepts 1–100. */
   pageSize?: number;
+  /** The engine's `default` filter tri-state; see {@link PresentonTemplateScope}. */
+  scope?: PresentonTemplateScope;
   /**
-   * `false` (default) restricts the read to built-in templates (`default=true`).
-   * `true` omits the engine's `default` filter, so the page carries built-ins
-   * plus custom templates: the route has no "custom only" filter, and
-   * `default=false` would mean exactly that.
+   * The original two-state spelling of `scope`, kept working: `true` is
+   * `scope: "all"` (no filter — built-ins plus customs), `false`/absent is
+   * `scope: "default"` (built-ins only). `scope` wins when both are given.
    */
   includeCustom?: boolean;
 };
@@ -485,8 +524,15 @@ export function buildTemplateListQuery(
     throw new PresentonError("rejected", "Invalid template page size.");
   }
 
+  const scope =
+    options.scope ?? (options.includeCustom === true ? "all" : "default");
+  if (scope !== "default" && scope !== "all" && scope !== "custom") {
+    throw new PresentonError("rejected", "Invalid template scope.");
+  }
+
   const params = new URLSearchParams();
-  if (options.includeCustom !== true) params.set("default", "true");
+  if (scope === "default") params.set("default", "true");
+  if (scope === "custom") params.set("default", "false");
   params.set("page", String(page));
   params.set("page_size", String(pageSize));
   return `/api/v1/ppt/template/all?${params.toString()}`;
@@ -495,11 +541,11 @@ export function buildTemplateListQuery(
 /**
  * §3.5 — one page of templates. Built-ins only, first page, up to 100, by
  * default; {@link PresentonTemplateListOptions} widens the read faithfully
- * (`includeCustom` omits the `default` filter, `page`/`pageSize` go as asked).
- * The returned `page`/`pageSize` are the request's own validated values, never
- * the engine's echo, and `total` is the engine's count of matching templates
- * (falling back to the page's usable item count when the envelope omits it).
- * Item normalization and the failure vocabulary are unchanged.
+ * (`scope`/`includeCustom`, `page`/`pageSize` go as asked). The returned
+ * `page`/`pageSize` are the request's own validated values, never the engine's
+ * echo, and `total` is the engine's count of matching templates (falling back
+ * to the page's usable item count when the envelope omits it). Item
+ * normalization and the failure vocabulary are unchanged.
  */
 export async function listPresentationTemplates(
   options: PresentonTemplateListOptions = {},
@@ -539,6 +585,8 @@ export async function listPresentationTemplates(
           ? item.description
           : null,
       layoutCount: typeof item.layout_count === "number" ? item.layout_count : 0,
+      thumbnail: normalizeNullableText(item.thumbnail),
+      previewUrl: normalizeNullableText(item.preview_url),
       isDefault: item.is_default === true,
     }))
     .filter((template) => template.id !== "" && template.name !== "");
@@ -595,6 +643,8 @@ function readTemplate(value: unknown): PresentationTemplate {
   const template = value as Record<string, unknown>;
   return {
     ...(value as PresentationTemplate),
+    thumbnail: normalizeNullableText(template.thumbnail),
+    preview_url: normalizeNullableText(template.preview_url),
     layouts:
       typeof template.layouts === "object" &&
       template.layouts !== null &&
@@ -610,6 +660,11 @@ function readTemplate(value: unknown): PresentationTemplate {
         : null,
     fonts: normalizeTemplateFonts(template.fonts),
   };
+}
+
+/** A trimmed non-empty string, else null (template asset/URL fields). */
+function normalizeNullableText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
 /** `{family: url}` as stored in the template's assets; trimmed, non-empty entries only. */
@@ -1165,21 +1220,20 @@ export type PresentonAsset = {
 };
 
 /**
- * B2 — fetch one asset for the owner-gated proxy. The path has already passed
- * the route's policy (`classifyAssetPath`); the adapter re-enforces the same
- * prefix + traversal/encoding guard (`isSafeAssetPath`, which rejects `..`,
- * `\`, `//`, `%`, `?` and `#`) before any request, so no stored or caller value
- * can be turned into a request for another route or host. The content type is
- * derived from the path, never trusted from the engine (its static mount
- * answers `application/octet-stream` for fonts). No bytes and no paths are
- * ever logged; failures use the adapter's existing classification.
+ * The shared asset-bytes transport: one authenticated GET for a path that has
+ * already passed a caller-supplied policy guard. The content type is derived
+ * from the path, never trusted from the engine (its static mount answers
+ * `application/octet-stream` for fonts). No bytes and no paths are ever
+ * logged; failures use the adapter's existing classification.
  */
-export async function fetchPresentationAsset(
+async function fetchEngineAssetBytes(
   path: string,
+  guard: (src: unknown) => src is string,
+  message: string,
 ): Promise<PresentonAsset> {
   const base = requireBaseUrl();
-  if (!isSafeAssetPath(path)) {
-    throw new PresentonError("rejected", "Invalid asset path.");
+  if (!guard(path)) {
+    throw new PresentonError("rejected", message);
   }
 
   const response = await fetchWithTimeout(
@@ -1196,6 +1250,39 @@ export async function fetchPresentationAsset(
     bytes: await response.arrayBuffer(),
     contentType: assetContentType(path),
   };
+}
+
+/**
+ * B2 — fetch one asset for the owner-gated proxy. The path has already passed
+ * the route's policy (`classifyAssetPath`); the adapter re-enforces the same
+ * prefix + traversal/encoding guard (`isSafeAssetPath`, which rejects `..`,
+ * `\`, `//`, `%`, `?` and `#`) before any request, so no stored or caller value
+ * can be turned into a request for another route or host.
+ */
+export async function fetchPresentationAsset(
+  path: string,
+): Promise<PresentonAsset> {
+  return fetchEngineAssetBytes(path, isSafeAssetPath, "Invalid asset path.");
+}
+
+/**
+ * E2 — fetch one engine-public template asset for the session-gated
+ * template-asset route. Template thumbnails/assets carry no deck or user data,
+ * so this read has no deck membership check; the narrower guard
+ * (`isEnginePublicAssetPath`: `/app_data/templates/**`, `/app_data/fonts/**`,
+ * `/static/**`, `/vendor/**` only) is what keeps `/app_data/images/**`,
+ * exports, uploads and every other user-data path unreachable through the
+ * route, and it is re-enforced here before any request exactly like the
+ * owner-gated proxy's guard.
+ */
+export async function fetchPresentationTemplateAsset(
+  path: string,
+): Promise<PresentonAsset> {
+  return fetchEngineAssetBytes(
+    path,
+    isEnginePublicAssetPath,
+    "Invalid template asset path.",
+  );
 }
 
 // ---------------------------------------------------------------------------

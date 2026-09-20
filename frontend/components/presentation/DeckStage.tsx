@@ -30,7 +30,10 @@ import type {
 } from "@/lib/presentation/types";
 import { DeckFontFace } from "./DeckFontFace";
 import { SlideElementView } from "./SlideElementView";
-import { DeckStageProvider } from "./StageContext";
+import {
+  DeckStageProvider,
+  type DeckStageAssetUrl,
+} from "./StageContext";
 import { cssFamilyName, frameStyle, themeCssVariables } from "./style";
 
 export const DECK_STAGE_WIDTH = 1280;
@@ -44,6 +47,13 @@ type DeckStageProps = {
   id: string;
   slideIndex: number;
   scale?: DeckStageScale;
+  /**
+   * The asset resolver for this stage's images and font files. Defaults to the
+   * owner-gated deck proxy (`/api/presentation/{id}/asset`); the E2 template
+   * preview passes the template-asset resolver so the same stage renders
+   * read-only template layouts without a deck row.
+   */
+  assetUrl?: DeckStageAssetUrl;
   /**
    * `false` (the default) renders a display-only stage: pointer events and
    * text selection pass through, which is what thumbnail rails want. `true`
@@ -76,6 +86,7 @@ export function DeckStage({
   id,
   slideIndex,
   scale = "fit-width",
+  assetUrl,
   interactive = false,
 }: DeckStageProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -172,8 +183,8 @@ export function DeckStage({
         data-slide-index={slideIndex}
         style={stageStyle}
       >
-        <DeckFontFace id={id} fonts={deck.fonts} />
-        <DeckStageProvider id={id} fonts={fonts}>
+        <DeckFontFace id={id} fonts={deck.fonts} assetUrl={assetUrl} />
+        <DeckStageProvider id={id} assetUrl={assetUrl} fonts={fonts}>
           {rootElements.map((element, index) => (
             <SlideElementView key={`root-${index}`} element={element} mode="absolute" />
           ))}

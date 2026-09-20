@@ -21,9 +21,19 @@ import { isEnginePublicImageSource } from "@/lib/presentation/imageScope";
 /** The editor's autosave debounce is 2 s; allow the write a small margin. */
 export const ASSET_INSERT_QUIET_MS = 2_500;
 
-/** True for sources that go through the owner-gated asset proxy. */
+/**
+ * The owner-gated deck proxy's URL shape only:
+ * `/api/presentation/<deck id>/asset?src=…`. The E2 template-asset route
+ * (`/api/presentation/template-asset?src=…`) deliberately does **not** match:
+ * it carries no deck and no save, so a template preview's layout switch has
+ * nothing to wait for and must render its new image immediately (review fix,
+ * E2). A prefix check alone would swallow it.
+ */
+const DECK_ASSET_PROXY_SOURCE = /^\/api\/presentation\/[^/?#]+\/asset\?/;
+
+/** True for sources that go through the owner-gated deck asset proxy. */
 export function isProxiedSource(source: string | null): boolean {
-  return source !== null && source.startsWith("/api/presentation/");
+  return source !== null && DECK_ASSET_PROXY_SOURCE.test(source);
 }
 
 /** True while a runtime-changed proxied source waits for its slide save. */

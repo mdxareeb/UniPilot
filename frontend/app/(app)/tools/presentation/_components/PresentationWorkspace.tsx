@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion, useReducedMotion } from "motion/react";
 import { ChevronDown, Presentation as PresentationIcon } from "lucide-react";
 import { useSignInPrompt } from "@/components/auth/SignInPromptProvider";
@@ -153,8 +153,27 @@ export function PresentationWorkspace({
   const router = useRouter();
   const reduced = useReducedMotion() ?? false;
 
+  /* E2 — "Use this template" lands on `?template=<id>`. This repo's tool hubs
+     read query-driven client state with `useSearchParams()` in the client
+     surface (TasksWorkspace, DocumentsHub, CalendarWorkspace), so the same
+     pattern is used here rather than threading `searchParams` through the
+     server page. The preselect only applies when the id is one of the loaded
+     template options — a stale or unknown id falls back to the default picker
+     value and says so below instead of rendering a lying control. */
+  const searchParams = useSearchParams();
+  const requestedTemplate = searchParams.get("template");
+  const preselectedTemplate =
+    requestedTemplate !== null &&
+    templates.some((item) => item.id === requestedTemplate)
+      ? requestedTemplate
+      : null;
+  const templateMissing =
+    requestedTemplate !== null && preselectedTemplate === null;
+
   const [prompt, setPrompt] = useState("");
-  const [template, setTemplate] = useState(templates[0]?.id ?? "general");
+  const [template, setTemplate] = useState(
+    preselectedTemplate ?? templates[0]?.id ?? "general",
+  );
   const [nSlides, setNSlides] = useState("auto");
   const [format, setFormat] = useState("pptx");
   const [sourceIds, setSourceIds] = useState<string[]>([]);
@@ -346,12 +365,17 @@ export function PresentationWorkspace({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="presentation-template"
-              className="text-label-sm font-medium text-foreground"
-            >
-              Template
-            </label>
+            <div className="flex min-w-0 items-center justify-between gap-3">
+              <label
+                htmlFor="presentation-template"
+                className="text-label-sm font-medium text-foreground"
+              >
+                Template
+              </label>
+              <WorkspaceAction href="/tools/presentation/templates">
+                Browse templates
+              </WorkspaceAction>
+            </div>
             <Select
               id="presentation-template"
               value={template}
@@ -359,6 +383,18 @@ export function PresentationWorkspace({
               options={templateOptions}
               aria-label="Presentation template"
             />
+            {templateMissing ? (
+              <p
+                data-template-preselect-miss=""
+                className="text-label-sm text-muted-foreground"
+              >
+                The requested template isn&rsquo;t in the service&rsquo;s list —
+                showing{" "}
+                {templateOptions.find((option) => option.value === template)
+                  ?.label ?? "the default"}
+                .
+              </p>
+            ) : null}
           </div>
 
           {/* Sources: the caller's PDF/DOCX documents, multi-select. Every

@@ -23,7 +23,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { deckAssetUrl, elementBox } from "@/lib/presentation/elements";
+import { elementBox } from "@/lib/presentation/elements";
 import type { ImageElement as ImageElementModel } from "@/lib/presentation/types";
 import { useRecoloredIconSource } from "./useRecoloredIcon";
 import { useDeckStage } from "./StageContext";
@@ -58,8 +58,8 @@ export function ImageElement({
   element: ImageElementModel;
   mode: RenderMode;
 }) {
-  const { id } = useDeckStage();
-  const source = deckAssetUrl(id, element.data);
+  const { assetUrl } = useDeckStage();
+  const source = assetUrl(element.data);
   const [attempts, setAttempts] = useState(0);
   const retryTimer = useRef<number | null>(null);
   /* A runtime-changed proxied source (an editor insert) waits for its slide

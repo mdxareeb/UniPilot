@@ -83,6 +83,49 @@ export function assetContentType(path: string): string {
   return ASSET_CONTENT_TYPES[extension] ?? "application/octet-stream";
 }
 
+/**
+ * E2 — the template-asset route's policy: only the engine-public mounts are
+ * reachable without a deck (`/app_data/templates/**`, `/app_data/fonts/**`,
+ * `/static/**`, `/vendor/**`). Template assets carry no deck or user data —
+ * they are the engine's packaged template art/fonts, shared across every deck
+ * that uses the template — so the route needs no deck-membership check.
+ * Everything else under `/app_data/` (images, uploads, exports, `pptx-to-*`,
+ * mem0) is user data and stays behind the owner-gated proxy's membership rule.
+ *
+ * Reuses {@link isSafeAssetPath}, so the same traversal/encoding guard applies
+ * before the narrower prefix check.
+ */
+export function isEnginePublicAssetPath(src: unknown): src is string {
+  if (!isSafeAssetPath(src)) return false;
+  return (
+    src.startsWith(TEMPLATE_PREFIX) ||
+    src.startsWith(FONTS_PREFIX) ||
+    src.startsWith("/static/") ||
+    src.startsWith("/vendor/")
+  );
+}
+
+/** Absolute (`https://…`, `//…`) and `data:` sources never touch a proxy. */
+const PASSTHROUGH_TEMPLATE_SOURCE = /^(?:[a-z][a-z0-9+.-]*:)?\/\//i;
+
+/**
+ * The browser URL for one template asset (a card thumbnail or a preview
+ * stage's image/font source). Engine-public mounts go through the
+ * session-gated template-asset route; absolute/`data:` sources pass through
+ * exactly as `deckAssetUrl` lets them; anything else is unresolvable — the
+ * caller renders nothing (or its placeholder) rather than a broken URL.
+ */
+export function templateAssetUrl(src: unknown): string | null {
+  if (typeof src !== "string") return null;
+  const value = src.trim();
+  if (value === "") return null;
+  if (PASSTHROUGH_TEMPLATE_SOURCE.test(value) || value.startsWith("data:")) {
+    return value;
+  }
+  if (!isEnginePublicAssetPath(value)) return null;
+  return `/api/presentation/template-asset?src=${encodeURIComponent(value)}`;
+}
+
 /** The distinct, non-empty `layout_group` values the deck's slides carry. */
 function deckTemplateIds(deck: PresentationDeck): string[] {
   const ids = new Set<string>();

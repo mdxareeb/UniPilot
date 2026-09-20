@@ -58,8 +58,12 @@ export default async function PresentationToolPage() {
     if (configured) {
       try {
         // The adapter returns a page ({items,total,page,pageSize}); the picker
-        // renders the first page's items.
-        templates = (await listPresentationTemplates()).items;
+        // renders the first page's items. Scope "all" (no `default` filter)
+        // keeps built-ins and customs in the picker, so a "Use this template"
+        // link from the templates browser's Custom tab can preselect.
+        templates = (
+          await listPresentationTemplates({ scope: "all" })
+        ).items;
       } catch {
         // Unreachable service: the picker falls back to the built-in
         // General template; generating would answer the service's error
