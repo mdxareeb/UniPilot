@@ -268,6 +268,19 @@ export default defineConfig({
       },
     },
     {
+      // Task 19.x — the assistant chat UI. C1 ships the pure frame
+      // vocabulary/parser/reducer; later C tasks add the live panel cases.
+      // It runs after the assistant backend pass whose contract it consumes
+      // and is a dependency of the parallel workspace specs.
+      name: "qa-assistant-ui",
+      testMatch: /assistant-ui\.spec\.ts/,
+      timeout: 120_000,
+      dependencies: ["qa-assistant-backend"],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
+    },
+    {
       // Task 29.1 — the generic background runner. It drives the worker
       // process against real jobs, so it runs at the tail of the mutating
       // projects (after every other data/UI consumer) and before the parallel
@@ -434,6 +447,7 @@ export default defineConfig({
         "qa-documents-hub",
         "qa-documents-search",
         "qa-assistant-backend",
+        "qa-assistant-ui",
         "qa-jobs-runner",
         "qa-whatsapp-security",
         "qa-whatsapp-jobs",

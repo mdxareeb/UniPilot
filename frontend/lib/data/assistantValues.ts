@@ -1,8 +1,9 @@
 /**
- * The assistant contract's client-safe half (Task 26.x): message/source
- * vocabulary and bounds, importable by UI and specs without touching the
- * server client. `assistant.ts` (server-only) owns the turn pipeline that
- * produces these values.
+ * The assistant contract's client-safe half (Tasks 26.x/19.x): message/source
+ * vocabulary, bounds and the SSE frame union, importable by UI and specs
+ * without touching the server client. `assistant.ts` (server-only) owns the
+ * turn pipeline that produces these values and re-exports the frame type for
+ * the route.
  */
 
 export const MESSAGE_CONTENT_MAX_LENGTH = 4_000;
@@ -28,3 +29,27 @@ export type MessageItem = {
   sources?: AssistantSource[];
   createdLabel: string;
 };
+
+/** The terminal statuses a `done` frame can carry (26.8/19.x). */
+export type AssistantTurnStatus = "complete" | "failed" | "unconfigured";
+
+/**
+ * One SSE frame of the streaming turn contract (26.8), exactly the shapes
+ * `POST /api/assistant/turn` emits as `data: <json>\n\n`:
+ *
+ *   { type: "start",   conversationId, configured }
+ *   { type: "delta",   text }
+ *   { type: "sources", sources }
+ *   { type: "done",    status: "complete" | "failed" | "unconfigured",
+ *                      messageId: string | null }
+ *   { type: "error",   error }                     // sanitized copy
+ *
+ * Client-safe: this union is the browser's half of the contract. The parser
+ * that turns SSE bytes into these frames lives in `assistantFrames.ts`.
+ */
+export type AssistantStreamFrame =
+  | { type: "start"; conversationId: string; configured: boolean }
+  | { type: "delta"; text: string }
+  | { type: "sources"; sources: AssistantSource[] }
+  | { type: "done"; status: AssistantTurnStatus; messageId: string | null }
+  | { type: "error"; error: string };

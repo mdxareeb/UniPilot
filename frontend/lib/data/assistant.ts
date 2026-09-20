@@ -44,8 +44,16 @@ import { createServiceClient } from "@/lib/supabase/service";
 import {
   MESSAGE_CONTENT_MAX_LENGTH,
   type AssistantSource,
+  type AssistantStreamFrame,
   type MessageItem,
 } from "./assistantValues";
+
+/**
+ * The SSE frame contract (26.8) moved to the client-safe vocabulary module
+ * (`assistantValues.ts`) for 19.x. Re-exported here so the route and every
+ * existing server consumer keep their import path.
+ */
+export type { AssistantStreamFrame } from "./assistantValues";
 
 /** 26.10 — per-user turn rate limit. */
 export const ASSISTANT_RATE_LIMIT_PER_MINUTE = 10;
@@ -79,17 +87,6 @@ export type AssistantTurnResult = {
   assistantMessage: MessageItem | null;
   sources: AssistantSource[];
 };
-
-export type AssistantStreamFrame =
-  | { type: "start"; conversationId: string; configured: boolean }
-  | { type: "delta"; text: string }
-  | { type: "sources"; sources: AssistantSource[] }
-  | {
-      type: "done";
-      status: "complete" | "failed" | "unconfigured";
-      messageId: string | null;
-    }
-  | { type: "error"; error: string };
 
 function parseContent(value: unknown): string | null {
   if (typeof value !== "string") return null;
