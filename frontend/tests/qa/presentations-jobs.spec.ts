@@ -20,6 +20,10 @@
  *   theme, a slide update wraps the full slide, a structural replace carries a
  *   fresh UUID per slide) and the structural capability flag is off unless
  *   `PRESENTON_STRUCTURAL_EDITS=1`;
+ * - the E1 template reads: the §3.5 query builder (defaults, the `default`
+ *   filter, pagination bounds), the normalized `{items,total,page,pageSize}`
+ *   page, the template/theme reads and the unchanged failure classification,
+ *   all against a stub or purely — never the engine;
  * - the request parser accepts only the bounded vocabulary;
  * - RLS: owners read only their own rows; no client role may write; `anon`
  *   reads nothing.
@@ -839,6 +843,298 @@ test.describe("adapter guards (no Presenton configured)", () => {
       ).toBeNull();
     });
   }
+});
+
+/**
+ * Task E1 — the §3.5 template reads. The list query is built by a pure,
+ * exported function so defaults, the `default` filter and the pagination
+ * bounds are provable with no service; the in-process stub then proves the
+ * exact wire query, the normalized page envelope and the template/theme reads
+ * (the same posture as the C3 mutation-wire proof — the stub is this test's
+ * own server, not the engine).
+ */
+test.describe("template list query (pure)", () => {
+  test("defaults to page 1, size 100 and built-ins only", async () => {
+    const { buildTemplateListQuery } = await import(
+      "../../lib/integrations/presenton"
+    );
+
+    expect(buildTemplateListQuery()).toBe(
+      "/api/v1/ppt/template/all?default=true&page=1&page_size=100",
+    );
+    // The empty options object is the same read as no options at all.
+    expect(buildTemplateListQuery({})).toBe(
+      "/api/v1/ppt/template/all?default=true&page=1&page_size=100",
+    );
+    expect(buildTemplateListQuery({ includeCustom: false })).toBe(
+      "/api/v1/ppt/template/all?default=true&page=1&page_size=100",
+    );
+  });
+
+  test("includeCustom true omits the engine's default filter", async () => {
+    const { buildTemplateListQuery } = await import(
+      "../../lib/integrations/presenton"
+    );
+
+    // `default=false` would mean "custom only"; includeCustom widens the page
+    // by sending no filter at all.
+    expect(buildTemplateListQuery({ includeCustom: true })).toBe(
+      "/api/v1/ppt/template/all?page=1&page_size=100",
+    );
+  });
+
+  test("forwards page and page size exactly as asked", async () => {
+    const { buildTemplateListQuery } = await import(
+      "../../lib/integrations/presenton"
+    );
+
+    expect(buildTemplateListQuery({ page: 3, pageSize: 25 })).toBe(
+      "/api/v1/ppt/template/all?default=true&page=3&page_size=25",
+    );
+    expect(
+      buildTemplateListQuery({ page: 2, pageSize: 1, includeCustom: true }),
+    ).toBe("/api/v1/ppt/template/all?page=2&page_size=1");
+    expect(buildTemplateListQuery({ pageSize: 100 })).toContain(
+      "page_size=100",
+    );
+  });
+
+  test("rejects out-of-bounds pagination before any fetch", async () => {
+    const { buildTemplateListQuery } = await import(
+      "../../lib/integrations/presenton"
+    );
+
+    const invalid: Array<[string, Parameters<typeof buildTemplateListQuery>[0]]> = [
+      ["page 0", { page: 0 }],
+      ["negative page", { page: -3 }],
+      ["fractional page", { page: 1.5 }],
+      ["NaN page", { page: Number.NaN }],
+      ["page size 0", { pageSize: 0 }],
+      ["negative page size", { pageSize: -1 }],
+      ["page size above the engine's 100", { pageSize: 101 }],
+      ["fractional page size", { pageSize: 2.5 }],
+      ["NaN page size", { pageSize: Number.NaN }],
+    ];
+    for (const [label, options] of invalid) {
+      let code: string | null = null;
+      try {
+        buildTemplateListQuery(options);
+      } catch (error) {
+        code =
+          typeof error === "object" && error !== null && "code" in error
+            ? String((error as { code?: unknown }).code)
+            : null;
+      }
+      expect(code, `must reject ${label}`).toBe("rejected");
+    }
+  });
+
+  test("unsafe template ids are rejected before any fetch", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const savedUrl = process.env.PRESENTON_URL;
+    // A dead loopback port: a fetch would classify as `unreachable`; the guard
+    // must answer `rejected` without ever reaching it.
+    process.env.PRESENTON_URL = "http://127.0.0.1:9";
+    try {
+      await expect(
+        adapter.getPresentationTemplate("bad/../id"),
+      ).rejects.toMatchObject({ code: "rejected" });
+      await expect(
+        adapter.getTemplateTheme("bad/../id"),
+      ).rejects.toMatchObject({ code: "rejected" });
+      await expect(
+        adapter.getTemplateTheme("general?x=1"),
+      ).rejects.toMatchObject({ code: "rejected" });
+    } finally {
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+    }
+  });
+
+  test("an unreachable service still classifies the template list as unreachable", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const savedUrl = process.env.PRESENTON_URL;
+    process.env.PRESENTON_URL = "http://127.0.0.1:9";
+    try {
+      await expect(
+        adapter.listPresentationTemplates(),
+      ).rejects.toMatchObject({ code: "unreachable" });
+      await expect(
+        adapter.listPresentationTemplates({ page: 2, includeCustom: true }),
+      ).rejects.toMatchObject({ code: "unreachable" });
+    } finally {
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+    }
+  });
+});
+
+test.describe("template reads (in-process stub)", () => {
+  test("sends the built query and normalizes the page, template and theme reads", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const templateTheme = {
+      colors: { primary: "#111111", background: "#ffffff" },
+      fonts: { textFont: { name: "Inter", url: "/vendor/fonts/inter.ttf" } },
+    };
+    const template = {
+      id: "general",
+      name: "General",
+      description: "General purpose",
+      layout_count: 12,
+      thumbnail: "/static/general.png",
+      preview_url: "http://engine.test/template-preview?templateV2Id=general",
+      is_default: true,
+      created_at: "2026-09-16T00:00:00",
+      updated_at: "2026-09-16T00:00:00",
+      merged_components: null,
+      layouts: {
+        layouts: [{ id: "title", description: "Title", components: [] }],
+      },
+      theme: templateTheme,
+      fonts: { Inter: "/vendor/fonts/inter.ttf" },
+    };
+    let listBody: unknown = {
+      items: [
+        {
+          id: "general",
+          name: "General",
+          description: "  ",
+          layout_count: 12,
+          is_default: true,
+        },
+        { id: "", name: "No id" },
+        { id: "custom", name: "Custom", is_default: false },
+      ],
+      total: 7,
+      page: 2,
+      page_size: 25,
+    };
+    const requests: string[] = [];
+    let forcedStatus: number | null = null;
+    const stub = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      if (forcedStatus !== null) {
+        res.statusCode = forcedStatus;
+        res.end();
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      if ((req.url ?? "").startsWith("/api/v1/ppt/template/all")) {
+        res.end(JSON.stringify(listBody));
+        return;
+      }
+      if (req.url === "/api/v1/ppt/template/general/theme") {
+        res.end(
+          JSON.stringify({ template_id: "general", theme: templateTheme }),
+        );
+        return;
+      }
+      if (req.url === "/api/v1/ppt/template/general") {
+        res.end(JSON.stringify(template));
+        return;
+      }
+      if (req.url === "/api/v1/ppt/template/bare") {
+        res.end(JSON.stringify({ id: "bare", name: "Bare" }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ detail: "not found" }));
+    });
+    await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
+    const address = stub.address();
+    const port =
+      typeof address === "object" && address !== null ? address.port : 0;
+
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedKey = process.env.PRESENTON_API_KEY;
+    process.env.PRESENTON_URL = `http://127.0.0.1:${port}`;
+    delete process.env.PRESENTON_API_KEY;
+    try {
+      const page = await adapter.listPresentationTemplates();
+      expect(page).toEqual({
+        items: [
+          {
+            id: "general",
+            name: "General",
+            description: null,
+            layoutCount: 12,
+            isDefault: true,
+          },
+          {
+            id: "custom",
+            name: "Custom",
+            description: null,
+            layoutCount: 0,
+            isDefault: false,
+          },
+        ],
+        total: 7,
+        page: 1,
+        pageSize: 100,
+      });
+
+      const secondPage = await adapter.listPresentationTemplates({
+        page: 2,
+        pageSize: 25,
+        includeCustom: true,
+      });
+      expect(secondPage.page).toBe(2);
+      expect(secondPage.pageSize).toBe(25);
+      expect(secondPage.total).toBe(7);
+      expect(secondPage.items.map((item) => item.id)).toEqual([
+        "general",
+        "custom",
+      ]);
+
+      const read = await adapter.getPresentationTemplate("general");
+      expect(read.theme).toEqual(templateTheme);
+      expect(read.layouts?.layouts.map((layout) => layout.id)).toEqual([
+        "title",
+      ]);
+      expect(read.fonts).toEqual({ Inter: "/vendor/fonts/inter.ttf" });
+      expect(read.preview_url).toBe(template.preview_url);
+
+      // A template whose theme/layouts/fonts are absent is still readable:
+      // the fields default to null/{} instead of throwing.
+      const bare = await adapter.getPresentationTemplate("bare");
+      expect(bare.theme).toBeNull();
+      expect(bare.layouts).toBeNull();
+      expect(bare.fonts).toEqual({});
+
+      const theme = await adapter.getTemplateTheme("general");
+      expect(theme).toEqual(templateTheme);
+
+      expect(requests).toEqual([
+        "/api/v1/ppt/template/all?default=true&page=1&page_size=100",
+        "/api/v1/ppt/template/all?page=2&page_size=25",
+        "/api/v1/ppt/template/general",
+        "/api/v1/ppt/template/bare",
+        "/api/v1/ppt/template/general/theme",
+      ]);
+
+      // The usual failure vocabulary, unchanged: 4xx `rejected`, 5xx
+      // `unreachable`, an unreadable envelope `failed`.
+      forcedStatus = 400;
+      await expect(
+        adapter.listPresentationTemplates(),
+      ).rejects.toMatchObject({ code: "rejected" });
+      forcedStatus = 500;
+      await expect(
+        adapter.listPresentationTemplates(),
+      ).rejects.toMatchObject({ code: "unreachable" });
+      forcedStatus = null;
+      listBody = { total: 3 };
+      await expect(
+        adapter.listPresentationTemplates(),
+      ).rejects.toMatchObject({ code: "failed" });
+    } finally {
+      await new Promise<void>((resolve) => stub.close(() => resolve()));
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.PRESENTON_API_KEY;
+      else process.env.PRESENTON_API_KEY = savedKey;
+    }
+  });
 });
 
 /**

@@ -57,7 +57,9 @@ export default async function PresentationToolPage() {
 
     if (configured) {
       try {
-        templates = await listPresentationTemplates();
+        // The adapter returns a page ({items,total,page,pageSize}); the picker
+        // renders the first page's items.
+        templates = (await listPresentationTemplates()).items;
       } catch {
         // Unreachable service: the picker falls back to the built-in
         // General template; generating would answer the service's error

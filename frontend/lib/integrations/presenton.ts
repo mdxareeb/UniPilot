@@ -48,6 +48,7 @@ import type {
   IconType,
   PresentationDeck,
   PresentationTemplate,
+  TemplateLayouts,
 } from "../presentation/types";
 import { assetContentType, isSafeAssetPath } from "../presentation/assets";
 import {
@@ -173,6 +174,15 @@ export type PresentonTemplate = {
   description: string | null;
   layoutCount: number;
   isDefault: boolean;
+};
+
+/** One §3.5 page: the normalized items plus the pagination they were read with. */
+export type PresentonTemplatePage = {
+  items: PresentonTemplate[];
+  /** Matching templates across every page, as the engine counted them. */
+  total: number;
+  page: number;
+  pageSize: number;
 };
 
 export type PresentonExport = {
@@ -431,12 +441,74 @@ export async function getPresentationTaskStatus(
   return readTask(task);
 }
 
-/** §3.5 — the picker's options: built-in templates, first page, up to 100. */
-export async function listPresentationTemplates(): Promise<PresentonTemplate[]> {
+/** §3.5's own defaults: the first page of up to 100 built-in templates. */
+export const PRESENTON_TEMPLATE_PAGE_DEFAULT = 1;
+export const PRESENTON_TEMPLATE_PAGE_SIZE_DEFAULT = 100;
+/** The engine route's own bound (`Query(default=20, ge=1, le=100)`). */
+export const PRESENTON_TEMPLATE_PAGE_SIZE_MAX = 100;
+
+/** The §3.5 list request's caller options; the defaults preserve the picker's original query. */
+export type PresentonTemplateListOptions = {
+  /** 1-based page; validated before any fetch. */
+  page?: number;
+  /** Entries per page; the engine accepts 1–100. */
+  pageSize?: number;
+  /**
+   * `false` (default) restricts the read to built-in templates (`default=true`).
+   * `true` omits the engine's `default` filter, so the page carries built-ins
+   * plus custom templates: the route has no "custom only" filter, and
+   * `default=false` would mean exactly that.
+   */
+  includeCustom?: boolean;
+};
+
+/**
+ * Build the §3.5 request path — pure and exported so the exact query is
+ * provable in an environment with no service. The bounds are the engine
+ * route's own (`page ≥ 1`, `1 ≤ page_size ≤ 100`); an out-of-range value is a
+ * caller bug and fails the pre-fetch gate (`rejected`) rather than being
+ * clamped into a different page than the caller asked for.
+ */
+export function buildTemplateListQuery(
+  options: PresentonTemplateListOptions = {},
+): string {
+  const page = options.page ?? PRESENTON_TEMPLATE_PAGE_DEFAULT;
+  const pageSize = options.pageSize ?? PRESENTON_TEMPLATE_PAGE_SIZE_DEFAULT;
+  if (!Number.isInteger(page) || page < 1) {
+    throw new PresentonError("rejected", "Invalid template page.");
+  }
+  if (
+    !Number.isInteger(pageSize) ||
+    pageSize < 1 ||
+    pageSize > PRESENTON_TEMPLATE_PAGE_SIZE_MAX
+  ) {
+    throw new PresentonError("rejected", "Invalid template page size.");
+  }
+
+  const params = new URLSearchParams();
+  if (options.includeCustom !== true) params.set("default", "true");
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return `/api/v1/ppt/template/all?${params.toString()}`;
+}
+
+/**
+ * §3.5 — one page of templates. Built-ins only, first page, up to 100, by
+ * default; {@link PresentonTemplateListOptions} widens the read faithfully
+ * (`includeCustom` omits the `default` filter, `page`/`pageSize` go as asked).
+ * The returned `page`/`pageSize` are the request's own validated values, never
+ * the engine's echo, and `total` is the engine's count of matching templates
+ * (falling back to the page's usable item count when the envelope omits it).
+ * Item normalization and the failure vocabulary are unchanged.
+ */
+export async function listPresentationTemplates(
+  options: PresentonTemplateListOptions = {},
+): Promise<PresentonTemplatePage> {
   const base = requireBaseUrl();
+  const path = buildTemplateListQuery(options);
 
   const response = await fetchWithTimeout(
-    joinUrl(base, "/api/v1/ppt/template/all?default=true&page=1&page_size=100"),
+    joinUrl(base, path),
     { method: "GET", headers: requestHeaders() },
     TEMPLATES_TIMEOUT_MS,
   );
@@ -445,12 +517,16 @@ export async function listPresentationTemplates(): Promise<PresentonTemplate[]> 
     throw classifyHttpFailure(response, await readErrorDetail(response));
   }
 
-  const body = (await response.json()) as { items?: unknown };
-  if (!Array.isArray(body.items)) {
+  const body: unknown = await response.json();
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !Array.isArray((body as { items?: unknown }).items)
+  ) {
     throw new PresentonError("failed", "The service returned an unreadable response.");
   }
 
-  return body.items
+  const items = (body as { items: unknown[] }).items
     .filter(
       (item): item is Record<string, unknown> =>
         typeof item === "object" && item !== null,
@@ -466,6 +542,17 @@ export async function listPresentationTemplates(): Promise<PresentonTemplate[]> 
       isDefault: item.is_default === true,
     }))
     .filter((template) => template.id !== "" && template.name !== "");
+
+  const total = (body as { total?: unknown }).total;
+  return {
+    items,
+    total:
+      typeof total === "number" && Number.isFinite(total)
+        ? total
+        : items.length,
+    page: options.page ?? PRESENTON_TEMPLATE_PAGE_DEFAULT,
+    pageSize: options.pageSize ?? PRESENTON_TEMPLATE_PAGE_SIZE_DEFAULT,
+  };
 }
 
 /**
@@ -487,7 +574,14 @@ function readDeck(value: unknown): PresentationDeck {
   return value as PresentationDeck;
 }
 
-/** The template envelope check, same posture as {@link readDeck}. */
+/**
+ * The template read's normalization, same envelope posture as {@link readDeck}.
+ * The engine serves `layouts`, `theme` and `fonts` on this route (probed live
+ * 2026-09-20: `general` carries all three); the fields a preview depends on are
+ * normalized to the type's contract here — a malformed or absent value becomes
+ * `null`/`{}` instead of reaching the renderer, which states absence honestly.
+ * Layout/theme payloads stay unvalidated service JSON, exactly as stored.
+ */
 function readTemplate(value: unknown): PresentationTemplate {
   if (
     typeof value !== "object" ||
@@ -498,7 +592,40 @@ function readTemplate(value: unknown): PresentationTemplate {
   ) {
     throw new PresentonError("failed", "The service returned an unreadable response.");
   }
-  return value as PresentationTemplate;
+  const template = value as Record<string, unknown>;
+  return {
+    ...(value as PresentationTemplate),
+    layouts:
+      typeof template.layouts === "object" &&
+      template.layouts !== null &&
+      !Array.isArray(template.layouts) &&
+      Array.isArray((template.layouts as { layouts?: unknown }).layouts)
+        ? (template.layouts as TemplateLayouts)
+        : null,
+    theme:
+      typeof template.theme === "object" &&
+      template.theme !== null &&
+      !Array.isArray(template.theme)
+        ? (template.theme as DeckTheme)
+        : null,
+    fonts: normalizeTemplateFonts(template.fonts),
+  };
+}
+
+/** `{family: url}` as stored in the template's assets; trimmed, non-empty entries only. */
+function normalizeTemplateFonts(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  const fonts: Record<string, string> = {};
+  for (const [family, url] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (family.trim() !== "" && typeof url === "string" && url.trim() !== "") {
+      fonts[family.trim()] = url.trim();
+    }
+  }
+  return fonts;
 }
 
 /**
@@ -527,8 +654,10 @@ export async function getPresentationDeck(
 
 /**
  * §7.3 — one template's layouts, theme and fonts (template previews and the
- * hydration module in C share this read). Same guards and failure vocabulary
- * as {@link listPresentationTemplates}.
+ * hydration module in C share this read). The live engine carries the theme on
+ * this route; {@link getTemplateTheme} is the explicit read for a template
+ * whose stored theme is absent (`theme: null`). Same guards and failure
+ * vocabulary as {@link listPresentationTemplates}.
  */
 export async function getPresentationTemplate(
   templateId: string,
@@ -547,6 +676,48 @@ export async function getPresentationTemplate(
   }
 
   return readTemplate(await response.json());
+}
+
+/**
+ * §7.3 — one template's semantic theme through the engine's deriving route
+ * (`GET /template/{id}/theme`). Unlike {@link getPresentationTemplate}'s stored
+ * `theme`, this route derives and persists the theme when the stored one is
+ * absent (engine `_derive_template_theme`), which is how a custom template
+ * created before theme derivation becomes previewable. `null` is an honest
+ * "the engine has nothing to derive", not an error; the usual guards apply.
+ * The adapter never calls this from inside `getPresentationTemplate`: the
+ * deriving route persists engine state, so the read stays side-effect-free and
+ * a caller that needs the derived theme asks for it explicitly.
+ */
+export async function getTemplateTheme(
+  templateId: string,
+): Promise<DeckTheme | null> {
+  const base = requireBaseUrl();
+  assertSafeSegment(templateId, "template id");
+
+  const response = await fetchWithTimeout(
+    joinUrl(base, `/api/v1/ppt/template/${templateId}/theme`),
+    { method: "GET", headers: requestHeaders() },
+    TEMPLATES_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    throw classifyHttpFailure(response, await readErrorDetail(response));
+  }
+
+  const body: unknown = await response.json();
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    Array.isArray(body) ||
+    typeof (body as { template_id?: unknown }).template_id !== "string"
+  ) {
+    throw new PresentonError("failed", "The service returned an unreadable response.");
+  }
+  const theme = (body as { theme?: unknown }).theme;
+  return typeof theme === "object" && theme !== null && !Array.isArray(theme)
+    ? (theme as DeckTheme)
+    : null;
 }
 
 /**
