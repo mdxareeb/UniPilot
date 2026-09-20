@@ -2302,8 +2302,9 @@ These can be post-launch and should be marked Planned until genuinely implemente
     `.superpowers/sdd/2026-09-16-native-presentation/phase-D-record.md`;
     plan `docs/superpowers/plans/2026-09-16-native-presentation.md`; ledger
     `.superpowers/sdd/2026-09-16-native-presentation/progress.md`). The
-    UniPilot-themed wrapper/iframe remains the Smart-deck fallback until F5
-    retires the fork. Structural controls ride
+    UniPilot-themed wrapper/iframe remains the Smart/legacy-v1 fallback only; F5
+    kept the interim fork deliberately (no deletion — retiring it is the
+    founder's decision). Structural controls ride
     `PRESENTON_STRUCTURAL_EDITS=1` with honest disabled labels when off.
 - [x] 31.9 Reordering
   - Shipped natively: the editor's rail/actions move, duplicate and delete
@@ -2312,7 +2313,7 @@ These can be post-launch and should be marked Planned until genuinely implemente
     `n_slides` mirroring. Live-verified 2026-09-17 by the D-phase controller
     probe (reorder persisted by id, delete→4, add→5; `progress.md` §Phase
     C→D unblock) and by D6's structural live cases; the wrapper editor stays
-    as the Smart fallback. Recorded limit: no standing automated live
+    as the Smart/legacy-v1 fallback. Recorded limit: no standing automated live
     reorder case (the spec writes none deliberately) — gaps index in the
     phase-D record.
 - [x] 31.10 Export
@@ -2424,6 +2425,17 @@ These can be post-launch and should be marked Planned until genuinely implemente
   `.superpowers/sdd/2026-09-16-native-presentation/phase-E-record.md`.
   Unchanged gaps: 31.3 and 31.5–31.7 (custom-template creation stays
   Presenton-side).
+
+  **Phase F record (2026-09-20).** History/settings landed: the tool page's
+  "My decks" list (F1, `38ec58c`), `/documents` provenance badge + "Open deck"
+  (F2, `0521af6`), the `/integrations` Presenton status card (F3, `31d30ee`)
+  and delete deck end to end with a `Modal` confirm (F4, `577da6b`). F5
+  recorded the fork's status: the native editor is the standard path, the
+  themed wrapper/fork survives only as the Smart (and legacy v1) fallback,
+  and no fork asset or commit was deleted — retirement is the founder's
+  decision (`docs/integrations/presenton.md` §3.6,
+  `presenton-ui/DIVERGENCE.md`). Unchanged gaps: 31.3 and 31.5–31.7
+  (custom-template creation stays Presenton-side).
 
 Priority:
 topic → slides must be reliable before uploaded-template recreation.

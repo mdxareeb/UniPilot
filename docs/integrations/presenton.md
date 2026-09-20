@@ -21,7 +21,7 @@ redistributes or modifies its code.
 | --- | --- |
 | `PRESENTON_URL` | Base URL of the self-hosted Presenton service (e.g. `http://localhost:5001`). Unset is the honest default: the tool reports it is not connected, enqueues nothing, and never fakes a deck. |
 | `PRESENTON_API_KEY` | Optional `sk-presenton-…` API key. Sent as `Authorization: Bearer …` on every UniPilot → Presenton request. Required whenever the Presenton instance has authentication enabled (the default for the web deployment). |
-| `PRESENTON_PUBLIC_URL` | Browser-reachable Presenton origin, used only by the Phase-2 editor wrapper (the iframe needs a URL the *browser* can resolve). Defaults to `PRESENTON_URL` when unset. |
+| `PRESENTON_PUBLIC_URL` | Browser-reachable Presenton origin, used only by the fallback editor wrapper (§3.6; the iframe needs a URL the *browser* can resolve). Defaults to `PRESENTON_URL` when unset. |
 | `PRESENTON_POLL_INTERVAL_MS` | Worker-only knob: how often the async task is polled (default 5000 ms, minimum 500 ms). |
 | `PRESENTON_POLL_TIMEOUT_MS` | Worker-only knob: how long one generation attempt may poll before the 29.1 runner retries it (default 600000 ms = 10 minutes, minimum 10 s). |
 
@@ -80,8 +80,8 @@ when anything is missing. If the wizard is not completed in the browser, PUT
 the missing fields once, e.g.
 `PUT /api/v1/admin/provider-settings {"GOOGLE_MODEL":"<model>"}` (admin auth;
 in single-user mode no credentials are needed). Same applies before using the
-§3.6 editor: without a valid settings row, `/presentation?id=…` redirects to
-the wizard instead of the deck.
+§3.6 fallback editor: without a valid settings row, `/presentation?id=…`
+redirects to the wizard instead of the deck.
 
 Presenton's `app_data/` volume (its SQLite DB and provider settings), its
 `.env` and its runtime state are the separate service's own — never
@@ -219,25 +219,43 @@ Query `default=true` (built-in templates), `page`, `page_size` (≤ 100) →
 The tool page's template picker lists these; `template` on §3.1 takes the `id`
 (default `"general"`).
 
-### 3.6 Editor (Task 31.x fork) — `GET {PRESENTON_UI_URL}/presentation?id={presentation_id}`
+### 3.6 Editor — the native editor, with the wrapper as the Smart fallback
 
-UniPilot's `/tools/presentation/[id]/edit` wrapper embeds the **forked,
-UniPilot-themed Presenton UI** (`presenton-ui/`, git-ignored, its own repo —
-see `docs/superpowers/specs/2026-09-15-presenton-fork-theme-design.md` and
-`presenton-ui/DIVERGENCE.md`). The fork talks to the engine over its own
-middleware proxy; the engine is unchanged.
+UniPilot's `/tools/presentation/[id]/edit` route is the **native editor**
+(Tasks C4, D1–D9): standard (`v2-standard`, non-Smart) decks render
+`DeckEditor` in-app and read/write the engine deck through the adapter's
+server-mediated calls (deck read, `slide_update`, `presentation/update`,
+images/icons/chat, export) — no iframe, no Presenton chrome. The committed QA
+suite asserts the native surface for a live deck ("stage and rail, never an
+iframe", `frontend/tests/qa/presentations-ui.spec.ts`).
 
-`resolveEditorUrl()` (in the adapter) picks the URL with an honest fallback:
-`PRESENTON_UI_URL` when set **and reachable** (a 1.5 s probe of its proxied
-`/api/v1/auth/status`), otherwise the engine's own editor
-(`PRESENTON_PUBLIC_URL ?? PRESENTON_URL`). Unset or down never yields a dead
-link. `PRESENTON_UI_URL` is server-only, like the other Presenton variables.
-Both branches are verified on the rendered page (fork URL when it answers,
-engine editor when it does not).
+The iframe wrapper survives only as the **labelled fallback**, and only for
+decks the native renderer does not model — Smart HTML decks (spec D7/§6.10)
+and the legacy `v1-standard` shape. There `resolveEditorUrl()` (in the
+adapter) picks the URL with an honest fallback:
 
-Scope note: the slide stage *inside* the editor renders the deck's own fonts
-and colors — deck content, not UniPilot chrome; the re-theme covers the
-editor's chrome only (frozen scope in `presenton-ui/DIVERGENCE.md`).
+1. the interim fork (`PRESENTON_UI_URL`) when set **and reachable** (a 1.5 s
+   probe of its proxied `/api/v1/auth/status`);
+2. otherwise the engine's own editor
+   (`PRESENTON_PUBLIC_URL ?? PRESENTON_URL`) — unset or down never yields a
+   dead link;
+3. `null` when the integration is unconfigured (the page renders its honest
+   unavailable state).
+
+The fork (`presenton-ui/`, git-ignored, its own repo — see
+`docs/superpowers/specs/2026-09-15-presenton-fork-theme-design.md` and
+`presenton-ui/DIVERGENCE.md`) talks to the engine over its own middleware
+proxy; the engine is unchanged. It is **interim-only**: since the native
+editor landed (Phases C–D) it is no longer the standard editing path, and it
+is kept solely for the Smart/legacy-v1 fallback. Retiring it (deleting the directory,
+dropping `PRESENTON_UI_URL`) is the founder's decision and has not happened;
+`PRESENTON_UI_URL` remains server-only, like the other Presenton variables.
+
+Scope note (fallback only): the slide stage *inside* the fork renders the
+deck's own fonts and colors — deck content, not UniPilot chrome; the re-theme
+covers the fork's chrome only (frozen scope in `presenton-ui/DIVERGENCE.md`).
+The native editor follows the same rule natively: chrome is UniPilot's, deck
+content keeps its own fonts/colors.
 
 ## 4. Switching the LLM provider (config-only, never a UniPilot code change)
 

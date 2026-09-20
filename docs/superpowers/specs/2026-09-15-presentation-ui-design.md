@@ -919,6 +919,16 @@ gate:
 
 This refreshed spec is the plan's basis:
 `docs/superpowers/plans/2026-09-16-native-presentation.md` (produced with
-`writing-plans`, 2026-09-16). Execution starts on the founder's go-ahead,
-phase by phase (A → F), pausing at each phase boundary for review. The one
-remaining approval item is Q1 (Chart.js). No code before the go-ahead.
+`writing-plans`, 2026-09-16). Execution ran phase by phase through F5; the F6 gate is pending on the
+founder's go-ahead; Q1 was approved (Chart.js pinned in
+`frontend/package.json`). The native editor is the standard path — standard
+decks render `DeckEditor` at `/tools/presentation/[id]/edit`; the wrapper
+route survives only as the labelled Smart/legacy fallback, resolving to the
+interim fork (`presenton-ui/`) when `PRESENTON_UI_URL` is reachable and to
+the engine's own editor otherwise. Phase F shipped the decks list (F1,
+`38ec58c`), `/documents` provenance + Open deck (F2, `0521af6`), the
+`/integrations` Presenton card (F3, `31d30ee`) and delete deck (F4,
+`577da6b`); F5 recorded the fork's interim status in
+`docs/integrations/presenton.md` §3.6 and `presenton-ui/DIVERGENCE.md`. No
+fork deletion happened — retiring `presenton-ui/` and `PRESENTON_UI_URL` is
+the founder's decision. Remaining gaps are §14 (31.3, 31.5–31.7).
