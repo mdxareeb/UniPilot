@@ -3,16 +3,19 @@
  *
  * The page is no longer coming-soon-only: the WhatsApp card is real (P5.1) —
  * the export upload control, the connection state, the live-off line and the
- * Google Calendar panel (P7.2) — while the Gmail card stays honestly planned,
- * with no control and no connected claim. Both official brand marks render
- * inline and undistorted in their icon slots (the sanctioned DESIGN.md §Icon
- * Rule exception in `_components/BrandMarks.tsx`), the old coming-soon copy
- * (the WhatsApp reminder promise and "nothing is wired up yet") is gone, and
- * the page never claims a connection it does not have. For the signed-in,
- * live-off render on a server without the OAuth pair the upload button is the
- * page's only interactive control; the Gmail card offers nothing to click, and
- * the Google-sensitive assertions below are guarded so a configured machine
- * (whose panel may offer Connect/Disconnect) does not falsify them.
+ * Google Calendar panel (P7.2) — the Presenton card (F3) reports the
+ * presentation service's server-side state with its tool link and admin-UI
+ * note, while the Gmail card stays honestly planned, with no control and no
+ * connected claim. Both official brand marks render inline and undistorted in
+ * their icon slots (the sanctioned DESIGN.md §Icon Rule exception in
+ * `_components/BrandMarks.tsx`), the old coming-soon copy (the WhatsApp
+ * reminder promise and "nothing is wired up yet") is gone, and the page never
+ * claims a connection it does not have. For the signed-in, live-off render on
+ * a server without the OAuth pair the upload button is the page's only
+ * button; the Presenton card's tool link is the page's only link, and the
+ * Gmail card offers nothing to click. The Google-sensitive assertions below
+ * are guarded so a configured machine (whose panel may offer
+ * Connect/Disconnect) does not falsify them.
  *
  * The page is guest-viewable, so the same render is checked from an empty
  * storage state as well: the guest's upload attempt opens the shared skippable
@@ -38,6 +41,17 @@ const LIVE_ENABLED = process.env.UNIPILOT_WHATSAPP_LIVE === "1";
 const GOOGLE_CONFIGURED = Boolean(
   process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET,
 );
+
+/**
+ * True when this suite's server was started with `PRESENTON_URL` set (the
+ * Playwright config loads `.env.development.local` into this process and the
+ * webServer inherits it, so test and server agree on the env fact). Whether
+ * the service then answers is the server's own probe; the card's state marker
+ * reports it. The exact reachable/unreachable copies are proven by the F3
+ * evidence run (engine up, then a dead loopback) because engine presence is
+ * machine-dependent.
+ */
+const PRESENTON_CONFIGURED = Boolean(process.env.PRESENTON_URL?.trim());
 
 let releaseWorkerLock: (() => void) | null = null;
 
@@ -141,18 +155,60 @@ async function expectHonestPage(page: Page) {
     ),
   ).toHaveCount(0);
 
-  // The upload button is the page's only interactive control on the
-  // unconfigured server (the hidden file input is aria-hidden, so the role
-  // query skips it). A configured machine's Google panel may add Connect or
-  // Disconnect, so the exact count only holds here.
+  const presenton = integrationCard(page, "Presenton");
+  await expect(presenton, "Presenton card").toBeVisible();
+  await expect(
+    presenton.getByRole("heading", { level: 2, name: "Presenton" }),
+  ).toBeVisible();
+
+  /* F3 — a server-side service status, not a per-user connection. The state
+     marker names what the server computed; the badge carries the env fact and
+     the mono line the probe outcome. On a configured machine the engine may
+     be up or down, so both outcomes are legal here; the two exact copies are
+     proven by the F3 evidence run. */
+  const presentonState = presenton.locator("[data-presenton-state]");
+  await expect(presentonState, "Presenton state line").toHaveCount(1);
+  const state = await presentonState.getAttribute("data-presenton-state");
+  const configuredBadge = presenton.locator("[data-presenton-configured]");
+  if (!PRESENTON_CONFIGURED) {
+    expect(state, "unset PRESENTON_URL is the not-configured state").toBe(
+      "not-configured",
+    );
+    await expect(presentonState).toHaveText("Unavailable");
+    await expect(configuredBadge).toHaveText("Not configured");
+  } else {
+    expect(
+      ["reachable", "unreachable"],
+      `configured PRESENTON_URL must classify as reachable or unreachable (got ${state})`,
+    ).toContain(state);
+    await expect(presentonState).toHaveText(
+      state === "reachable" ? "Reachable" : "Unreachable",
+    );
+    await expect(configuredBadge).toHaveText("Configured");
+  }
+
+  // The one note keeps provider/model configuration Presenton-side, and the
+  // tool link is the card's only control.
+  await expect(presenton.getByText(/admin UI/i)).toBeVisible();
+  await expect(
+    presenton.getByRole("link", { name: "Open presentation generator" }),
+  ).toHaveAttribute("href", "/tools/presentation");
+  await expect(presenton.getByRole("button")).toHaveCount(0);
+
+  // The upload button is the page's only button on the unconfigured server
+  // (the hidden file input is aria-hidden, so the role query skips it). A
+  // configured machine's Google panel may add Connect or Disconnect, so the
+  // exact count only holds here.
   if (!GOOGLE_CONFIGURED) {
     await expect(main.getByRole("button")).toHaveCount(1);
   }
-  await expect(main.getByRole("link")).toHaveCount(0);
+  // The Presenton card's tool link (F3) is the page's only link; the Gmail
+  // card still offers nothing to click.
+  await expect(main.getByRole("link")).toHaveCount(1);
 }
 
 test.describe("integrations: honest states", () => {
-  test("authenticated: real WhatsApp card, Gmail coming soon, console clean", async ({
+  test("authenticated: real WhatsApp card, Gmail coming soon, Presenton status, console clean", async ({
     page,
   }) => {
     const consoleErrors: string[] = [];

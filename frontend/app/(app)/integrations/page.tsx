@@ -9,21 +9,27 @@ import {
 import { getWorkspaceAccess } from "@/lib/onboarding/gate";
 import { GmailMark } from "./_components/BrandMarks";
 import { IntegrationCard } from "./_components/IntegrationCard";
+import { PresentonCard } from "./_components/PresentonCard";
 import { WhatsAppCard } from "./_components/WhatsAppCard";
 
 /**
- * Integrations (14.13; 46.15 P5.1): the WhatsApp card is real and the Gmail
- * card stays honestly planned.
+ * Integrations (14.13; 46.15 P5.1; F3): the WhatsApp card is real, the
+ * Presenton card reports the presentation service's server-side state, and
+ * the Gmail card stays honestly planned.
  *
- * The server page owns access and the two reads, in that order:
+ * The server page owns access and the two per-user reads, in that order:
  * `getWorkspaceAccess` gates first (`requireOnboardedUser("/integrations")`
  * stays the Server Actions' hard fallback), then `getWhatsAppOverview` loads
  * the caller's connection/runs/candidates — it also owns the 30-day purge and
  * the stale-run sweep, replacing P4.5's temporary maintenance block — and
  * `getGoogleStatus` reports the read-only Google Calendar state for the
- * candidate push. A guest gets `null` for both and no data call happens; the
- * card renders its signed-out states and every action routes to the shared
- * sign-in prompt.
+ * candidate push. A guest gets `null` for both and no per-user data call
+ * happens; the card renders its signed-out states and every action routes to
+ * the shared sign-in prompt.
+ *
+ * `PresentonCard` (F3) is different in kind: it reads the service environment
+ * and probes the engine itself, so the same render serves a guest — the probe
+ * is service-level and no user row is involved.
  *
  * `isLiveEnabled()` is read on the server too, so the flag-off line is the
  * same render for everyone; the live panel itself is P6.
@@ -63,6 +69,9 @@ export default async function IntegrationsPage() {
             description="UniPilot will pull assignment emails and their attachments into your workspace."
             mark={<GmailMark className="h-5 w-auto" />}
           />
+        </li>
+        <li className="min-w-0">
+          <PresentonCard />
         </li>
       </ul>
     </Container>
