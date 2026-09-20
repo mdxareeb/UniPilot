@@ -2413,6 +2413,18 @@ These can be post-launch and should be marked Planned until genuinely implemente
   image-library isolation tracked (spec §14), chat live success
   provider-blocked. Not delivered, unchanged below: 31.3 and 31.5–31.7.
 
+  **Phase E record (2026-09-20).** The templates browser and read-only native
+  preview are delivered: `/tools/presentation/templates` (Built-in/Custom tabs,
+  cards with real engine art through the session-gated template-asset route)
+  and `/tools/presentation/templates/[templateId]` (first layout through the
+  shared `DeckStage`, layout switching, "Use this template" → generator
+  preselect; adapter pagination + scope tri-state). Gate: jobs 60, UI 146 + 3
+  recorded skips, full suite 664 + 7 skips, typecheck/lint clean; evidence
+  `frontend/screenshots/phase-e-*.png`; record
+  `.superpowers/sdd/2026-09-16-native-presentation/phase-E-record.md`.
+  Unchanged gaps: 31.3 and 31.5–31.7 (custom-template creation stays
+  Presenton-side).
+
 Priority:
 topic → slides must be reliable before uploaded-template recreation.
 
