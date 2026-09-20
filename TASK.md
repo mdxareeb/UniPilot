@@ -2295,11 +2295,26 @@ These can be post-launch and should be marked Planned until genuinely implemente
     the engine's own editor as the honest fallback; both branches verified on
     the rendered page). The slide stage keeps the deck's own fonts/colors —
     deck content, not chrome (frozen scope in `presenton-ui/DIVERGENCE.md`).
-- [~] 31.9 Reordering
-  - Reordering is available inside the surfaced editor (the themed fork, or
-    the engine editor as fallback — its own sortable slides); no UniPilot-
-    native reordering surface is built. The wrapper covers the flow per
-    GATE 2.
+  - Native editor delivered (2026-09-20): `/tools/presentation/[id]/edit` is
+    now the primary editing surface for native-capable decks (viewer + editor
+    from Phases B–D; every spec §5.4 operation marked shipped /
+    shipped-with-recorded-gaps / recorded-gap in
+    `.superpowers/sdd/2026-09-16-native-presentation/phase-D-record.md`;
+    plan `docs/superpowers/plans/2026-09-16-native-presentation.md`; ledger
+    `.superpowers/sdd/2026-09-16-native-presentation/progress.md`). The
+    UniPilot-themed wrapper/iframe remains the Smart-deck fallback until F5
+    retires the fork. Structural controls ride
+    `PRESENTON_STRUCTURAL_EDITS=1` with honest disabled labels when off.
+- [x] 31.9 Reordering
+  - Shipped natively: the editor's rail/actions move, duplicate and delete
+    slides (structural controls gated by `PRESENTON_STRUCTURAL_EDITS=1`, on
+    in this env; disabled copy when off), with autosave, undo and
+    `n_slides` mirroring. Live-verified 2026-09-17 by the D-phase controller
+    probe (reorder persisted by id, delete→4, add→5; `progress.md` §Phase
+    C→D unblock) and by D6's structural live cases; the wrapper editor stays
+    as the Smart fallback. Recorded limit: no standing automated live
+    reorder case (the spec writes none deliberately) — gaps index in the
+    phase-D record.
 - [x] 31.10 Export
   - PPTX/PDF chosen per request (`export_as`), fetched from Presenton's
     static export route and stored as a `documents` row; PDFs preview inline
@@ -2384,6 +2399,19 @@ These can be post-launch and should be marked Planned until genuinely implemente
     git-ignored `frontend/.env.development.local` was pointed at the WSL IP to
     unblock the session (restore `127.0.0.1` after a host restart that frees
     the range; noted in QA_SESSION.md).
+
+  **Phase D record (2026-09-20).** Full editor parity (D1–D9: selection/
+  transforms, rich text runs, images, icons, chart/table editors, template
+  blocks + hydration parity, clipboard/shortcuts, chat streaming proxy,
+  infographic insertion) is closed for review; every spec §5.4 operation is
+  marked shipped / shipped-with-recorded-gaps / recorded-gap in
+  `.superpowers/sdd/2026-09-16-native-presentation/phase-D-record.md`. Gate:
+  renderer 244, jobs 50, UI 120 + 3 recorded skips, full suite 628 + 7 skips,
+  typecheck/lint clean, live viewer probe re-captured. Honest open items:
+  generation `[!]` for ≥5-slide runs (Groq free-tier throttle), 24/27
+  infographic types placeholder, 4/219 bundled layouts add-only for replace,
+  image-library isolation tracked (spec §14), chat live success
+  provider-blocked. Not delivered, unchanged below: 31.3 and 31.5–31.7.
 
 Priority:
 topic → slides must be reliable before uploaded-template recreation.
