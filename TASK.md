@@ -2435,7 +2435,12 @@ These can be post-launch and should be marked Planned until genuinely implemente
   and no fork asset or commit was deleted — retirement is the founder's
   decision (`docs/integrations/presenton.md` §3.6,
   `presenton-ui/DIVERGENCE.md`). Unchanged gaps: 31.3 and 31.5–31.7
-  (custom-template creation stays Presenton-side).
+  (custom-template creation stays Presenton-side). Gate (F6, 2026-09-20):
+  focused jobs 62, documents-ui 5, presentation UI 154 + 5 recorded skips;
+  full suite 675 + 9 skips; typecheck/lint clean; stored-session Chromium
+  probe re-shot; generation `[!]` for ≥5-slide runs unchanged and fork
+  retirement remains the founder's call. Record:
+  `.superpowers/sdd/2026-09-16-native-presentation/phase-F-record.md`.
 
 Priority:
 topic → slides must be reliable before uploaded-template recreation.

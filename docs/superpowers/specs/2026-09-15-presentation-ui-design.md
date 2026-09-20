@@ -919,7 +919,7 @@ gate:
 
 This refreshed spec is the plan's basis:
 `docs/superpowers/plans/2026-09-16-native-presentation.md` (produced with
-`writing-plans`, 2026-09-16). Execution ran phase by phase through F5; the F6 gate is pending on the
+`writing-plans`, 2026-09-16). Execution ran phase by phase through F6; the Phase F gate is green (full suite 675 passed / 9 skipped / 0 failed) on the
 founder's go-ahead; Q1 was approved (Chart.js pinned in
 `frontend/package.json`). The native editor is the standard path — standard
 decks render `DeckEditor` at `/tools/presentation/[id]/edit`; the wrapper
