@@ -1252,6 +1252,594 @@ test.describe("template reads (in-process stub)", () => {
   });
 });
 
+/** One request a model-settings stub recorded; bodies are parsed, never logged. */
+type ModelSettingsRequest = {
+  method: string;
+  path: string;
+  body: unknown;
+};
+
+/**
+ * The T1 in-process engine stub: its only route is the provider-settings
+ * path. `GET` answers `config`; `PUT` merges the request body over it and
+ * answers the merged config (the engine's own `save_provider_settings` shape).
+ * `setReadStatus`/`setWriteStatus` force one verb's answer for the failure
+ * cases; every request is recorded, so "no write was attempted" is provable.
+ */
+async function startModelSettingsStub(config: Record<string, unknown>): Promise<{
+  requests: ModelSettingsRequest[];
+  baseUrl: string;
+  setReadStatus: (status: number | null) => void;
+  setWriteStatus: (status: number | null) => void;
+  close: () => Promise<void>;
+}> {
+  const requests: ModelSettingsRequest[] = [];
+  let readStatus: number | null = null;
+  let writeStatus: number | null = null;
+  const stub = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body: unknown = null;
+      try {
+        body = raw === "" ? null : JSON.parse(raw);
+      } catch {
+        body = raw;
+      }
+      requests.push({ method: req.method ?? "", path: req.url ?? "", body });
+
+      const answer = (status: number, payload?: unknown): void => {
+        res.statusCode = status;
+        if (payload === undefined) {
+          res.end();
+          return;
+        }
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(payload));
+      };
+
+      if (req.url !== "/api/v1/admin/provider-settings") {
+        answer(404, { detail: "not found" });
+        return;
+      }
+      if (req.method === "GET") {
+        if (readStatus !== null) {
+          answer(readStatus);
+          return;
+        }
+        answer(200, config);
+        return;
+      }
+      if (req.method === "PUT") {
+        if (writeStatus !== null) {
+          answer(writeStatus);
+          return;
+        }
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          answer(400, { detail: "invalid body" });
+          return;
+        }
+        Object.assign(config, body);
+        answer(200, config);
+        return;
+      }
+      answer(405, { detail: "method not allowed" });
+    });
+  });
+  await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
+  const address = stub.address();
+  const port =
+    typeof address === "object" && address !== null ? address.port : 0;
+  return {
+    requests,
+    baseUrl: `http://127.0.0.1:${port}`,
+    setReadStatus: (status) => {
+      readStatus = status;
+    },
+    setWriteStatus: (status) => {
+      writeStatus = status;
+    },
+    close: () => new Promise<void>((resolve) => stub.close(() => resolve())),
+  };
+}
+
+/**
+ * T1 (generate redesign) — the operator's model declaration. The readers are
+ * the only source of model ids besides the engine's own report, so their
+ * trim/empty/dedupe rules are pinned directly; the provider→model-key table is
+ * asserted against the engine's `LLMProvider` enum values
+ * (`enums/llm_provider.py`).
+ */
+test.describe("model declaration readers (pure)", () => {
+  test("PRESENTON_MODEL trims; PRESENTON_MODEL_OPTIONS splits, drops empties and dedupes", async () => {
+    const { presentonModel, presentonModelOptions } = await import(
+      "../../lib/integrations/presentonConfig"
+    );
+    const savedModel = process.env.PRESENTON_MODEL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    try {
+      delete process.env.PRESENTON_MODEL;
+      delete process.env.PRESENTON_MODEL_OPTIONS;
+      expect(presentonModel()).toBeNull();
+      expect(presentonModelOptions()).toEqual([]);
+
+      process.env.PRESENTON_MODEL = "  models/gemini-x  ";
+      expect(presentonModel()).toBe("models/gemini-x");
+      process.env.PRESENTON_MODEL = "   ";
+      expect(presentonModel()).toBeNull();
+
+      // Empty is exactly unset; a mixed list keeps its first-seen order.
+      process.env.PRESENTON_MODEL_OPTIONS = "";
+      expect(presentonModelOptions()).toEqual([]);
+      process.env.PRESENTON_MODEL_OPTIONS = " a , ,b,a ";
+      expect(presentonModelOptions()).toEqual(["a", "b"]);
+      process.env.PRESENTON_MODEL_OPTIONS = "  ,  ";
+      expect(presentonModelOptions()).toEqual([]);
+    } finally {
+      if (savedModel === undefined) delete process.env.PRESENTON_MODEL;
+      else process.env.PRESENTON_MODEL = savedModel;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("the provider → model-key table covers every engine provider", async () => {
+    const { PRESENTON_MODEL_KEYS } = await import(
+      "../../lib/integrations/presenton"
+    );
+    expect(PRESENTON_MODEL_KEYS).toEqual({
+      openai: "OPENAI_MODEL",
+      deepseek: "DEEPSEEK_MODEL",
+      google: "GOOGLE_MODEL",
+      vertex: "VERTEX_MODEL",
+      azure: "AZURE_OPENAI_MODEL",
+      bedrock: "BEDROCK_MODEL",
+      openrouter: "OPENROUTER_MODEL",
+      fireworks: "FIREWORKS_MODEL",
+      together: "TOGETHER_MODEL",
+      cerebras: "CEREBRAS_MODEL",
+      anthropic: "ANTHROPIC_MODEL",
+      litellm: "LITELLM_MODEL",
+      lmstudio: "LMSTUDIO_MODEL",
+      ollama: "OLLAMA_MODEL",
+      custom: "CUSTOM_MODEL",
+      codex: "CODEX_MODEL",
+    });
+  });
+});
+
+/**
+ * T1 (generate redesign) — the listing's honest states. The settings read
+ * answers the whole engine config (provider keys included); these cases prove
+ * that only the provider and the mapped model leave the adapter, that a denied
+ * or dead engine degrades to the declaration instead of throwing, and that an
+ * unconfigured integration never touches the network at all.
+ */
+test.describe("model listing (in-process stub)", () => {
+  test("unconfigured lists the declaration and never attempts a fetch", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedKey = process.env.PRESENTON_API_KEY;
+    const savedModel = process.env.PRESENTON_MODEL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    const originalFetch = globalThis.fetch;
+    let fetchCount = 0;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCount += 1;
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    delete process.env.PRESENTON_URL;
+    delete process.env.PRESENTON_API_KEY;
+    process.env.PRESENTON_MODEL = "models/gemini-x";
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-x,models/gemini-y";
+    try {
+      const models = await adapter.listPresentationModels();
+      expect(models).toEqual({
+        current: "models/gemini-x",
+        currentSource: "declared",
+        provider: null,
+        providerModelKey: null,
+        engineManaged: false,
+        switchingDeclared: false,
+        notice: "service-managed",
+        options: [
+          {
+            value: "models/gemini-x",
+            label: "models/gemini-x",
+            current: true,
+            selectable: false,
+          },
+          {
+            value: "models/gemini-y",
+            label: "models/gemini-y",
+            current: false,
+            selectable: false,
+          },
+        ],
+      });
+      expect(
+        fetchCount,
+        "the unconfigured listing must not attempt a fetch",
+      ).toBe(0);
+
+      // The apply guard comes first too: no declaration, no network.
+      await expect(
+        adapter.applyPresentationModel("models/gemini-y"),
+      ).resolves.toEqual({ applied: false, reason: "not-configured" });
+      expect(fetchCount, "an unconfigured apply must not attempt a fetch").toBe(
+        0,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.PRESENTON_API_KEY;
+      else process.env.PRESENTON_API_KEY = savedKey;
+      if (savedModel === undefined) delete process.env.PRESENTON_MODEL;
+      else process.env.PRESENTON_MODEL = savedModel;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("a denied settings read keeps the declaration but nothing is selectable", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({
+      LLM: "google",
+      GOOGLE_MODEL: "models/gemini-x",
+      GOOGLE_API_KEY: "sk-test-should-never-surface",
+    });
+    stub.setReadStatus(403);
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedKey = process.env.PRESENTON_API_KEY;
+    const savedModel = process.env.PRESENTON_MODEL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_URL = stub.baseUrl;
+    delete process.env.PRESENTON_API_KEY;
+    process.env.PRESENTON_MODEL = "models/gemini-declared";
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-declared, models/gemini-y";
+    try {
+      const models = await adapter.listPresentationModels();
+      expect(models).toEqual({
+        current: "models/gemini-declared",
+        currentSource: "declared",
+        provider: null,
+        providerModelKey: null,
+        engineManaged: false,
+        switchingDeclared: true,
+        notice: "service-managed",
+        options: [
+          {
+            value: "models/gemini-declared",
+            label: "models/gemini-declared",
+            current: true,
+            selectable: false,
+          },
+          {
+            value: "models/gemini-y",
+            label: "models/gemini-y",
+            current: false,
+            selectable: false,
+          },
+        ],
+      });
+      expect(stub.requests).toEqual([
+        { method: "GET", path: "/api/v1/admin/provider-settings", body: null },
+      ]);
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.PRESENTON_API_KEY;
+      else process.env.PRESENTON_API_KEY = savedKey;
+      if (savedModel === undefined) delete process.env.PRESENTON_MODEL;
+      else process.env.PRESENTON_MODEL = savedModel;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("a granted settings read surfaces the provider and model, never the keys", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({
+      LLM: "google",
+      GOOGLE_MODEL: "models/gemini-x",
+      GOOGLE_API_KEY: "sk-test-should-never-surface",
+      OPENAI_API_KEY: "sk-test-should-never-surface",
+    });
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedKey = process.env.PRESENTON_API_KEY;
+    const savedModel = process.env.PRESENTON_MODEL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_URL = stub.baseUrl;
+    delete process.env.PRESENTON_API_KEY;
+    process.env.PRESENTON_MODEL = "models/gemini-declared";
+    delete process.env.PRESENTON_MODEL_OPTIONS;
+    try {
+      const models = await adapter.listPresentationModels();
+      expect(models).toMatchObject({
+        current: "models/gemini-x",
+        currentSource: "engine",
+        provider: "google",
+        providerModelKey: "GOOGLE_MODEL",
+        engineManaged: true,
+        switchingDeclared: false,
+        notice: "switching-disabled",
+      });
+      expect(models.options).toEqual([
+        {
+          value: "models/gemini-x",
+          label: "models/gemini-x",
+          current: true,
+          selectable: false,
+        },
+      ]);
+
+      const serialized = JSON.stringify(models);
+      expect(serialized).not.toContain("sk-test-should-never-surface");
+      expect(serialized).not.toContain("GOOGLE_API_KEY");
+      expect(serialized).not.toContain("OPENAI_API_KEY");
+      expect(stub.requests).toEqual([
+        { method: "GET", path: "/api/v1/admin/provider-settings", body: null },
+      ]);
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.PRESENTON_API_KEY;
+      else process.env.PRESENTON_API_KEY = savedKey;
+      if (savedModel === undefined) delete process.env.PRESENTON_MODEL;
+      else process.env.PRESENTON_MODEL = savedModel;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("an unreachable probe degrades with the honest notice", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({ LLM: "google" });
+    stub.setReadStatus(500);
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedModel = process.env.PRESENTON_MODEL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_MODEL = "models/gemini-declared";
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-y";
+    try {
+      process.env.PRESENTON_URL = stub.baseUrl;
+      await expect(adapter.listPresentationModels()).resolves.toMatchObject({
+        current: "models/gemini-declared",
+        currentSource: "declared",
+        engineManaged: false,
+        notice: "unreachable",
+      });
+
+      // A dead loopback port is the transport half of the same state.
+      process.env.PRESENTON_URL = "http://127.0.0.1:9";
+      await expect(adapter.listPresentationModels()).resolves.toMatchObject({
+        current: "models/gemini-declared",
+        currentSource: "declared",
+        engineManaged: false,
+        notice: "unreachable",
+      });
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedModel === undefined) delete process.env.PRESENTON_MODEL;
+      else process.env.PRESENTON_MODEL = savedModel;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("an engine provider outside the table has no write target", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({ LLM: "weird-provider" });
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedModel = process.env.PRESENTON_MODEL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_URL = stub.baseUrl;
+    delete process.env.PRESENTON_MODEL;
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-y";
+    try {
+      const models = await adapter.listPresentationModels();
+      expect(models).toMatchObject({
+        current: null,
+        currentSource: null,
+        provider: "weird-provider",
+        providerModelKey: null,
+        engineManaged: true,
+        switchingDeclared: true,
+      });
+      expect(models.options).toEqual([
+        {
+          value: "models/gemini-y",
+          label: "models/gemini-y",
+          current: false,
+          selectable: false,
+        },
+      ]);
+
+      // A provider outside the table is never written to.
+      await expect(
+        adapter.applyPresentationModel("models/gemini-y"),
+      ).resolves.toEqual({ applied: false, reason: "not-supported" });
+      expect(
+        stub.requests.filter((request) => request.method === "PUT"),
+      ).toHaveLength(0);
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedModel === undefined) delete process.env.PRESENTON_MODEL;
+      else process.env.PRESENTON_MODEL = savedModel;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+});
+
+/**
+ * T1 (generate redesign) — the one write path. A declared value alone may be
+ * applied, and only through the engine's mapped model key: the PUT body is
+ * exactly `{ [providerModelKey]: value }` and nothing else. Every refusal
+ * (undeclared value, denied settings read, unmapped provider) is proven to
+ * happen before the wire, and the result carries no key material.
+ */
+test.describe("model apply (in-process stub)", () => {
+  test("applies a declared value through exactly one PUT with the mapped key", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({
+      LLM: "google",
+      GOOGLE_MODEL: "models/gemini-x",
+      GOOGLE_API_KEY: "sk-test-should-never-surface",
+    });
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedKey = process.env.PRESENTON_API_KEY;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_URL = stub.baseUrl;
+    delete process.env.PRESENTON_API_KEY;
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-y";
+    try {
+      const result = await adapter.applyPresentationModel("  models/gemini-y  ");
+      expect(result).toEqual({
+        applied: true,
+        model: "models/gemini-y",
+        provider: "google",
+      });
+
+      // Exactly one write, one read, and the body is the mapped field alone.
+      expect(stub.requests).toEqual([
+        { method: "GET", path: "/api/v1/admin/provider-settings", body: null },
+        {
+          method: "PUT",
+          path: "/api/v1/admin/provider-settings",
+          body: { GOOGLE_MODEL: "models/gemini-y" },
+        },
+      ]);
+      const writes = stub.requests.filter(
+        (request) => request.method !== "GET",
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.method).toBe("PUT");
+      expect(
+        stub.requests.some((request) => request.method === "DELETE"),
+      ).toBe(false);
+
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("sk-test-should-never-surface");
+      expect(serialized).not.toContain("GOOGLE_API_KEY");
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.PRESENTON_API_KEY;
+      else process.env.PRESENTON_API_KEY = savedKey;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("a denied settings read refuses before any write", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({
+      LLM: "google",
+      GOOGLE_MODEL: "models/gemini-x",
+    });
+    stub.setReadStatus(403);
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_URL = stub.baseUrl;
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-y";
+    try {
+      await expect(
+        adapter.applyPresentationModel("models/gemini-y"),
+      ).resolves.toEqual({ applied: false, reason: "not-supported" });
+      expect(stub.requests).toEqual([
+        { method: "GET", path: "/api/v1/admin/provider-settings", body: null },
+      ]);
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("undeclared, empty and whitespace values never reach the wire", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({
+      LLM: "google",
+      GOOGLE_MODEL: "models/gemini-x",
+    });
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_URL = stub.baseUrl;
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-y";
+    try {
+      await expect(
+        adapter.applyPresentationModel("models/gemini-z"),
+      ).resolves.toEqual({ applied: false, reason: "not-declared" });
+      await expect(adapter.applyPresentationModel("")).resolves.toEqual({
+        applied: false,
+        reason: "not-declared",
+      });
+      await expect(adapter.applyPresentationModel("   ")).resolves.toEqual({
+        applied: false,
+        reason: "not-declared",
+      });
+      expect(stub.requests).toHaveLength(0);
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+
+  test("write failures map 5xx to unreachable and other 4xx to rejected", async () => {
+    const adapter = await import("../../lib/integrations/presenton");
+    const stub = await startModelSettingsStub({
+      LLM: "google",
+      GOOGLE_MODEL: "models/gemini-x",
+    });
+    const savedUrl = process.env.PRESENTON_URL;
+    const savedOptions = process.env.PRESENTON_MODEL_OPTIONS;
+    process.env.PRESENTON_URL = stub.baseUrl;
+    process.env.PRESENTON_MODEL_OPTIONS = "models/gemini-y";
+    try {
+      stub.setWriteStatus(500);
+      await expect(
+        adapter.applyPresentationModel("models/gemini-y"),
+      ).resolves.toEqual({ applied: false, reason: "unreachable" });
+
+      stub.setWriteStatus(422);
+      await expect(
+        adapter.applyPresentationModel("models/gemini-y"),
+      ).resolves.toEqual({ applied: false, reason: "rejected" });
+
+      // The read stayed granted throughout; only the writes failed.
+      expect(
+        stub.requests.filter((request) => request.method === "PUT"),
+      ).toHaveLength(2);
+      expect(stub.requests[0]).toEqual({
+        method: "GET",
+        path: "/api/v1/admin/provider-settings",
+        body: null,
+      });
+    } finally {
+      await stub.close();
+      if (savedUrl === undefined) delete process.env.PRESENTON_URL;
+      else process.env.PRESENTON_URL = savedUrl;
+      if (savedOptions === undefined) delete process.env.PRESENTON_MODEL_OPTIONS;
+      else process.env.PRESENTON_MODEL_OPTIONS = savedOptions;
+    }
+  });
+});
+
 /**
  * Task A3 — the pure request builder. The wire body is the shared contract
  * with the worker (a plain `.mjs` that mirrors the shapes), so it is asserted

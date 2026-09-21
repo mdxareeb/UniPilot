@@ -38,6 +38,8 @@ import {
   isPresentonConfigured,
   presentonApiKey,
   presentonBaseUrl,
+  presentonModel,
+  presentonModelOptions,
   presentonPublicUrl,
   presentonUiUrl,
 } from "./presentonConfig";
@@ -828,6 +830,344 @@ export async function listPresentationThemes(): Promise<PresentonTheme[]> {
           : null,
       theme: entry,
     }));
+}
+
+// ---------------------------------------------------------------------------
+// T1 (generate redesign) — the model listing and the deployment-global switch (§3.3)
+//
+// The engine resolves the generation model from its persisted singleton
+// settings row (`provider_settings`, mirrored into process env per request),
+// so the model is one deployment-wide setting with no per-request equivalent.
+// `GET/PUT /api/v1/admin/provider-settings` is the only read/write path and it
+// answers the whole config, provider keys included: only `LLM` and the mapped
+// `*_MODEL` field are ever extracted, and the raw body is dropped on the spot
+// — never returned, cached or logged. Both entry points below degrade instead
+// of throwing: a denied or unreachable engine is an honest state, not a page
+// error. Provider ids and model ids surface; key material never does.
+// ---------------------------------------------------------------------------
+
+export type PresentationModelOption = {
+  /** The exact model id the engine's provider settings expect. */
+  value: string;
+  /** Display label; the id by default. */
+  label: string;
+  /** True only for the value in use (engine report or declared default). */
+  current: boolean;
+  /** True when this option may be applied (see §2.5). */
+  selectable: boolean;
+};
+
+export type PresentationModelNotice =
+  | "service-managed"    // engine settings denied (or unconfigured): no switching from here
+  | "switching-disabled" // engine managed, but no PRESENTON_MODEL_OPTIONS declared
+  | "unreachable";       // the settings probe did not answer
+// `current === null` with any notice is the "no model name is known" case;
+// no notice ever implies a model that is not in `current`/`options`.
+
+export type PresentationModels = {
+  current: string | null;
+  currentSource: "engine" | "declared" | null;
+  provider: string | null;       // engine report only ('google', 'custom', …)
+  providerModelKey: string | null; // e.g. 'GOOGLE_MODEL' (write target)
+  engineManaged: boolean;        // settings read answered 200
+  switchingDeclared: boolean;    // PRESENTON_MODEL_OPTIONS non-empty
+  options: PresentationModelOption[];
+  notice: PresentationModelNotice | null;
+};
+
+export type PresentationModelApplyResult =
+  | { applied: true; model: string; provider: string }
+  | {
+      applied: false;
+      reason:
+        | "not-configured"
+        | "not-declared"
+        | "not-supported"
+        | "unreachable"
+        | "rejected";
+    };
+
+/**
+ * Every engine `LLMProvider` value (`enums/llm_provider.py`) mapped to the
+ * model field its settings row carries (`models/user_config.py`). The table is
+ * deliberately exhaustive over the enum and deliberately the only
+ * provider-specific branch in this module: a provider outside it has no write
+ * target, so listing answers `providerModelKey:null` and applying answers
+ * `not-supported` rather than guessing a key.
+ */
+export const PRESENTON_MODEL_KEYS: Record<string, string> = {
+  openai: "OPENAI_MODEL",
+  deepseek: "DEEPSEEK_MODEL",
+  google: "GOOGLE_MODEL",
+  vertex: "VERTEX_MODEL",
+  azure: "AZURE_OPENAI_MODEL",
+  bedrock: "BEDROCK_MODEL",
+  openrouter: "OPENROUTER_MODEL",
+  fireworks: "FIREWORKS_MODEL",
+  together: "TOGETHER_MODEL",
+  cerebras: "CEREBRAS_MODEL",
+  anthropic: "ANTHROPIC_MODEL",
+  litellm: "LITELLM_MODEL",
+  lmstudio: "LMSTUDIO_MODEL",
+  ollama: "OLLAMA_MODEL",
+  custom: "CUSTOM_MODEL",
+  codex: "CODEX_MODEL",
+};
+
+/** The settings probe is a small admin read; a dead engine must not stall the page. */
+const MODEL_SETTINGS_TIMEOUT_MS = 3_000;
+
+/**
+ * The option catalogue: the value in use first (flagged `current`), then the
+ * declared ids in their declared order; duplicates are dropped in favour of
+ * the earlier entry. `selectable` is the caller's one capability fact — the
+ * options themselves never guess it.
+ */
+function buildModelOptions(input: {
+  current: string | null;
+  declaredOptions: string[];
+  selectable: boolean;
+}): PresentationModelOption[] {
+  const options: PresentationModelOption[] = [];
+  const add = (value: string, current: boolean): void => {
+    if (options.some((option) => option.value === value)) return;
+    options.push({ value, label: value, current, selectable: input.selectable });
+  };
+  if (input.current !== null) add(input.current, true);
+  for (const value of input.declaredOptions) add(value, false);
+  return options;
+}
+
+/**
+ * The shared shape of every outcome where the engine did not grant a readable
+ * settings answer: the operator's declaration, honestly labelled, with nothing
+ * selectable from here.
+ */
+function degradedModels(input: {
+  notice: PresentationModelNotice;
+  declaredModel: string | null;
+  declaredOptions: string[];
+  switchingDeclared: boolean;
+}): PresentationModels {
+  return {
+    current: input.declaredModel,
+    currentSource: input.declaredModel === null ? null : "declared",
+    provider: null,
+    providerModelKey: null,
+    engineManaged: false,
+    switchingDeclared: input.switchingDeclared,
+    options: buildModelOptions({
+      current: input.declaredModel,
+      declaredOptions: input.declaredOptions,
+      selectable: false,
+    }),
+    notice: input.notice,
+  };
+}
+
+/**
+ * The two fields this adapter is allowed to take from the settings body: the
+ * engine's `LLM` value and, when that value is in {@link PRESENTON_MODEL_KEYS},
+ * its model field. Everything else the body carries — keys included — is never
+ * copied out of it. `providerModelKey` is null for an unmapped provider (no
+ * write target); `model` is null when the mapped field is absent/blank. Null
+ * when `LLM` itself is not a usable provider id.
+ */
+function readEngineModelSetting(value: unknown): {
+  provider: string;
+  providerModelKey: string | null;
+  model: string | null;
+} | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const settings = value as Record<string, unknown>;
+  const provider = typeof settings.LLM === "string" ? settings.LLM.trim() : "";
+  if (provider === "") return null;
+  const mapped = PRESENTON_MODEL_KEYS[provider];
+  const providerModelKey = typeof mapped === "string" ? mapped : null;
+  const configured =
+    providerModelKey === null ? undefined : settings[providerModelKey];
+  const model =
+    typeof configured === "string" && configured.trim() !== ""
+      ? configured.trim()
+      : null;
+  return { provider, providerModelKey, model };
+}
+
+/** The mapped model field from a settings response, trimmed; null when absent. */
+function readModelField(value: unknown, key: string): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "string" && field.trim() !== "" ? field.trim() : null;
+}
+
+/** One settings probe's outcome. The settings body never leaves the probe. */
+type ProviderSettingsProbe =
+  | {
+      kind: "ok";
+      provider: string;
+      providerModelKey: string | null;
+      model: string | null;
+    }
+  | { kind: "denied" }
+  | { kind: "unreachable" };
+
+/**
+ * One `GET /api/v1/admin/provider-settings`. The response body stays inside
+ * this function; only {@link readEngineModelSetting}'s two fields come out.
+ * 401/403 is the engine's own refusal (`denied`); transport failure, 5xx and a
+ * 200 without a usable `LLM` are all `unreachable` — the probe did not answer
+ * with settings.
+ */
+async function probeProviderSettings(
+  base: string,
+): Promise<ProviderSettingsProbe> {
+  try {
+    const response = await fetchWithTimeout(
+      joinUrl(base, "/api/v1/admin/provider-settings"),
+      { method: "GET", headers: requestHeaders() },
+      MODEL_SETTINGS_TIMEOUT_MS,
+    );
+    if (response.status === 401 || response.status === 403) {
+      return { kind: "denied" };
+    }
+    if (!response.ok) return { kind: "unreachable" };
+    const engine = readEngineModelSetting(await response.json());
+    if (engine === null) return { kind: "unreachable" };
+    return { kind: "ok", ...engine };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/**
+ * §3.3 — the honest model listing. Never throws for configuration/engine
+ * states: no `PRESENTON_URL`, a denied settings read (401/403) and a dead
+ * engine all degrade to the declaration with the matching notice, so a
+ * service outage never takes the tool page down. A 200 read extracts only
+ * `LLM` + the mapped model field; when that field is blank the declared
+ * default stands in (`currentSource:"declared"`).
+ */
+export async function listPresentationModels(): Promise<PresentationModels> {
+  const declaredModel = presentonModel();
+  const declaredOptions = presentonModelOptions();
+  const base = presentonBaseUrl();
+
+  if (base === null) {
+    // The page renders the blocked state here, not the control, so nothing is
+    // switchable and the declaration is carried for display only.
+    return degradedModels({
+      notice: "service-managed",
+      declaredModel,
+      declaredOptions,
+      switchingDeclared: false,
+    });
+  }
+
+  const probe = await probeProviderSettings(base);
+  if (probe.kind !== "ok") {
+    return degradedModels({
+      notice: probe.kind === "denied" ? "service-managed" : "unreachable",
+      declaredModel,
+      declaredOptions,
+      switchingDeclared: declaredOptions.length > 0,
+    });
+  }
+
+  const current = probe.model ?? declaredModel;
+  const currentSource =
+    probe.model !== null ? "engine" : declaredModel !== null ? "declared" : null;
+  // `switchingDeclared` is the declaration fact (`PRESENTON_MODEL_OPTIONS`
+  // non-empty); `switchable` adds the engine's write target. An engine
+  // provider outside the table has none, so nothing is ever offered
+  // selectable that `applyPresentationModel` would refuse.
+  const switchingDeclared = declaredOptions.length > 0;
+  const switchable = switchingDeclared && probe.providerModelKey !== null;
+  return {
+    current,
+    currentSource,
+    provider: probe.provider,
+    providerModelKey: probe.providerModelKey,
+    engineManaged: true,
+    switchingDeclared,
+    options: buildModelOptions({
+      current,
+      declaredOptions,
+      selectable: switchable,
+    }),
+    notice: switchable ? null : "switching-disabled",
+  };
+}
+
+/**
+ * §3.3 — the deployment-global model switch. Guard order: configured → the
+ * value is an exact member of the declared catalogue (trimmed) → the engine's
+ * settings read answers → its provider has a mapped model key → one `PUT` of
+ * exactly `{ [providerModelKey]: value }` → the response's model field must
+ * echo the request. Every refusal happens before any write: an undeclared
+ * value never reaches the network and a denied engine never receives a body.
+ * The result carries no engine text and no key material.
+ */
+export async function applyPresentationModel(
+  value: string,
+): Promise<PresentationModelApplyResult> {
+  const base = presentonBaseUrl();
+  if (base === null) return { applied: false, reason: "not-configured" };
+
+  const model = typeof value === "string" ? value.trim() : "";
+  if (model === "" || !presentonModelOptions().includes(model)) {
+    return { applied: false, reason: "not-declared" };
+  }
+
+  const probe = await probeProviderSettings(base);
+  if (probe.kind === "unreachable") {
+    return { applied: false, reason: "unreachable" };
+  }
+  if (probe.kind === "denied" || probe.providerModelKey === null) {
+    return { applied: false, reason: "not-supported" };
+  }
+  const provider = probe.provider;
+  const providerModelKey = probe.providerModelKey;
+
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      joinUrl(base, "/api/v1/admin/provider-settings"),
+      {
+        method: "PUT",
+        headers: { ...requestHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ [providerModelKey]: model }),
+      },
+      MUTATION_TIMEOUT_MS,
+    );
+  } catch {
+    return { applied: false, reason: "unreachable" };
+  }
+
+  if (!response.ok) {
+    const failure = classifyHttpFailure(response, "The settings write failed.");
+    return {
+      applied: false,
+      reason: failure.code === "unreachable" ? "unreachable" : "rejected",
+    };
+  }
+
+  let saved: unknown;
+  try {
+    saved = await response.json();
+  } catch {
+    // The engine answered ok but not with a readable confirmation; the write
+    // is unverified, which is a rejection of this call, not a retryable blip.
+    return { applied: false, reason: "rejected" };
+  }
+  if (readModelField(saved, providerModelKey) !== model) {
+    return { applied: false, reason: "rejected" };
+  }
+
+  return { applied: true, model, provider };
 }
 
 // ---------------------------------------------------------------------------
