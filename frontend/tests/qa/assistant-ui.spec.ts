@@ -14,24 +14,37 @@
  * 2. C2's live conversation shell: `/assistant` bound to the real 26.x
  *    services (`listConversations`/`listMessages`) through the QA1 fixture's
  *    stored session. The cases seed conversations/messages with the service
- *    role and sweep them by id afterwards; they assert the sidebar order, the
- *    selected conversation's bubbles (roles, avatar, mono labels), the honest
- *    empty states, the guest prompt and a clean console. No provider is
- *    configured in this environment, so every live case also pins the honest
- *    unconfigured state — the shell must never fabricate a reply.
+ *    role and sweep them by id afterwards; they assert the sidebar order and
+ *    exact seeded titles, the selected conversation's bubbles (roles, avatar,
+ *    stored sources, mono labels), the honest empty states, the guest prompt
+ *    and a clean console.
+ * 3. C3's composer and streaming turn (19.7–19.11): the real endpoint driven
+ *    through the UI (the unconfigured turn streams the verbatim 26.1 copy and
+ *    persists), and — because this environment has no provider — a UI-level
+ *    SSE stub that fulfills `POST /api/assistant/turn` with crafted frames in
+ *    timed chunks: a complete turn with a split frame and sources, an `error`
+ *    frame, a `done failed`, a dropped malformed block, and a held-open stream
+ *    for the in-flight double-send proof. No provider is configured, so every
+ *    live case also pins the honest unconfigured state — the shell never
+ *    fabricates a reply.
  *
- * The live composer/streaming cases (19.7–19.11) are C3's; this project stays
- * green with no provider configured.
+ * This project stays green with no provider configured.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { ASSISTANT_UNCONFIGURED_COPY } from "../../lib/ai/provider";
 import {
   applyAssistantFrame,
   createAssistantEntry,
   normalizeAssistantFrame,
   parseSseFrames,
 } from "../../lib/data/assistantFrames";
-import type { AssistantStreamFrame } from "../../lib/data/assistantValues";
+import {
+  MESSAGE_CONTENT_MAX_LENGTH,
+  type AssistantSource,
+  type AssistantStreamFrame,
+} from "../../lib/data/assistantValues";
+import { stubAssistantTurn } from "./assistantTurnStub";
 
 /** The exact wire form the turn route emits (its private `frameToSse`). */
 function frameToSse(frame: AssistantStreamFrame): string {
@@ -50,6 +63,15 @@ const SOURCE_B = {
   documentName: "Lecture notes.pdf",
   chunkIndex: 0,
 };
+
+/** The 26.12 sanitized failure copy the pipeline persists/streams. */
+const FAILED_COPY =
+  "The assistant couldn't answer that just now. Please try again.";
+
+/** The 26.10 sanitized rate-limit copy an `error` frame can carry. */
+const RATE_LIMITED_COPY =
+  "You're sending messages faster than the limit allows. Wait a moment and try again.";
+
 
 test.describe("parseSseFrames", () => {
   test("parses every frame of a complete stream, in order", () => {
@@ -434,6 +456,20 @@ function trackConsoleErrors(page: Page): string[] {
   return errors;
 }
 
+/**
+ * Waits for the assistant page's streamed tree to settle to a single copy.
+ *
+ * Next streams the server-rendered page in segments; for a moment after a
+ * document load the hidden streamed segment and the mounted tree can coexist
+ * in the DOM (a framework behaviour recorded at the Phase E gate — it settles
+ * with no console error and no product defect). An unscoped strict locator can
+ * therefore resolve to two copies. Polling the workspace root to one copy
+ * proves the tree has settled before the test interacts with it.
+ */
+async function waitForAssistantTree(page: Page): Promise<void> {
+  await expect(page.locator("[data-assistant-status]")).toHaveCount(1);
+}
+
 test.describe("assistant conversation shell (live)", () => {
   let service: SupabaseClient;
   let qa1Id = "";
@@ -484,10 +520,14 @@ test.describe("assistant conversation shell (live)", () => {
     conversationId: string,
     role: "user" | "assistant" | "system",
     content: string,
+    sources?: AssistantSource[],
   ): Promise<void> {
-    const { error } = await service
-      .from("messages")
-      .insert({ conversation_id: conversationId, role, content });
+    const { error } = await service.from("messages").insert({
+      conversation_id: conversationId,
+      role,
+      content,
+      ...(sources !== undefined ? { sources } : {}),
+    });
     expect(error, `seed ${role} message: ${error?.message}`).toBeNull();
   }
 
@@ -521,7 +561,35 @@ test.describe("assistant conversation shell (live)", () => {
     qa2Id = await signIn(qa2, QA2, qa2Password);
   });
 
+  /** The wall-clock window a test's usage rows can have been written in. */
+  let testStartedAt = "";
+
+  test.beforeEach(() => {
+    testStartedAt = new Date().toISOString();
+  });
+
   test.afterEach(async () => {
+    // A live turn records `assistant_turn` (and, with a provider, token) rows
+    // in `usage_events` (26.10/26.11). They are swept in this test's own
+    // window, id/kind/user-scoped, and the residue is proven zero.
+    const usage = await service
+      .from("usage_events")
+      .delete()
+      .eq("user_id", qa1Id)
+      .in("kind", ["assistant_turn", "assistant_tokens"])
+      .gte("occurred_at", testStartedAt)
+      .select("id");
+    expect(usage.error, `teardown usage: ${usage.error?.message}`).toBeNull();
+
+    const usageResidue = await service
+      .from("usage_events")
+      .select("id")
+      .eq("user_id", qa1Id)
+      .in("kind", ["assistant_turn", "assistant_tokens"])
+      .gte("occurred_at", testStartedAt);
+    expect(usageResidue.error).toBeNull();
+    expect(usageResidue.data ?? [], "no usage residue").toHaveLength(0);
+
     if (createdConversationIds.length === 0) return;
     const ids = [...createdConversationIds];
     createdConversationIds.length = 0;
@@ -571,11 +639,12 @@ test.describe("assistant conversation shell (live)", () => {
     const question = `${PREFIX} what is photosynthesis?`;
     const answer = `${PREFIX} photosynthesis converts light into chemical energy.`;
     await seedMessage(first, "user", question);
-    await seedMessage(first, "assistant", answer);
+    await seedMessage(first, "assistant", answer, [SOURCE_A]);
     await seedMessage(second, "user", `${PREFIX} second conversation question`);
 
     // No `?c=`: the shell selects the most recently active conversation.
     await page.goto("/assistant");
+    await waitForAssistantTree(page);
     await expect(
       page.getByRole("heading", { level: 1, name: "Assistant" }),
     ).toBeVisible();
@@ -599,6 +668,18 @@ test.describe("assistant conversation shell (live)", () => {
     expect(secondIndex, "the middle conversation follows").toBeGreaterThan(firstIndex);
     expect(thirdIndex, "the oldest conversation is last").toBeGreaterThan(secondIndex);
 
+    // C2 review fold-in: the exact seeded titles are on the rows, not just
+    // their order. The title span truncates visually; textContent is exact.
+    await expect(page.locator(`[data-conversation-id="${first}"]`)).toContainText(
+      `${PREFIX} biology revision`,
+    );
+    await expect(page.locator(`[data-conversation-id="${second}"]`)).toContainText(
+      `${PREFIX} essay outline`,
+    );
+    await expect(page.locator(`[data-conversation-id="${third}"]`)).toContainText(
+      `${PREFIX} reading list`,
+    );
+
     // Bubbles: role-aligned, one avatar on the assistant turn, mono labels,
     // and exactly the stored text — no fabricated reply copy.
     const userBubble = page.locator('[data-message-role="user"]');
@@ -619,6 +700,20 @@ test.describe("assistant conversation shell (live)", () => {
     );
     await expect(assistantBubble.locator("[data-assistant-avatar]")).toHaveCount(1);
     await expect(userBubble.locator("[data-assistant-avatar]")).toHaveCount(0);
+
+    // 19.11: a stored assistant row renders its persisted sources — document
+    // name, the stored page and the chunk index in mono.
+    const storedSources = assistantBubble.locator("[data-assistant-sources]");
+    await expect(storedSources).toHaveCount(1);
+    const storedSource = storedSources.locator("[data-assistant-source]").first();
+    await expect(storedSource).toContainText("Syllabus.pdf");
+    await expect(storedSource.locator("[data-assistant-source-page]")).toHaveText("p. 3");
+    await expect(storedSource.locator("[data-assistant-source-chunk]")).toHaveText(
+      "chunk 1",
+    );
+    await expect(storedSource.locator("[data-assistant-source-chunk]")).toHaveClass(
+      /font-mono/,
+    );
 
     // The provider verdict is stated honestly in the shell.
     await expect(page.locator('[data-assistant-status="unconfigured"]')).toBeAttached();
@@ -657,14 +752,18 @@ test.describe("assistant conversation shell (live)", () => {
 
     const errors = trackConsoleErrors(page);
     await page.goto(`/assistant?c=${foreign}`);
+    await waitForAssistantTree(page);
     await expect(
       page.getByRole("heading", { level: 1, name: "Assistant" }),
     ).toBeVisible();
 
-    // The read was refused honestly: no selection, no bubbles, no leak.
+    // The read was refused honestly: no selection, no bubbles, no leak — and
+    // no composer, so a send can never aim at the foreign id or silently
+    // start a different conversation behind the error state.
     await expect(page.locator('[data-assistant-empty="unavailable"]')).toBeVisible();
     await expect(page.locator(`[data-conversation-id="${foreign}"]`)).toHaveCount(0);
     await expect(page.locator("[data-message-role]")).toHaveCount(0);
+    await expect(page.locator("[data-assistant-composer]")).toHaveCount(0);
     await expect(page.locator("body")).not.toContainText(marker);
 
     expect(errors, "the unavailable state stays console-clean").toEqual([]);
@@ -685,6 +784,7 @@ test.describe("assistant conversation shell (live)", () => {
 
     const errors = trackConsoleErrors(page);
     await page.goto("/assistant");
+    await waitForAssistantTree(page);
     await expect(
       page.getByRole("heading", { level: 1, name: "Assistant" }),
     ).toBeVisible();
@@ -698,12 +798,14 @@ test.describe("assistant conversation shell (live)", () => {
     await expect(page.locator("[data-conversation-id]")).toHaveCount(0);
     await expect(page.locator("[data-message-role]")).toHaveCount(0);
 
-    // The affordance is honest: disabled, with the reason stated, rather than
-    // a dead control that looks live.
-    await expect(page.getByRole("button", { name: "New conversation" })).toBeDisabled();
-    await expect(
-      page.getByText("Starting a conversation isn't available yet."),
-    ).toBeVisible();
+    // The no-conversations state can send: the pipeline creates the
+    // conversation server-side (19.7–19.9). The explicit "New conversation"
+    // control is still 19.2/C4's; the empty send button here is honest (no
+    // text typed yet), not a dead affordance.
+    await expect(page.locator("[data-assistant-composer]")).toBeVisible();
+    await expect(page.locator("[data-assistant-input]")).toBeVisible();
+    await expect(page.locator("[data-assistant-send]")).toBeDisabled();
+    await expect(page.locator("[data-assistant-send]")).toBeVisible();
 
     await page.screenshot({
       path: "screenshots/c2-assistant-empty.png",
@@ -727,6 +829,7 @@ test.describe("assistant conversation shell (live)", () => {
     });
 
     await page.goto("/assistant");
+    await waitForAssistantTree(page);
     await expect(
       page.getByRole("heading", { level: 1, name: "Assistant" }),
     ).toBeVisible();
@@ -738,6 +841,8 @@ test.describe("assistant conversation shell (live)", () => {
     ).toBeVisible();
     await expect(page.locator("[data-conversation-id]")).toHaveCount(0);
     await expect(page.locator("[data-message-role]")).toHaveCount(0);
+    // A guest never gets the composer (19.7–19.9): no send, no data.
+    await expect(page.locator("[data-assistant-composer]")).toHaveCount(0);
 
     await page.screenshot({
       path: "screenshots/c2-assistant-guest.png",
@@ -781,9 +886,14 @@ test.describe("assistant conversation shell (live)", () => {
     ] as const) {
       await page.setViewportSize({ width, height });
       await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
       await expect(page.locator("[data-message-list]")).toContainText(
         `${PREFIX} responsive answer`,
       );
+      // The composer (19.7–19.9) is part of the shell at every width.
+      await expect(page.locator("[data-assistant-composer]")).toBeVisible();
+      await expect(page.locator("[data-assistant-input]")).toBeVisible();
+      await expect(page.locator("[data-assistant-send]")).toBeVisible();
 
       // Let the shared entrance ladder settle before measuring/shooting.
       await page.waitForTimeout(600);
@@ -804,5 +914,525 @@ test.describe("assistant conversation shell (live)", () => {
     }
 
     expect(errors, "the responsive pass stays console-clean").toEqual([]);
+  });
+
+  /* -----------------------------------------------------------------------
+     C3 — the composer (19.7–19.9), the streaming turn (19.10) and source
+     references (19.11). The live case drives the real endpoint; the stubbed
+     cases replace only the HTTP boundary with crafted SSE chunks.
+     ----------------------------------------------------------------------- */
+
+  test("a live turn streams the honest unconfigured copy and settles stored", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "live unconfigured turn",
+      ahead(FUTURE_MINUTES),
+    );
+    const question = `${PREFIX} what should I revise first?`;
+
+    // Poll at frame granularity: the local entry passes through
+    // `unconfigured` and is retired by the reconciliation refresh moments
+    // later, so a plain locator assertion could miss that committed state.
+    const optimisticUserText = page.waitForFunction(() => {
+      const content = document.querySelector(
+        '[data-message-role="user"][data-message-local] [data-message-content]',
+      );
+      return content === null ? null : content.textContent;
+    });
+    const unconfiguredEntry = page.waitForFunction(() => {
+      const bubble = document.querySelector(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      if (bubble === null) return null;
+      return bubble.getAttribute("data-message-status") === "unconfigured"
+        ? bubble.textContent
+        : null;
+    });
+
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+    const input = page.locator("[data-assistant-input]");
+    await input.fill(question);
+    await expect(page.locator("[data-assistant-send]")).toBeEnabled();
+    await page.locator("[data-assistant-send]").click();
+
+    // The optimistic user bubble carries the exact typed text, and the live
+    // entry streams the route's verbatim 26.1 copy and settles unconfigured.
+    expect(await (await optimisticUserText).jsonValue()).toBe(question);
+    const streamedText = String(await (await unconfiguredEntry).jsonValue());
+    expect(streamedText).toContain(ASSISTANT_UNCONFIGURED_COPY);
+    // No sources frame exists on the unconfigured path.
+    expect(streamedText).not.toContain("Sources");
+
+    // After settle the hook refreshes and retires the local turn: the stored
+    // rows are the source of truth, and the URL keeps the same ?c=.
+    await expect(page.locator("[data-message-local]")).toHaveCount(0, {
+      timeout: 20_000,
+    });
+    await waitForAssistantTree(page);
+    await expect(page).toHaveURL(new RegExp(`c=${conversation}`));
+    const storedUser = page.locator('[data-message-role="user"]');
+    const storedAssistant = page.locator('[data-message-role="assistant"]');
+    await expect(storedUser).toHaveCount(1);
+    await expect(storedAssistant).toHaveCount(1);
+    await expect(storedUser.locator("[data-message-content]")).toHaveText(question);
+    await expect(storedAssistant.locator("[data-message-content]")).toContainText(
+      ASSISTANT_UNCONFIGURED_COPY,
+    );
+    await expect(storedAssistant).toHaveAttribute("data-message-status", "complete");
+    await expect(storedAssistant.locator("[data-assistant-sources]")).toHaveCount(0);
+
+    // The stored rows are actually visible, not merely in the DOM: a row that
+    // mounts after a single-observer reveal group has already played stays at
+    // `opacity: 0` (the defect the per-row reveals in MessageList fix).
+    await expect(page.locator("[data-message-list] > li").last()).toHaveCSS(
+      "opacity",
+      "1",
+    );
+
+    // Let the shared reveal ladder settle before the evidence shot (the same
+    // pause the responsive pass uses).
+    await page.waitForTimeout(600);
+    await page.screenshot({
+      path: "screenshots/c3-assistant-unconfigured.png",
+      fullPage: true,
+    });
+
+    // A reload reads both stored messages back.
+    await page.reload();
+    await waitForAssistantTree(page);
+    await expect(
+      page.locator('[data-message-role="user"] [data-message-content]'),
+    ).toHaveText(question);
+    await expect(page.locator('[data-message-role="assistant"]')).toContainText(
+      ASSISTANT_UNCONFIGURED_COPY,
+    );
+    await expect(page.locator("[data-message-local]")).toHaveCount(0);
+    await expect(page.locator("[data-assistant-sources]")).toHaveCount(0);
+
+    expect(errors, "the live turn stays console-clean").toEqual([]);
+  });
+
+  test("a stubbed complete turn grows incrementally and renders sources", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "stubbed stream",
+      ahead(FUTURE_MINUTES),
+    );
+
+    /* One crafted stream: a real start, two deltas, one delta frame SPLIT
+       across two writes, a malformed block that must be dropped, the sources
+       frame and the terminal done. The stub holds after the first delta so the
+       mid-stream state is a deterministic observation, not a timing guess. */
+    const chunks = [
+      frameToSse({
+        type: "start",
+        conversationId: conversation,
+        configured: true,
+      }),
+      frameToSse({ type: "delta", text: "Photosynthesis " }),
+      'data: {"type":"delta","text":"converts light',
+      ' into sugar"}\n\n',
+      "data: {not json\n\n",
+      frameToSse({ type: "sources", sources: [SOURCE_A, SOURCE_B] }),
+      frameToSse({
+        type: "done",
+        status: "complete",
+        messageId: "stub-c3-message",
+      }),
+    ];
+    const stub = await stubAssistantTurn(page, { chunks, holdAfter: 2 });
+
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      await page
+        .locator("[data-assistant-input]")
+        .fill(`${PREFIX} stubbed question`);
+      await page.locator("[data-assistant-send]").click();
+
+      const bubble = page.locator(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      // Mid-stream: the first delta is on screen, the rest is still held.
+      await expect(bubble).toHaveAttribute("data-message-status", "streaming");
+      await expect(bubble.locator("[data-message-content]")).toHaveText(
+        "Photosynthesis ",
+      );
+      await expect(bubble.locator("[data-message-streaming]")).toBeVisible();
+      // The live row itself is visible, not stuck at the reveal's hidden state.
+      await expect(page.locator("[data-message-list] > li").last()).toHaveCSS(
+        "opacity",
+        "1",
+      );
+      await expect(page.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "true",
+      );
+      await page.screenshot({
+        path: "screenshots/c3-assistant-streaming.png",
+        fullPage: true,
+      });
+
+      stub.release();
+
+      // The rest of the stream reassembles: the split frame, the dropped
+      // malformed block, the sources and the terminal status.
+      await expect(bubble).toHaveAttribute("data-message-status", "complete", {
+        timeout: 20_000,
+      });
+      await expect(bubble.locator("[data-message-content]")).toHaveText(
+        "Photosynthesis converts light into sugar",
+      );
+
+      // 19.11: name, optional page and mono chunk index; no extra chrome.
+      const sources = bubble.locator("[data-assistant-sources]");
+      await expect(sources).toHaveCount(1);
+      const rows = sources.locator("[data-assistant-source]");
+      await expect(rows).toHaveCount(2);
+      await expect(rows.nth(0)).toContainText("Syllabus.pdf");
+      await expect(rows.nth(0).locator("[data-assistant-source-page]")).toHaveText(
+        "p. 3",
+      );
+      await expect(
+        rows.nth(0).locator("[data-assistant-source-chunk]"),
+      ).toHaveText("chunk 1");
+      await expect(
+        rows.nth(0).locator("[data-assistant-source-chunk]"),
+      ).toHaveClass(/font-mono/);
+      await expect(rows.nth(1)).toContainText("Lecture notes.pdf");
+      await expect(
+        rows.nth(1).locator("[data-assistant-source-page]"),
+      ).toHaveCount(0);
+      await page.screenshot({
+        path: "screenshots/c3-assistant-sources.png",
+        fullPage: true,
+      });
+
+      expect(stub.requestCount(), "exactly one turn was sent").toBe(1);
+      expect(errors, "the stubbed stream stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("a stubbed error frame shows its sanitized copy, never an invented answer", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "stubbed failure",
+      ahead(FUTURE_MINUTES),
+    );
+    const stub = await stubAssistantTurn(page, {
+      chunks: [frameToSse({ type: "error", error: RATE_LIMITED_COPY })],
+    });
+
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      const question = `${PREFIX} stubbed rate limited`;
+      await page.locator("[data-assistant-input]").fill(question);
+      await page.locator("[data-assistant-send]").click();
+
+      const bubble = page.locator(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      await expect(bubble).toHaveAttribute("data-message-status", "failed");
+      await expect(bubble.locator("[data-assistant-failure]")).toHaveText(
+        RATE_LIMITED_COPY,
+      );
+      // The copy is failure text, not answer text: no content paragraph was
+      // fabricated, and the generic failure copy is not substituted.
+      await expect(bubble.locator("[data-message-content]")).toHaveCount(0);
+      await expect(bubble).not.toContainText(FAILED_COPY);
+      await expect(
+        page.locator(
+          '[data-message-role="user"][data-message-local] [data-message-content]',
+        ),
+      ).toHaveText(question);
+      await page.screenshot({
+        path: "screenshots/c3-assistant-failed.png",
+        fullPage: true,
+      });
+      expect(stub.requestCount()).toBe(1);
+      expect(errors, "the errored turn stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("a stubbed done failed keeps only the delivered text and marks it failed", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "stubbed done failed",
+      ahead(FUTURE_MINUTES),
+    );
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: conversation,
+          configured: true,
+        }),
+        frameToSse({ type: "delta", text: "Half an answer" }),
+        frameToSse({ type: "done", status: "failed", messageId: null }),
+      ],
+    });
+
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      await page
+        .locator("[data-assistant-input]")
+        .fill(`${PREFIX} stubbed done failed`);
+      await page.locator("[data-assistant-send]").click();
+
+      const bubble = page.locator(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      await expect(bubble).toHaveAttribute("data-message-status", "failed");
+      await expect(bubble.locator("[data-message-content]")).toHaveText(
+        "Half an answer",
+      );
+      await expect(bubble).toContainText("Failed");
+      // A failed status is not an error copy: the delivered text stands alone
+      // with the Failed badge, and nothing else is printed.
+      await expect(bubble.locator("[data-assistant-failure]")).toHaveCount(0);
+      await expect(bubble.locator("[data-assistant-sources]")).toHaveCount(0);
+      expect(errors, "the failed turn stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("the composer: labelled, bounded, Enter sends, Shift+Enter breaks the line", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "composer behaviour",
+      ahead(FUTURE_MINUTES),
+    );
+    /* A settled stub so the send path is deterministic and never spends the
+       real rate-limit window. */
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: conversation,
+          configured: true,
+        }),
+        frameToSse({ type: "done", status: "complete", messageId: null }),
+      ],
+    });
+
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      const composer = page.locator("[data-assistant-composer]");
+      const input = page.locator("[data-assistant-input]");
+      const send = page.locator("[data-assistant-send]");
+
+      await expect(composer).toBeVisible();
+      await expect(composer).toHaveAttribute("aria-busy", "false");
+      // A real label names the field, and the contract's bound is applied.
+      await expect(page.getByLabel("Message the assistant")).toHaveCount(1);
+      await expect(input).toHaveAttribute(
+        "maxlength",
+        String(MESSAGE_CONTENT_MAX_LENGTH),
+      );
+      await expect(page.locator("[data-assistant-busy]")).toContainText(
+        "Enter sends · Shift+Enter adds a line",
+      );
+
+      // Empty and whitespace-only never send.
+      await expect(send).toBeDisabled();
+      await input.fill("   ");
+      await expect(send).toBeDisabled();
+      await input.press("Enter");
+      await expect(page.locator("[data-message-local]")).toHaveCount(0);
+      expect(stub.requestCount(), "no request for a whitespace message").toBe(0);
+
+      // Shift+Enter inserts a newline and does not send.
+      await input.fill("");
+      await input.pressSequentially("line one");
+      await input.press("Shift+Enter");
+      await input.pressSequentially("line two");
+      await expect(input).toHaveValue("line one\nline two");
+      await expect(send).toBeEnabled();
+      expect(stub.requestCount()).toBe(0);
+      await expect(page.locator("[data-message-local]")).toHaveCount(0);
+
+      // An action chip fills the composer and never sends on its own.
+      const chip = page.locator("[data-assistant-chip]").first();
+      const chipText = (await chip.textContent())?.trim() ?? "";
+      expect(chipText.length, "chips carry real prompt text").toBeGreaterThan(8);
+      await chip.click();
+      await expect(input).toHaveValue(chipText);
+      expect(stub.requestCount()).toBe(0);
+      await expect(page.locator("[data-message-local]")).toHaveCount(0);
+
+      // Enter sends the exact typed text, newlines included, and focus stays
+      // in the composer once the turn settles.
+      await input.fill("line one\nline two");
+      await input.press("Enter");
+      const sentContent = page.locator(
+        '[data-message-role="user"][data-message-local] [data-message-content]',
+      );
+      await expect(sentContent).toHaveCount(1);
+      expect(await sentContent.evaluate((node) => node.textContent)).toBe(
+        "line one\nline two",
+      );
+      await expect(
+        page.locator('[data-message-role="assistant"][data-message-local]'),
+      ).toHaveAttribute("data-message-status", "complete");
+      await expect(input).toHaveValue("");
+      await expect(input).toBeFocused();
+      await expect(composer).toHaveAttribute("aria-busy", "false");
+      expect(stub.requestCount()).toBe(1);
+      expect(errors, "the composer stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("an in-flight turn blocks a second send", async ({ page }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "double send",
+      ahead(FUTURE_MINUTES),
+    );
+    /* Hold before the first chunk: the response headers are sent and the turn
+       is genuinely in flight while the test tries to send again. */
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: conversation,
+          configured: true,
+        }),
+        frameToSse({ type: "done", status: "complete", messageId: null }),
+      ],
+      holdAfter: 0,
+    });
+
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      const composer = page.locator("[data-assistant-composer]");
+      const input = page.locator("[data-assistant-input]");
+      const send = page.locator("[data-assistant-send]");
+
+      await input.fill(`${PREFIX} one at a time`);
+      await input.press("Enter");
+
+      await expect.poll(() => stub.requestCount()).toBe(1);
+      await expect(composer).toHaveAttribute("aria-busy", "true");
+      await expect(page.locator("[data-assistant-busy]")).toHaveText(
+        /answering/,
+      );
+      await expect(send).toBeDisabled();
+      await expect(page.locator("[data-message-local]")).toHaveCount(2);
+
+      // A second Enter and a forced click on the disabled send cannot start a
+      // second turn; the request counter proves nothing reached the wire.
+      await input.press("Enter");
+      await send.click({ force: true });
+      stub.release();
+
+      await expect(
+        page.locator('[data-message-role="assistant"][data-message-local]'),
+      ).toHaveAttribute("data-message-status", "complete", { timeout: 20_000 });
+      expect(stub.requestCount(), "the second send never became a request").toBe(
+        1,
+      );
+      await expect(
+        page.locator('[data-message-role="user"][data-message-local]'),
+      ).toHaveCount(1);
+      await expect(composer).toHaveAttribute("aria-busy", "false");
+      expect(errors, "the blocked double-send stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("the first send from the no-conversations state starts the conversation", async ({
+    page,
+  }) => {
+    const { count, error } = await service
+      .from("conversations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id);
+    expect(error).toBeNull();
+    test.skip(
+      (count ?? 0) > 0,
+      `QA1 owns ${count} conversation(s) (residue from other flows); the no-conversations send cannot be proven without deleting real rows`,
+    );
+    const errors = trackConsoleErrors(page);
+    const question = `${PREFIX} start this conversation`;
+    let createdId: string | null = null;
+
+    try {
+      await page.goto("/assistant");
+      await waitForAssistantTree(page);
+      await expect(page.locator('[data-assistant-empty="none"]')).toBeVisible();
+      await page.locator("[data-assistant-input]").fill(question);
+      await page.locator("[data-assistant-send]").click();
+
+      // The pipeline created the conversation and `start` announced it; the
+      // hook replaces the URL so the read side and sidebar agree.
+      await expect(page).toHaveURL(/\/assistant\?c=[0-9a-f-]{36}/i, {
+        timeout: 20_000,
+      });
+      createdId = new URL(page.url()).searchParams.get("c");
+      if (createdId !== null) createdConversationIds.push(createdId);
+
+      await expect(page.locator("[data-message-local]")).toHaveCount(0, {
+        timeout: 20_000,
+      });
+      await expect(
+        page.locator('[data-message-role="user"] [data-message-content]'),
+      ).toHaveText(question);
+      await expect(page.locator('[data-message-role="assistant"]')).toContainText(
+        ASSISTANT_UNCONFIGURED_COPY,
+      );
+      if (createdId !== null) {
+        await expect(
+          page.locator(`[data-conversation-id="${createdId}"]`),
+        ).toHaveAttribute("aria-current", "true");
+        await expect(
+          page.locator(`[data-conversation-id="${createdId}"]`),
+        ).toContainText(question);
+      }
+      expect(errors, "the first-send flow stays console-clean").toEqual([]);
+    } finally {
+      // Safety net: if the URL never surfaced, the created row is still
+      // identified (and removed) by the exact derived title.
+      if (createdId === null) {
+        const { data } = await service
+          .from("conversations")
+          .select("id")
+          .eq("user_id", qa1Id)
+          .eq("title", question);
+        for (const row of data ?? []) {
+          createdConversationIds.push((row as { id: string }).id);
+        }
+      }
+    }
   });
 });

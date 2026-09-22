@@ -7,6 +7,7 @@ import {
   ASSISTANT_UNCONFIGURED_COPY,
   providerStatus,
 } from "@/lib/ai/provider";
+import { ASSISTANT_COPY } from "@/lib/data/assistant";
 import type { MessageItem } from "@/lib/data/assistantValues";
 import {
   listConversations,
@@ -22,7 +23,7 @@ export const metadata: Metadata = {
 };
 
 /**
- * Assistant (19.x conversation shell; 26.x backend binding, read half).
+ * Assistant (19.x conversation shell; 26.x backend binding).
  *
  * The server page owns access and the data reads, in that order: the
  * `getWorkspaceAccess` gate runs first (`requireOnboardedUser("/assistant")`
@@ -36,9 +37,13 @@ export const metadata: Metadata = {
  *
  * The 26.1 provider verdict is read here and passed down as data: this
  * environment has no provider configured, so the shell renders the honest
- * unconfigured state (`data-assistant-status="unconfigured"`) and never
- * fabricates a reply. Sending (19.7–19.11) and the conversation verbs
- * (19.2/19.4) are later 19.x tasks; this shell is deliberately read-only.
+ * unconfigured state (`data-assistant-status="unconfigured"`), streams the
+ * real endpoint's unconfigured answer when a turn is sent, and never
+ * fabricates a reply. `ASSISTANT_COPY.FAILED` is passed the same way: the
+ * client's transport-failure fallback is the server's sanitized copy, not a
+ * second string invented in the browser. The conversation verbs (19.2/19.4)
+ * are later 19.x tasks; this page is a server component and hands the client
+ * boundary only serializable data.
  *
  * A visitor without a session renders the same header with the sign-in action
  * and the real shell with its guest empty state, and no data call happens at
@@ -87,6 +92,7 @@ export default async function AssistantPage({
         unconfiguredCopy={
           assistant.configured ? null : ASSISTANT_UNCONFIGURED_COPY
         }
+        failedCopy={ASSISTANT_COPY.FAILED}
       >
         <PageHeader
           eyebrow="Assistant"
