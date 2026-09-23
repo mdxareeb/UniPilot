@@ -137,6 +137,7 @@ The hosted project is production.
 | `20260912120100_whatsapp_exports_bucket.sql` | The private `whatsapp-exports` bucket (25 MiB, `text/plain`) and its four owner-folder `storage.objects` policies (Task 46.12) |
 | `20260913050000_whatsapp_review_mode.sql` | Review mode: `integration_connections.review_mode` / `integration_runs.review_mode` (`manual`/`automatic`, default `manual`) (Task 46.21) |
 | `20260913080000_whatsapp_detection_settings.sql` | Detection settings: `integration_connections.date_order` (`DMY`/`MDY`, default `DMY`) and `detect_relative_dates` (default false) (Task 46.26) |
+| `20260923083919_assistant_actions.sql` | The 27.x action log: `assistant_actions` (closed `type`/`status` CHECKs, per-user idempotency key, owner-SELECT RLS, service-role-only writes) (Tasks 27.1/27.8) |
 | `ops/reconcile-legacy-profiles-preflight.sql` | Hosted preflight (rename + drop legacy trigger), run manually after approval |
 | `ops/generate-types.sh` | Regenerate `frontend/lib/supabase/database.types.ts` from the local schema (Task 20.8) |
 | `ops/check-types.sh` | Manual drift check: regenerate and diff against the committed types |

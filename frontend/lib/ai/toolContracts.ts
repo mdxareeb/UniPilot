@@ -13,36 +13,21 @@
  * is forced to `true` by the parser — there is deliberately no way to emit an
  * action that skips the user's confirmation (27.6). Nothing here imports a
  * client, touches the database or runs a tool.
+ *
+ * Task 27.1 layered the typed action vocabulary on top in `actionSchema.ts`
+ * (`parseAssistantAction`, `summarizeAssistantAction`,
+ * `normalizeAssistantActionForExecution`). The envelope parser moved there so
+ * the typed layer can build on it without an import cycle; this module keeps
+ * the 26.9 API intact and re-exports the whole contract, so `toolContracts` is
+ * still the one import surface for the action engine.
  */
+import {
+  ASSISTANT_ACTION_TYPES,
+  parseStructuredAction,
+  type StructuredAction,
+} from "./actionSchema";
 
 export const STRUCTURED_ACTION_FENCE = "unipilot-action";
-
-/** 27.x's closed vocabulary grows here; anything else is rejected. */
-const ACTION_TYPE_PATTERN = /^[a-z][a-z0-9_.]{2,63}$/;
-
-export type StructuredAction = {
-  type: string;
-  payload: Record<string, unknown>;
-  /** Always true: the confirmation gate is not optional. */
-  requiresConfirmation: true;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function parseStructuredAction(value: unknown): StructuredAction | null {
-  if (!isRecord(value)) return null;
-  const type = value.type;
-  if (typeof type !== "string" || !ACTION_TYPE_PATTERN.test(type)) return null;
-  if (!isRecord(value.payload)) return null;
-
-  return {
-    type,
-    payload: value.payload,
-    requiresConfirmation: true,
-  };
-}
 
 const FENCE_PATTERN = new RegExp(
   "```" + STRUCTURED_ACTION_FENCE + "\\s*\\n([\\s\\S]*?)```",
@@ -70,11 +55,40 @@ export function collectStructuredActions(text: string): StructuredAction[] {
 
 /**
  * The provider-facing instruction for emitting actions (kept here so the
- * contract and the prompt cannot drift). The reply text may still contain the
- * fence; `collectStructuredActions` strips nothing — 27.x decides how the UI
+ * contract and the prompt cannot drift). The supported types come from the
+ * 27.1 union itself, so the prompt can never advertise a type the parser
+ * rejects. The reply text may still contain the fence;
+ * `collectStructuredActions` strips nothing — 27.x decides how the UI
  * renders/suppresses the block.
  */
 export const STRUCTURED_ACTION_INSTRUCTION =
   `To propose an action, emit a fenced ${STRUCTURED_ACTION_FENCE} block containing ` +
-  `{"type": "<action.type>", "payload": { … }}. Every proposed action is shown ` +
-  `to the user for confirmation; never claim you performed it.`;
+  `{"type": "<action.type>", "payload": { … }}. The supported types are ` +
+  `${ASSISTANT_ACTION_TYPES.join(", ")}; anything else is rejected. Every ` +
+  `proposed action is shown to the user for confirmation — never claim you ` +
+  `performed it.`;
+
+// ---------------------------------------------------------------------------
+// The full 26.9 + 27.1 contract, re-exported for a single import surface.
+// ---------------------------------------------------------------------------
+
+export { parseStructuredAction } from "./actionSchema";
+export type { StructuredAction } from "./actionSchema";
+export {
+  ASSISTANT_ACTION_STATUSES,
+  ASSISTANT_ACTION_TYPES,
+  isAssistantActionType,
+  normalizeAssistantActionForExecution,
+  parseAssistantAction,
+  summarizeAssistantAction,
+} from "./actionSchema";
+export type {
+  AssistantAction,
+  AssistantActionExecution,
+  AssistantActionStatus,
+  AssistantActionType,
+  EventCreatePayload,
+  PresentationCreatePayload,
+  ReminderCreatePayload,
+  TaskCreatePayload,
+} from "./actionSchema";

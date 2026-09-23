@@ -249,7 +249,9 @@ export default defineConfig({
       // turn endpoint and the worker, so it runs after the search chain and
       // before the jobs runner and the parallel workspace specs.
       name: "qa-assistant-backend",
-      testMatch: /assistant-backend\.spec\.ts/,
+      // 27.1/27.8's action-contract + action-log proof runs with the 26.x
+      // backend proof: both are local-only, DB-first and id-scoped.
+      testMatch: /assistant-(backend|actions)\.spec\.ts/,
       dependencies: [
         "qa-auth-setup",
         "qa-onboarding",

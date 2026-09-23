@@ -34,6 +34,72 @@ export type Database = {
   }
   public: {
     Tables: {
+      assistant_actions: {
+        Row: {
+          conversation_id: string
+          created_at: string
+          error: string | null
+          id: string
+          idempotency_key: string
+          message_id: string | null
+          payload: Json
+          proposed_at: string
+          result: Json | null
+          settled_at: string | null
+          status: string
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string
+          error?: string | null
+          id?: string
+          idempotency_key: string
+          message_id?: string | null
+          payload: Json
+          proposed_at?: string
+          result?: Json | null
+          settled_at?: string | null
+          status?: string
+          type: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string
+          error?: string | null
+          id?: string
+          idempotency_key?: string
+          message_id?: string | null
+          payload?: Json
+          proposed_at?: string
+          result?: Json | null
+          settled_at?: string | null
+          status?: string
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assistant_actions_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assistant_actions_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       conversations: {
         Row: {
           created_at: string
