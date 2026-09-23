@@ -104,8 +104,8 @@ export const ASSISTANT_ACTION_COPY = {
   UNAVAILABLE: "This action couldn't be completed right now.",
   DOCUMENT_NOT_FOUND:
     "That document isn't in your workspace, so nothing was created.",
-  PRESENTATION_NOT_AVAILABLE:
-    "Creating presentations from the assistant isn't available yet, so nothing was created.",
+  PRESENTATION_NOT_CREATED:
+    "The deck couldn't be created, so nothing was generated. Start it again from the presentation tool.",
   FAILED: "That action couldn't be completed. Nothing was created.",
   UNCERTAIN:
     "That action's result couldn't be confirmed. Check your tasks or calendar before trying again.",

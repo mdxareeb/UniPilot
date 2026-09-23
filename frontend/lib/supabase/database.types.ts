@@ -219,6 +219,7 @@ export type Database = {
           id: string
           location: string | null
           source: string
+          source_action_id: string | null
           source_document_id: string | null
           source_ref: string | null
           start_at: string
@@ -236,6 +237,7 @@ export type Database = {
           id?: string
           location?: string | null
           source?: string
+          source_action_id?: string | null
           source_document_id?: string | null
           source_ref?: string | null
           start_at: string
@@ -253,6 +255,7 @@ export type Database = {
           id?: string
           location?: string | null
           source?: string
+          source_action_id?: string | null
           source_document_id?: string | null
           source_ref?: string | null
           start_at?: string
@@ -263,6 +266,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "events_source_action_id_fkey"
+            columns: ["source_action_id"]
+            isOneToOne: false
+            referencedRelation: "assistant_actions"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "events_source_document_id_fkey"
             columns: ["source_document_id"]
@@ -890,6 +900,7 @@ export type Database = {
           effort_minutes: number | null
           id: string
           priority: string | null
+          source_action_id: string | null
           source_document_id: string | null
           status: string
           title: string
@@ -903,6 +914,7 @@ export type Database = {
           effort_minutes?: number | null
           id?: string
           priority?: string | null
+          source_action_id?: string | null
           source_document_id?: string | null
           status?: string
           title: string
@@ -916,6 +928,7 @@ export type Database = {
           effort_minutes?: number | null
           id?: string
           priority?: string | null
+          source_action_id?: string | null
           source_document_id?: string | null
           status?: string
           title?: string
@@ -923,6 +936,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "tasks_source_action_id_fkey"
+            columns: ["source_action_id"]
+            isOneToOne: false
+            referencedRelation: "assistant_actions"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "tasks_source_document_id_fkey"
             columns: ["source_document_id"]

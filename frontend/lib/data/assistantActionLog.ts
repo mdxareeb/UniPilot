@@ -13,7 +13,9 @@
  *   confirm (a real user decision, never a silent write, 27.6)
  *     → the row settles `succeeded` with the created row's kind/id/label or
  *       `failed` with sanitized copy; a settled row returns its stored result
- *       and is never re-executed (27.13);
+ *       and is never re-executed (27.13); a `confirmed` row left by a crash
+ *       recovers through the `source_action_id` anchor (T27-D) or stays
+ *       honestly unavailable;
  *   reject
  *     → `proposed` → `rejected`, idempotent, and nothing is ever written to
  *       tasks/events by a reject.
@@ -59,6 +61,11 @@ import {
 } from "./assistantValues";
 import { getDocument } from "./documents";
 import { createEvent } from "./events";
+import {
+  PRESENTATION_QUEUE_ERROR,
+  PRESENTATION_SAVE_ERROR,
+} from "./presentationErrors";
+import { createPresentationForUser } from "./presentations";
 import { readProfileTimeZone } from "./profileTime";
 import { formatTaskDueDate } from "./taskDates";
 import { createTask } from "./tasks";
@@ -461,7 +468,9 @@ export async function listAssistantActions(
  * re-executes: `succeeded` answers the stored result, `failed` the stored
  * sanitized copy, and a `rejected` row stays rejected (it is never run).
  * `proposed`/`confirmed` rows go through the executor, whose own log-row
- * guard is what makes the settle-once promise hold under a retry.
+ * guard is what makes the settle-once promise hold under a retry; a
+ * `confirmed` row with a created target (T27-D's anchor) settles `succeeded`
+ * with that target instead of answering UNAVAILABLE.
  */
 export async function confirmAssistantAction(
   userId: string,
@@ -595,6 +604,12 @@ export async function rejectAssistantAction(
  * call, even with the same key. A key with no owned row refuses: the executor
  * is only reachable through a confirmed proposal, never a silent write.
  *
+ * A `confirmed` row is the crash case (claimed, never settled). T27-D's
+ * schema-level anchor (`tasks`/`events.source_action_id`) is consulted first:
+ * when the created row exists the action settles `succeeded` with it, and when
+ * it does not the honest UNAVAILABLE stands. Either way nothing executes
+ * again.
+ *
  * The action passed in must be the stored proposal's exact payload (compared
  * canonically); anything else answers `not-found` rather than executing a
  * different action under someone else's key.
@@ -648,10 +663,37 @@ export async function executeAssistantAction(
       return { ok: false, error: row.error ?? ASSISTANT_ACTION_COPY.FAILED };
     case "rejected":
       return { ok: false, error: ASSISTANT_ACTION_COPY.REJECTED };
-    case "confirmed":
-      // Claimed by an earlier confirmation that never settled. A retry must
-      // not execute twice (27.13); it is reported honestly instead.
-      return { ok: false, error: ASSISTANT_ACTION_COPY.UNAVAILABLE };
+    case "confirmed": {
+      /* 27.13 (T27-D): claimed by an earlier confirmation that never settled.
+         The created row may already exist — the settle write can fail after a
+         successful create, leaving exactly this state. The schema-level anchor
+         (`source_action_id`, unique per user) is the safe retry: when it finds
+         the row this action created, the action settles `succeeded` with it
+         instead of reporting UNAVAILABLE. A retry still cannot execute twice:
+         the unique index makes a second insert impossible, and no anchor means
+         nothing was created (or it was a presentation, which carries no
+         anchor), so the honest answer stays UNAVAILABLE. */
+      const anchor = await findActionAnchor(userId, row.id, context.client);
+      if (anchor === null) {
+        return { ok: false, error: ASSISTANT_ACTION_COPY.UNAVAILABLE };
+      }
+      const recoveredAt = new Date().toISOString();
+      const { error: recoverError } = await service
+        .from("assistant_actions")
+        .update({
+          status: "succeeded",
+          result: anchor as Json,
+          error: null,
+          settled_at: recoveredAt,
+        })
+        .eq("id", row.id)
+        .eq("user_id", userId)
+        .eq("status", "confirmed");
+      if (recoverError) {
+        console.error("assistant action recovery settle failed");
+      }
+      return { ok: true, result: anchor };
+    }
     case "proposed":
       break;
     default:
@@ -697,7 +739,7 @@ export async function executeAssistantAction(
 
   let outcome: AssistantActionExecutionResult;
   try {
-    outcome = await runAssistantAction(userId, action, context.client);
+    outcome = await runAssistantAction(userId, action, row.id, context.client);
   } catch {
     /* T27-C review hand-off: a throw here can happen after the service wrote
        its row (the write succeeded, the response did not), so this catch-all
@@ -740,34 +782,66 @@ export async function executeAssistantAction(
 }
 
 /**
- * The action → service mapping (27.2–27.5). Every branch runs against the
- * caller-scoped client, so RLS authorizes the write exactly as it would on the
- * manual path:
+ * The action → service mapping (27.2–27.5, 27.10). Every branch runs against
+ * the caller-scoped client, so RLS authorizes the write exactly as it would on
+ * the manual path:
  * - `task.create` → `createTask`, with the action's `description` as the
- *   related-notes text and `documentId` (owner-verified) as `sourceDocumentId`
- *   (R2);
+ *   related-notes text, `documentId` (owner-verified) as `sourceDocumentId`
+ *   (R2) and the log row's id as the 27.13 anchor;
  * - `reminder.create` → `createTask` with the date-only `dueDate` (R1); the
  *   tasks service resolves it to 00:00 in the profile's zone;
- * - `event.create` → `createEvent`, with the same owner-verified document link;
- * - `presentation.create` → an honest "not available yet" failure (T27-D wires
- *   the real path); nothing is enqueued and no row is created.
- *
- * T27-D follow-up (recorded): settle-once is enforced on the log row, not on
- * the created rows — a task/event carries no `source_action_id`. Adding that
- * column with a unique constraint on tasks/events is the schema-level half of
- * 27.13 and belongs to T27-D (the executor already refuses to run a settled
- * row, so this is defense in depth).
+ * - `event.create` → `createEvent`, with the same owner-verified document link
+ *   and anchor;
+ * - `presentation.create` → `createPresentationForUser` (27.10) with the
+ *   normalized draft: a real `presentations` row plus a queued
+ *   `presentation.generate` job, or the service's own sanitized failure copy
+ *   (not connected, source ownership, save/queue). No generation happens here
+ *   — the worker drives Presenton, and that stays [!] with the documented
+ *   provider dependency. Presentations carry no `source_action_id` (the
+ *   anchor migration covers tasks/events only), so a crashed presentation
+ *   confirmation still answers UNAVAILABLE on retry.
  */
 async function runAssistantAction(
   userId: string,
   action: AssistantAction,
+  actionId: string,
   client: SupabaseClient<Database> | undefined,
 ): Promise<AssistantActionExecutionResult> {
   const execution = normalizeAssistantActionForExecution(action);
 
   switch (execution.type) {
-    case "presentation.create":
-      return { ok: false, error: ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE };
+    case "presentation.create": {
+      /* T27-A's normalization carries `format: "pptx"` (the action vocabulary
+         has no format and the assistant surface has no format control), so the
+         draft is inserted as-is — the tool's own default. */
+      const created = await createPresentationForUser(userId, execution.draft, {
+        client,
+      });
+      if (created.error !== null) {
+        /* The service's save/queue copies promise an immediate retry ("Try
+           again in a moment"), which a settled action cannot honour: the log
+           row is terminal and re-confirming returns the stored failure. The
+           assistant answers one honest terminal line that names the real retry
+           path (the presentation tool) instead. */
+        const promisesRetry =
+          created.error === PRESENTATION_SAVE_ERROR ||
+          created.error === PRESENTATION_QUEUE_ERROR;
+        return {
+          ok: false,
+          error: promisesRetry
+            ? ASSISTANT_ACTION_COPY.PRESENTATION_NOT_CREATED
+            : created.error,
+        };
+      }
+      return {
+        ok: true,
+        result: {
+          kind: "presentation",
+          id: created.presentationId,
+          label: execution.draft.prompt,
+        },
+      };
+    }
 
     case "task.create": {
       const documentId = await verifiedDocumentId(
@@ -781,7 +855,7 @@ async function runAssistantAction(
       const task = await createTask(
         userId,
         { ...execution.draft, sourceDocumentId: documentId },
-        { client },
+        { client, sourceActionId: actionId },
       );
       return {
         ok: true,
@@ -792,7 +866,10 @@ async function runAssistantAction(
     case "reminder.create": {
       // R1: day-granular, no document link — the tasks service resolves the
       // date-only to 00:00 in the profile's zone.
-      const task = await createTask(userId, execution.draft, { client });
+      const task = await createTask(userId, execution.draft, {
+        client,
+        sourceActionId: actionId,
+      });
       return {
         ok: true,
         result: { kind: "task", id: task.id, label: task.title },
@@ -811,7 +888,7 @@ async function runAssistantAction(
       const event = await createEvent(
         userId,
         { ...execution.draft, sourceDocumentId: documentId },
-        { client },
+        { client, sourceActionId: actionId },
       );
       return {
         ok: true,
@@ -819,6 +896,45 @@ async function runAssistantAction(
       };
     }
   }
+}
+
+/**
+ * 27.13 (T27-D) — the row a crashed confirmation created, found through the
+ * schema-level anchor (`tasks`/`events.source_action_id`). The caller-scoped
+ * client is preferred when one is held (RLS is then the authority); the
+ * service client is the request-path default and is scoped by `user_id` either
+ * way. `null` means no anchored row exists — for tasks/events the honest
+ * "nothing was created", for presentations the documented boundary (no anchor
+ * column), both reported as UNAVAILABLE by the caller.
+ */
+async function findActionAnchor(
+  userId: string,
+  actionId: string,
+  client: SupabaseClient<Database> | undefined,
+): Promise<AssistantActionOutcome | null> {
+  const supabase = client ?? createServiceClient();
+  const [tasks, events] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select("id, title")
+      .eq("user_id", userId)
+      .eq("source_action_id", actionId)
+      .maybeSingle(),
+    supabase
+      .from("events")
+      .select("id, title")
+      .eq("user_id", userId)
+      .eq("source_action_id", actionId)
+      .maybeSingle(),
+  ]);
+  if (tasks.error || events.error) return null;
+  if (tasks.data) {
+    return { kind: "task", id: tasks.data.id, label: tasks.data.title };
+  }
+  if (events.data) {
+    return { kind: "event", id: events.data.id, label: events.data.title };
+  }
+  return null;
 }
 
 /**

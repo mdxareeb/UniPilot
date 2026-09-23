@@ -44,6 +44,7 @@ waits on explicit founder approval (§Hosted reconciliation runbook, Task 20.7).
 | `events` | Classes/exams/deadlines on a timeline, typed (22.6) and optionally linked to a course (22.x) | `user_id`, cascade |
 | `conversations` | Assistant conversation threads | `user_id`, cascade |
 | `messages` | Thread messages (`user`/`assistant`/`system`) | via `conversation_id` parent |
+| `assistant_actions` | The 27.x action log: one row per proposed assistant action, its normalized payload, status and settled result | `user_id`, cascade; `conversation_id` cascade; `message_id` SET NULL |
 | `tool_runs` | One row per tool execution; per-run job states | `user_id`, cascade |
 | `notifications` | In-app notifications; `read_at` is the read marker | `user_id`, cascade |
 | `subscriptions` | Billing shape only: plan/status/provider ids | `user_id` unique, cascade |
@@ -74,6 +75,9 @@ documents  ──1:N── tasks.source_document_id   (SET NULL: provenance, not
 documents  ──1:N── events.source_document_id  (SET NULL: provenance, not ownership)
 subjects   ──1:N── events.subject_id          (SET NULL: classification, not ownership; a trigger keeps the subject on the event's own user)
 conversations ──1:N── messages         (cascade)
+conversations ──1:N── assistant_actions (cascade; message_id SET NULL)
+assistant_actions ──1:N── tasks.source_action_id  (SET NULL: the 27.13 retry anchor)
+assistant_actions ──1:N── events.source_action_id (SET NULL: the 27.13 retry anchor)
 ```
 
 All ownership foreign keys are `ON DELETE CASCADE`: removing an auth user
@@ -82,7 +86,9 @@ non-ownership references are `ON DELETE SET NULL` on purpose — deleting a
 file, a connection, an event or a purged message must not silently delete
 work or review history: `tasks.source_document_id`,
 `events.source_document_id`, `integration_runs.connection_id`,
-`integration_candidates.event_id` and `integration_candidates.message_id`.
+`integration_candidates.event_id` and `integration_candidates.message_id`,
+and the 27.13 anchors `tasks.source_action_id`/`events.source_action_id`
+(deleting the action log row must never delete the task the user already has).
 
 ## Decisions (TASK.md 20.6)
 
@@ -101,12 +107,13 @@ work or review history: `tasks.source_document_id`,
 
 ## RLS policy pattern
 
-RLS is **enabled on all 18 tables**; every client-permitted operation has a
+RLS is **enabled on all 19 tables**; every client-permitted operation has a
 written owner-only policy via `auth.uid()` — except `google_calendar_credentials`,
 which is deliberately deny-by-default (no policy, no grants, RPC-only).
 Operations only the server performs have no client policy (the service role
 bypasses RLS by design; the 29.1 job functions, the `integration_*` writes,
-the credential RPCs and the private storage surface are server-only).
+the credential RPCs, the `assistant_actions` writes and the private storage
+surface are server-only).
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 | --- | --- | --- | --- | --- |
@@ -114,6 +121,7 @@ the credential RPCs and the private storage surface are server-only).
 | subjects, documents, tasks, events, conversations | owner | owner | owner | owner |
 | document_chunks | via parent | via parent | via parent | via parent |
 | messages | via parent | — (server-only writes, Task 26.4) | — (server-only writes) | — (server-only writes) |
+| assistant_actions | owner | — (server-only writes, Task 27.8) | — (server-only writes) | — (server-only writes) |
 | tool_runs | owner | owner | owner | — (run history is not erasable) |
 | notifications | owner | — (server writes) | owner (marks `read_at`) | owner (dismiss) |
 | subscriptions | owner | — (billing service role) | — (billing service role) | — |
@@ -123,11 +131,11 @@ the credential RPCs and the private storage surface are server-only).
 | google_calendar_credentials | — (no policy, no grants, RPC-only) | — | — | — |
 
 `grant select, insert, update, delete` is given to `authenticated` for every
-table; RLS is the filter. The exceptions: the four `integration_*` tables grant
-SELECT only (their writes are service-side), and `google_calendar_credentials`
-grants nothing to any API role — `anon`, `authenticated` **and** `service_role`
-are all revoked, so only the definer RPCs reach it. `anon` is revoked outright —
-no table here is public.
+table; RLS is the filter. The exceptions: the four `integration_*` tables and
+`assistant_actions` grant SELECT only (their writes are service-side), and
+`google_calendar_credentials` grants nothing to any API role — `anon`,
+`authenticated` **and** `service_role` are all revoked, so only the definer
+RPCs reach it. `anon` is revoked outright — no table here is public.
 
 **Proof:** `frontend/tests/qa/rls-isolation.spec.ts` (Task 20.9) exercises this matrix
 with two real users plus an anonymous client — own-row reads, cross-user empty
@@ -268,6 +276,32 @@ the structured-action parser, real turns persisting conversation/messages/
 usage in order, server-write-only messages with owner isolation, RAG
 cross-user isolation through real turns, and the rate/spend guards.
 
+### Assistant action engine (Task 27.x)
+
+Two migrations: `20260923083919_assistant_actions.sql` (the log) and
+`20260923125254_assistant_action_source_anchors.sql` (the 27.13 retry anchor).
+The log is written only by the server (registration in the turn pipeline and
+the confirm/reject Server Actions). The executor's task/event writes run
+through the caller's own session client, so RLS authorizes them exactly as the
+manual path would; the presentation write goes through the service role inside
+the service layer (`presentations.ts`), exactly as the tool's own Server Action
+does — that table has no client write path.
+
+| Piece | Decision |
+| --- | --- |
+| `assistant_actions` | One row per proposed action: `type` (closed CHECK), `payload` jsonb (the normalized 27.1 payload the card rendered and the executor ran), `status`, `result` jsonb (the settled facts), `error` (sanitized copy), `idempotency_key`, `proposed_at`/`settled_at`; `unique (user_id, idempotency_key)` is 27.9/27.13's duplicate prevention, and `message_id` SET NULL keeps the audit trail when a message is deleted |
+| Writes | server-only: RLS owner-SELECT only, INSERT/UPDATE/DELETE revoked from `authenticated` (the messages posture), so no client can forge or settle an action |
+| Anchor (27.13) | `tasks.source_action_id` / `events.source_action_id` → `assistant_actions` (SET NULL) plus the partial unique `(user_id, source_action_id) where source_action_id is not null`: a crashed confirmation's retry finds the created row through the anchor and settles `succeeded`, and the unique index makes a second insert impossible. Presentations carry no anchor — a crashed presentation confirmation stays honestly UNAVAILABLE on retry |
+| Executor | `frontend/lib/data/assistantActionLog.ts`: claim `proposed → confirmed` (one winner), run the mapping (`createTask`/`createEvent`/`createPresentationForUser`), settle `succeeded`/`failed`; a terminal row returns its stored state and never re-executes |
+| Copy | only sanitized strings (`ASSISTANT_ACTION_COPY`, `presentationErrors.ts`) ever reach the confirmation card; raw PostgREST/provider errors stay server-side |
+| Extraction | **provider-dependent**: the assistant that would emit the fenced `unipilot-action` blocks is unconfigured (26.1), so extraction is proven through the SSE stub fixture and directly-constructed actions; registration, the executor and the confirmation UI are live |
+
+**Proof:** `frontend/tests/qa/assistant-actions.spec.ts` (the 27.1 contract,
+the real log, the executor, the wired presentation deck + queued job, the
+anchor recovery), `frontend/tests/qa/assistant-ui.spec.ts` (the confirmation
+cards, reject, the owner-verified document link, the wired presentation card)
+and `assistant-backend.spec.ts` (the turn pipeline's registration).
+
 ### WhatsApp integration (Task 46.x)
 
 Four migrations: `20260912120000_whatsapp_integration.sql` (the schema),
@@ -335,6 +369,11 @@ only, and the Server Action additionally validates the payload before calling it
   `events.source_document_id`, `events.subject_id`.
 - Named query patterns: `tasks.due_date`, `events.start_at`,
   `usage_events (user_id, occurred_at)`.
+- Assistant action engine (27.x): `assistant_actions_user_conversation_idx`
+  (`user_id, conversation_id`) and `assistant_actions_message_id_idx`; the
+  partial unique anchors `tasks_user_source_action_id_key` /
+  `events_user_source_action_id_key` on `(user_id, source_action_id) where
+  source_action_id is not null` (27.13 — also the retry lookup's access path).
 - WhatsApp integration: unique `events_user_source_ref_key`
   (`user_id, source, source_ref`); `integration_runs_user_created_idx`
   (`user_id, created_at desc`) and `integration_runs_status_idx`;
@@ -367,6 +406,15 @@ only, and the Server Action additionally validates the payload before calling it
 - `messages.status`: `complete` · `failed` (Task 26.x). A failed turn stores
   sanitized copy and says so; a failed assistant message is never presented
   as an answer.
+- `assistant_actions.type`: `task.create` · `reminder.create` · `event.create`
+  · `presentation.create` (Task 27.x). The vocabulary is closed: an unknown
+  type cannot even be logged, and adding a fifth type needs a forward
+  migration plus the TypeScript union.
+- `assistant_actions.status`: `proposed` · `confirmed` · `rejected` ·
+  `succeeded` · `failed` (Task 27.x). `proposed → confirmed | rejected`, then
+  `confirmed → succeeded | failed`; `settled_at` marks the terminal
+  transition. `confirmed` is the claimed-but-unsettled crash state, recovered
+  through the `source_action_id` anchor (27.13).
 - `tool_runs.status`: `queued` · `processing` · `completed` · `failed`
   (per-run job states; the **registry** states `live`/`planned`/`disabled` stay
   in `frontend/components/tools/toolCatalog.ts`, never here. `tool_runs.tool_id` is a
@@ -513,6 +561,11 @@ dropped afterwards.
   grants are revoked from `authenticated` (server-only writes), the ordering
   indexes exist, and the turn pipeline's persistence/RAG/limits are proven by
   `frontend/tests/qa/assistant-backend.spec.ts`.
+- Action engine (27.x): `assistant_actions` carries the closed `type`/`status`
+  CHECKs, the per-user idempotency key and owner-SELECT-only RLS; the
+  `tasks`/`events.source_action_id` anchors and their partial unique indexes
+  are applied (`20260923125254_assistant_action_source_anchors.sql`), and
+  `db:reset`/`db:lint`/`db:check-types` are clean.
 - Search (25.x): the extension is installed in `extensions`, the embedding and
   page columns match the declared types, the HNSW + GIN indexes exist, and the
   function ACL is `authenticated` + `service_role` only; the live query path is

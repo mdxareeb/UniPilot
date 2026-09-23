@@ -15,14 +15,16 @@
  *    it, `(user_id, idempotency_key)` rejects a duplicate, the closed
  *    vocabularies are CHECKs, `message_id` detaches on message delete (SET
  *    NULL) and the conversation cascade removes the log rows;
- * 3. the T27-B engine itself — `assistantActionLog.ts` register/list/confirm/
- *    reject/execute — driven against the real database and the real task/
- *    event/document tables: registration idempotency (27.9), owner-verified
- *    links (27.5), the created rows' exact values (27.2–27.4), reminder
- *    instants in the profile zone (R1), rejection that writes nothing,
- *    settle-once/double-confirm (27.13), the stuck-`confirmed` retry (T27-C:
- *    UNAVAILABLE, nothing created) and the honest not-available
- *    presentation failure (27.10's boundary).
+ * 3. the T27-B/T27-D engine itself — `assistantActionLog.ts` register/list/
+ *    confirm/reject/execute — driven against the real database and the real
+ *    task/event/document/presentation tables: registration idempotency (27.9),
+ *    owner-verified links (27.5), the created rows' exact values (27.2–27.4),
+ *    reminder instants in the profile zone (R1), rejection that writes
+ *    nothing, settle-once/double-confirm (27.13), the stuck-`confirmed` retry
+ *    (UNAVAILABLE, nothing created) and its T27-D recovery through the
+ *    `source_action_id` anchor, and the wired `presentation.create` (27.10/
+ *    27.11: a real deck row plus a queued `presentation.generate` job, never
+ *    a generated deck — the worker is not run here).
  *
  * The engine's reads/writes run through the same session clients the app's
  * request path uses (`lib/supabase/server` needs a Next request context, so a
@@ -30,9 +32,11 @@
  * owner filters are still what authorize every row touched.
  *
  * Id-scoped teardown: this spec creates only conversations/messages/actions/
- * tasks/events/documents for the QA users and deletes exactly those (plus its
- * own idempotency-key prefix as a backstop), so it never touches the documents
- * bucket, storage objects, jobs or the other projects' rows. Local-only;
+ * tasks/events/documents/presentations/jobs for the QA users and deletes
+ * exactly those (plus its own idempotency-key prefix as a backstop), so it
+ * never touches the documents bucket, storage objects or the other projects'
+ * rows. The `presentation.generate` job the wired test enqueues is deleted by
+ * id; the worker is never run, so no deck is ever generated here. Local-only;
  * hosted is never contacted.
  */
 import { test, expect } from "@playwright/test";
@@ -50,6 +54,7 @@ import {
   parseStructuredAction,
   STRUCTURED_ACTION_INSTRUCTION,
 } from "../../lib/ai/toolContracts";
+import { isPresentonConfigured } from "../../lib/integrations/presentonConfig";
 import {
   ASSISTANT_ACTION_COPY,
   assistantActionIdempotencyKey,
@@ -101,6 +106,9 @@ const createdActionIds: string[] = [];
 const createdTaskIds: string[] = [];
 const createdEventIds: string[] = [];
 const createdDocumentIds: string[] = [];
+/** T27-D's wired presentation rows and their queued generation jobs, by id. */
+const createdPresentationIds: string[] = [];
+const createdJobIds: string[] = [];
 
 async function signIn(
   client: SupabaseClient,
@@ -116,6 +124,17 @@ async function signIn(
 }
 
 async function cleanup() {
+  if (createdJobIds.length > 0) {
+    await service.from("jobs").delete().in("id", createdJobIds);
+    createdJobIds.length = 0;
+  }
+  if (createdPresentationIds.length > 0) {
+    await service
+      .from("presentations")
+      .delete()
+      .in("id", createdPresentationIds);
+    createdPresentationIds.length = 0;
+  }
   if (createdTaskIds.length > 0) {
     await service.from("tasks").delete().in("id", createdTaskIds);
     createdTaskIds.length = 0;
@@ -135,6 +154,31 @@ async function cleanup() {
   if (createdActionIds.length > 0) {
     await service.from("assistant_actions").delete().in("id", createdActionIds);
     createdActionIds.length = 0;
+  }
+  /* T27-D's backstop: a deck whose id was never read (a failure between the
+     confirm and the assertion) still carries this spec's prefix in its prompt;
+     its queued generation job is removed through the deck's own id. */
+  const deckSweep = await service
+    .from("presentations")
+    .select("id")
+    .eq("user_id", qa2Id)
+    .like("prompt", `${PREFIX_B}%`);
+  for (const deck of deckSweep.data ?? []) {
+    await service
+      .from("jobs")
+      .delete()
+      .eq("user_id", qa2Id)
+      .eq("kind", "presentation.generate")
+      .contains("payload", { presentationId: deck.id });
+  }
+  if ((deckSweep.data ?? []).length > 0) {
+    await service
+      .from("presentations")
+      .delete()
+      .in(
+        "id",
+        (deckSweep.data ?? []).map((deck) => deck.id),
+      );
   }
   for (const userId of [qa1Id, qa2Id]) {
     if (!userId) continue;
@@ -267,7 +311,7 @@ async function storedTask(taskId: string) {
   const { data, error } = await service
     .from("tasks")
     .select(
-      "id, title, description, due_date, priority, status, source_document_id",
+      "id, title, description, due_date, priority, status, source_document_id, source_action_id",
     )
     .eq("id", taskId)
     .maybeSingle();
@@ -1266,10 +1310,12 @@ test.describe("assistant action executor (27.2–27.6/27.13)", () => {
     expect(count.count).toBe(1);
   });
 
-  test("a stuck confirmed row answers UNAVAILABLE and never executes", async () => {
-    /* T27-C review hand-off: a crash between the claim and the settle leaves
-       the row `confirmed`. A retry must not execute twice — it answers the
-       honest UNAVAILABLE copy and creates nothing; the row stays claimed. */
+  test("a stuck confirmed row with no anchor answers UNAVAILABLE and never executes", async () => {
+    /* T27-C review hand-off + T27-D: a crash between the claim and the settle
+       leaves the row `confirmed`. A retry must not execute twice — with no
+       `source_action_id` anchor naming a created row (the T27-D recovery),
+       it answers the honest UNAVAILABLE copy and creates nothing; the row
+       stays claimed. */
     const title = `${PREFIX_B} stuck confirmed`;
     const { conversationId, messageId, items } = await registerFenced(
       qa1Id,
@@ -1311,13 +1357,20 @@ test.describe("assistant action executor (27.2–27.6/27.13)", () => {
     expect(retry.ok).toBe(false);
     if (!retry.ok) expect(retry.error).toBe(ASSISTANT_ACTION_COPY.UNAVAILABLE);
 
-    // Nothing was created and the row was never moved back to proposed.
+    // Nothing was created (no task, and no row anchored to this action) and
+    // the row was never moved back to proposed.
     const tasks = await service
       .from("tasks")
       .select("id", { count: "exact", head: true })
       .eq("user_id", qa1Id)
       .eq("title", title);
     expect(tasks.count).toBe(0);
+    const anchored = await service
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id)
+      .eq("source_action_id", actionId);
+    expect(anchored.count, "no anchor exists for a crashed claim").toBe(0);
     const after = await storedAction(actionId);
     expect(after!.status).toBe("confirmed");
     expect(after!.settled_at).toBeNull();
@@ -1605,63 +1658,172 @@ test.describe("assistant action executor (27.2–27.6/27.13)", () => {
     ).toBe(0);
   });
 
-  test("presentation.create fails honestly: nothing generated, nothing enqueued", async () => {
-    // QA2 keeps this clear of QA1's live presentation runs.
+  test("presentation.create creates a real deck and a queued job, and nothing exists before the confirm", async () => {
+    /* 27.10/27.11 (T27-D): the wired path. The executor writes a real
+       `presentations` row (`queued`) and enqueues `presentation.generate`;
+       generation itself stays [!] with the worker/Presenton dependency — this
+       spec never runs the worker, so the job must still be `queued` after the
+       confirm. When the engine is unconfigured the honest guard copy is the
+       only possible outcome, so the case is skipped with a named reason
+       rather than faked. QA2 keeps it clear of QA1's live presentation runs. */
+    test.skip(
+      !isPresentonConfigured(),
+      "PRESENTON_URL is unset — the presentation engine isn't configured in this environment",
+    );
+
     const title = `${PREFIX_B} deck idea`;
+    const prompt = `${PREFIX_B} explain photosynthesis for a first-year class`;
     const { items } = await registerFenced(
       qa2Id,
       fence({
         type: "presentation.create",
-        payload: {
-          title,
-          prompt: "Explain photosynthesis for a first-year class",
-          slideCount: 8,
-        },
+        payload: { title, prompt, slideCount: 8 },
       }),
     );
+    const actionId = items[0].id;
 
-    const beforeJobs = await service
+    /* 27.11: before the confirmation there is no deck and no generation job —
+       the proposal is a `proposed` log row and nothing else. */
+    const decksBefore = await service
+      .from("presentations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa2Id)
+      .eq("prompt", prompt);
+    expect(decksBefore.error).toBeNull();
+    expect(decksBefore.count, "no deck before the confirm").toBe(0);
+    expect((await storedAction(actionId))!.status).toBe("proposed");
+
+    const confirmed = await confirmAssistantAction(qa2Id, actionId, {
+      client: qa2,
+    });
+    expect(confirmed.error).toBeNull();
+    expect(confirmed.action?.status).toBe("succeeded");
+    const outcome = confirmed.action!.result;
+    expect(outcome).toMatchObject({ kind: "presentation", label: prompt });
+    createdPresentationIds.push(outcome!.id);
+
+    // The deck row is real and queued; the executor never generates anything.
+    const deck = await service
+      .from("presentations")
+      .select(
+        "id, user_id, prompt, template, n_slides, format, status, language, source_document_ids",
+      )
+      .eq("id", outcome!.id)
+      .single();
+    expect(deck.error).toBeNull();
+    expect(deck.data).toMatchObject({
+      user_id: qa2Id,
+      prompt,
+      template: "general",
+      n_slides: 8,
+      format: "pptx",
+      status: "queued",
+      language: null,
+      source_document_ids: [],
+    });
+
+    // The generation job is real, queued, and names exactly this deck.
+    const jobs = await service
+      .from("jobs")
+      .select("id, kind, status, payload, user_id")
+      .eq("user_id", qa2Id)
+      .eq("kind", "presentation.generate");
+    expect(jobs.error).toBeNull();
+    expect(jobs.data).toHaveLength(1);
+    const job = jobs.data![0];
+    createdJobIds.push(job.id);
+    expect(job.status, "the worker never ran").toBe("queued");
+    expect(job.payload).toEqual({ presentationId: outcome!.id });
+
+    // The log row stores the settled facts (27.7/27.12).
+    const stored = await storedAction(actionId);
+    expect(stored!.status).toBe("succeeded");
+    expect(stored!.result).toEqual(outcome);
+    expect(stored!.settled_at).not.toBeNull();
+
+    // 27.13: re-confirming returns the stored result — no second deck and no
+    // second job.
+    const again = await confirmAssistantAction(qa2Id, actionId, {
+      client: qa2,
+    });
+    expect(again.error).toBeNull();
+    expect(again.action?.result).toEqual(outcome);
+    const decksAfter = await service
+      .from("presentations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa2Id)
+      .eq("prompt", prompt);
+    const jobsAfter = await service
       .from("jobs")
       .select("id", { count: "exact", head: true })
       .eq("user_id", qa2Id)
       .eq("kind", "presentation.generate");
-    const beforeDecks = await service
-      .from("presentations")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", qa2Id);
+    expect(decksAfter.count).toBe(1);
+    expect(jobsAfter.count).toBe(1);
+  });
 
-    const confirmed = await confirmAssistantAction(qa2Id, items[0].id, {
-      client: qa2,
+  test("a confirmed row with a created target settles succeeded through the anchor, without a second row", async () => {
+    /* T27-D's safe retry (27.13's schema half): the executor can fail its
+       settle write after a successful create, leaving the log row
+       `confirmed` while the task exists. The `source_action_id` anchor finds
+       that task and the confirmation settles `succeeded` with it; the
+       (user_id, source_action_id) unique index guarantees no second row. */
+    const title = `${PREFIX_B} anchored retry`;
+    const { items } = await registerFenced(
+      qa1Id,
+      fence({ type: "task.create", payload: { title } }),
+    );
+    const actionId = items[0].id;
+
+    // A real confirmation creates the task and settles the row.
+    const first = await confirmAssistantAction(qa1Id, actionId, {
+      client: qa1,
     });
-    expect(confirmed.error).toBe(
-      ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE,
-    );
-    expect(confirmed.action?.status).toBe("failed");
-    expect(confirmed.action?.error).toBe(
-      ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE,
-    );
-    expect(confirmed.action?.result).toBeNull();
+    expect(first.error).toBeNull();
+    const taskId = first.action!.result!.id;
+    createdTaskIds.push(taskId);
 
-    const afterJobs = await service
-      .from("jobs")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", qa2Id)
-      .eq("kind", "presentation.generate");
-    const afterDecks = await service
-      .from("presentations")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", qa2Id);
-    expect(afterJobs.count).toBe(beforeJobs.count);
-    expect(afterDecks.count).toBe(beforeDecks.count);
+    const task = await storedTask(taskId);
+    expect(task!.source_action_id, "the anchor is written on create").toBe(
+      actionId,
+    );
 
-    // The failure is terminal: re-confirming returns the stored copy.
-    const again = await confirmAssistantAction(qa2Id, items[0].id, {
-      client: qa2,
+    // Simulate the crashed settle: the created task exists, the row is back
+    // to `confirmed` with nothing stored (the executor's own settle-failure
+    // state).
+    const crashed = await service
+      .from("assistant_actions")
+      .update({
+        status: "confirmed",
+        result: null,
+        error: null,
+        settled_at: null,
+      })
+      .eq("id", actionId)
+      .eq("user_id", qa1Id)
+      .select("id");
+    expect(crashed.error).toBeNull();
+    expect(crashed.data).toHaveLength(1);
+
+    const recovered = await confirmAssistantAction(qa1Id, actionId, {
+      client: qa1,
     });
-    expect(again.error).toBe(
-      ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE,
-    );
-    expect(again.action?.status).toBe("failed");
+    expect(recovered.error).toBeNull();
+    expect(recovered.action?.status).toBe("succeeded");
+    expect(recovered.action?.result).toEqual({
+      kind: "task",
+      id: taskId,
+      label: title,
+    });
+    expect((await storedAction(actionId))!.settled_at).not.toBeNull();
+
+    // Nothing was created twice.
+    const count = await service
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id)
+      .eq("title", title);
+    expect(count.count).toBe(1);
   });
 
   test("ownership: foreign, unknown and mismatched ids never execute", async () => {

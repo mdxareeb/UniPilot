@@ -47,6 +47,13 @@ type TaskUpdate = Database["public"]["Tables"]["tasks"]["Update"];
  */
 export type TaskServiceOptions = {
   client?: SupabaseClient<Database>;
+  /**
+   * 27.13 (T27-D) — the assistant action whose confirmation created this row.
+   * Only the executor passes it; the manual create action never accepts it
+   * from a client payload. The `(user_id, source_action_id)` partial unique
+   * index is what makes a retried confirmation unable to create a second row.
+   */
+  sourceActionId?: string;
 };
 
 /**
@@ -118,6 +125,8 @@ export async function createTask(
       // 27.5 (R2): provenance is set at creation; the caller has already
       // verified the document belongs to this owner (or passed none).
       source_document_id: draft.sourceDocumentId ?? null,
+      // 27.13 (T27-D): the action anchor, executor-only (see the options type).
+      source_action_id: options.sourceActionId ?? null,
       status: "todo",
     })
     .select(TASK_COLUMNS)

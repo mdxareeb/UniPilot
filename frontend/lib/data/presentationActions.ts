@@ -16,6 +16,14 @@
  * no fake deck. With a configured service, the flow is: row (`queued`) →
  * `presentation.generate` job → worker drives Presenton → `/documents` gains
  * the exported deck.
+ *
+ * Task 27.10: the creation internals live in `presentations.ts`
+ * (`createPresentationForUser`) — a plain server module, not this `"use
+ * server"` file, because every export here is a client-callable Server
+ * Function. The 27.x executor calls the same function for a confirmed
+ * `presentation.create`; this action keeps its gate, parse and revalidation.
+ * Neither talks to Presenton — the worker does, and generation stays [!] with
+ * that provider dependency.
  */
 import { revalidatePath } from "next/cache";
 import { requireOnboardedUser } from "@/lib/onboarding/gate";
@@ -55,7 +63,7 @@ import type {
   DeckThemePackage,
 } from "@/lib/presentation/types";
 import { enqueueJob } from "./jobs";
-import { deleteDocument, getDocument } from "./documents";
+import { deleteDocument } from "./documents";
 import {
   PRESENTATION_DELETE_DOCUMENT_ERROR,
   PRESENTATION_DELETE_ERROR,
@@ -64,10 +72,7 @@ import {
   PRESENTATION_INVALID_INPUT_ERROR,
   PRESENTATION_NOT_CONNECTED_ERROR,
   PRESENTATION_NOT_FOUND_ERROR,
-  PRESENTATION_QUEUE_ERROR,
   PRESENTATION_SAVE_ERROR,
-  PRESENTATION_SOURCE_NOT_FOUND_ERROR,
-  PRESENTATION_SOURCE_UNSUPPORTED_ERROR,
 } from "./presentationErrors";
 import {
   isPresentationInFlight,
@@ -76,15 +81,11 @@ import {
   type PresentationDraft,
 } from "./presentationValues";
 import {
+  createPresentationForUser,
   deletePresentationRow,
   getPresentation,
   hasPendingPresentationExport,
-  insertPresentation,
-  markPresentationFailed,
 } from "./presentations";
-
-const DOCX_MIME =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 export type CreatePresentationResult = {
   error: string | null;
@@ -93,9 +94,16 @@ export type CreatePresentationResult = {
 };
 
 /**
- * Validates and queues one generation request. The topic+options shape is
- * documented in `docs/integrations/presenton.md` §3.1; this action's job is to
- * write the row and hand the runner an id, nothing more.
+ * The action's answer: `error: null` means the row exists and its generation
+ * job is queued; anything else is the sanitized copy. The action keeps its
+ * original gate order (session → configured → payload) so an unconfigured
+ * engine still answers the not-connected copy before parsing anything.
+ *
+ * The creation internals themselves live in `presentations.ts`
+ * (`createPresentationForUser`, Task 27.10) — a plain server module — because
+ * every export of this `"use server"` file is a client-callable Server
+ * Function. The executor calls the same function; this action is the only
+ * creation export here.
  */
 export async function createPresentationAction(
   payload: unknown,
@@ -111,48 +119,11 @@ export async function createPresentationAction(
     return { error: PRESENTATION_INVALID_INPUT_ERROR, presentationId: null };
   }
 
-  // Every source document must be the caller's own and readable by the
-  // service. The worker re-checks ownership before it hands any bytes to
-  // Presenton.
-  for (const sourceDocumentId of draft.sourceDocumentIds) {
-    let source: Awaited<ReturnType<typeof getDocument>>;
-    try {
-      source = await getDocument(user.id, sourceDocumentId);
-    } catch {
-      return { error: PRESENTATION_SAVE_ERROR, presentationId: null };
-    }
-    if (source === null) {
-      return { error: PRESENTATION_SOURCE_NOT_FOUND_ERROR, presentationId: null };
-    }
-    if (source.mimeType !== "application/pdf" && source.mimeType !== DOCX_MIME) {
-      return {
-        error: PRESENTATION_SOURCE_UNSUPPORTED_ERROR,
-        presentationId: null,
-      };
-    }
-  }
-
-  let created: { id: string };
-  try {
-    created = await insertPresentation(user.id, draft);
-  } catch {
-    return { error: PRESENTATION_SAVE_ERROR, presentationId: null };
-  }
-
-  try {
-    await enqueueJob(
-      "presentation.generate",
-      { presentationId: created.id },
-      { userId: user.id },
-    );
-  } catch {
-    // A request with no job would sit at `queued` forever; settle it honestly.
-    await markPresentationFailed(user.id, created.id, PRESENTATION_QUEUE_ERROR);
-    return { error: PRESENTATION_QUEUE_ERROR, presentationId: null };
-  }
+  const created = await createPresentationForUser(user.id, draft);
+  if (created.error !== null) return created;
 
   revalidatePath("/tools/presentation");
-  return { error: null, presentationId: created.id };
+  return created;
 }
 
 // ---------------------------------------------------------------------------

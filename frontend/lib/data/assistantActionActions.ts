@@ -97,13 +97,15 @@ export async function confirmAssistantActionAction(
   try {
     const result = await confirmAssistantAction(user.id, id);
     revalidatePath("/assistant");
-    /* A confirmation can create a task or an event, so the board and the
-       calendar drop their cached renders too — the same posture as the
-       assistant surface itself. Both are revalidated on every settled call:
-       `revalidatePath` only marks the route for the next visit, and a
-       confirmation that failed wrote nothing either way. */
+    /* A confirmation can create a task, an event or a presentation, so the
+       board, the calendar and the presentations tool drop their cached
+       renders too — the same posture as the assistant surface itself. All
+       three are revalidated on every settled call: `revalidatePath` only marks
+       the route for the next visit, and a confirmation that failed wrote
+       nothing either way. */
     revalidatePath("/tasks");
     revalidatePath("/calendar");
+    revalidatePath("/tools/presentation");
     return result;
   } catch {
     /* The confirm may have reached the executor before this response was

@@ -61,14 +61,17 @@
  *    copy, a created conversation's composer focus waits for the selection
  *    commit, and a settle during a held create navigation never steals the
  *    caller's selection.
- * 7. T27-C's confirmation UI (27.6/27.7/27.12): the stored proposals render as
- *    confirmation cards under their assistant message and settle through the
- *    real Server Actions — confirm creates a task that is really visible on
- *    `/tasks`, the card reports the created outcome and a double-confirm never
- *    creates a second row; reject writes nothing; a foreign document link
- *    fails with the sanitized copy; a presentation proposal fails honestly as
- *    not available; and a stubbed fenced turn registers through the real
- *    Server Action (the live key) and confirms from the launcher panel.
+ * 7. T27-C's confirmation UI (27.6/27.7/27.12) and T27-D's wired presentation
+ *    path (27.10/27.11): the stored proposals render as confirmation cards
+ *    under their assistant message and settle through the real Server Actions
+ *    — confirm creates a task that is really visible on `/tasks`, the card
+ *    reports the created outcome and a double-confirm never creates a second
+ *    row; reject writes nothing; a foreign document link fails with the
+ *    sanitized copy; a presentation proposal creates a real deck row and a
+ *    queued `presentation.generate` job (nothing exists before the confirm;
+ *    the worker is never run, so no deck is generated); and a stubbed fenced
+ *    turn registers through the real Server Action (the live key) and
+ *    confirms from the launcher panel.
  *
  * This project stays green with no provider configured.
  */
@@ -76,6 +79,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { ASSISTANT_UNCONFIGURED_COPY } from "../../lib/ai/provider";
+import { isPresentonConfigured } from "../../lib/integrations/presentonConfig";
 import {
   confirmAssistantAction,
   registerAssistantProposals,
@@ -607,6 +611,9 @@ test.describe("assistant conversation shell (live)", () => {
   const createdActionIds: string[] = [];
   const createdTaskIds: string[] = [];
   const createdDocumentIds: string[] = [];
+  /** T27-D's wired presentation rows and their queued jobs, by id. */
+  const createdPresentationIds: string[] = [];
+  const createdJobIds: string[] = [];
 
   async function signIn(
     client: SupabaseClient,
@@ -823,6 +830,69 @@ test.describe("assistant conversation shell (live)", () => {
       ).toBeNull();
       createdActionIds.length = 0;
     }
+
+    /* T27-D — the wired presentation path's rows: the queued
+       `presentation.generate` jobs (tracked by id, then swept through their
+       deck's own id) and the `presentations` rows. The worker never runs in
+       this spec, so no document or storage object is ever created. */
+    if (createdJobIds.length > 0) {
+      const jobs = await service
+        .from("jobs")
+        .delete()
+        .in("id", createdJobIds)
+        .select("id");
+      expect(jobs.error, `teardown jobs: ${jobs.error?.message}`).toBeNull();
+      createdJobIds.length = 0;
+    }
+    if (createdPresentationIds.length > 0) {
+      const decks = await service
+        .from("presentations")
+        .delete()
+        .in("id", createdPresentationIds)
+        .select("id");
+      expect(decks.error, `teardown decks: ${decks.error?.message}`).toBeNull();
+      createdPresentationIds.length = 0;
+    }
+    const deckSweep = await service
+      .from("presentations")
+      .select("id")
+      .eq("user_id", qa1Id)
+      .like("prompt", `${PREFIX_C}%`);
+    expect(deckSweep.error, `teardown deck sweep: ${deckSweep.error?.message}`).toBeNull();
+    for (const deck of deckSweep.data ?? []) {
+      const jobSweep = await service
+        .from("jobs")
+        .delete()
+        .eq("user_id", qa1Id)
+        .eq("kind", "presentation.generate")
+        .contains("payload", { presentationId: deck.id })
+        .select("id");
+      expect(
+        jobSweep.error,
+        `teardown job sweep: ${jobSweep.error?.message}`,
+      ).toBeNull();
+    }
+    if ((deckSweep.data ?? []).length > 0) {
+      const deckDelete = await service
+        .from("presentations")
+        .delete()
+        .in(
+          "id",
+          (deckSweep.data ?? []).map((deck) => deck.id),
+        )
+        .select("id");
+      expect(
+        deckDelete.error,
+        `teardown deck delete: ${deckDelete.error?.message}`,
+      ).toBeNull();
+    }
+    const deckResidue = await service
+      .from("presentations")
+      .select("id")
+      .eq("user_id", qa1Id)
+      .like("prompt", `${PREFIX_C}%`);
+    expect(deckResidue.error).toBeNull();
+    expect(deckResidue.data ?? [], "no T27-D deck residue").toHaveLength(0);
 
     const taskSweep = await service
       .from("tasks")
@@ -3555,9 +3625,20 @@ test.describe("assistant conversation shell (live)", () => {
     expect(errors, "the honest failure stays console-clean").toEqual([]);
   });
 
-  test("a presentation proposal fails honestly as not available", async ({
+  test("a presentation proposal creates a real deck and a queued job", async ({
     page,
   }) => {
+    /* 27.10/27.11 (T27-D): the confirmation is what creates the deck — before
+       it there is no `presentations` row and no `presentation.generate` job.
+       The job stays `queued`: this spec never runs the worker, so no deck is
+       generated and no document exists. When the engine is unconfigured the
+       wired path can only answer the not-connected guard copy, so the case is
+       skipped with a named reason rather than faked. */
+    test.skip(
+      !isPresentonConfigured(),
+      "PRESENTON_URL is unset — the presentation engine isn't configured in this environment",
+    );
+
     const errors = trackConsoleErrors(page);
     const conversation = await seedConversation(
       qa1Id,
@@ -3580,30 +3661,67 @@ test.describe("assistant conversation shell (live)", () => {
     await expect(card.locator("[data-assistant-action-label]")).toHaveText(
       "Presentation",
     );
-    await card.locator("[data-assistant-action-confirm]").click();
 
-    await expect(card).toHaveAttribute(
-      "data-assistant-action-status",
-      "failed",
-      { timeout: 20_000 },
-    );
-    await expect(card.locator("[data-assistant-action-error]")).toHaveText(
-      ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE,
-    );
-
-    const log = await storedAction(actionId);
-    expect(log!.status).toBe("failed");
-    expect(log!.error).toBe(ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE);
-
-    // T27-D wires the real path; nothing was generated and no deck exists.
-    const decks = await service
+    /* 27.11: the proposal is a card and a `proposed` log row — nothing else. */
+    const decksBefore = await service
       .from("presentations")
       .select("id", { count: "exact", head: true })
       .eq("user_id", qa1Id)
       .eq("prompt", prompt);
-    expect(decks.error).toBeNull();
-    expect(decks.count).toBe(0);
-    expect(errors, "the not-available failure stays console-clean").toEqual([]);
+    expect(decksBefore.error).toBeNull();
+    expect(decksBefore.count, "no deck before the confirm").toBe(0);
+    expect((await storedAction(actionId))!.status).toBe("proposed");
+
+    await card.locator("[data-assistant-action-confirm]").click();
+
+    await expect(card).toHaveAttribute(
+      "data-assistant-action-status",
+      "succeeded",
+      { timeout: 20_000 },
+    );
+    await expect(card.locator("[data-assistant-action-created]")).toContainText(
+      `Created presentation: ${prompt}`,
+    );
+    await expect(card.locator("[data-assistant-action-link]")).toHaveAttribute(
+      "href",
+      "/tools/presentation",
+    );
+    await expect(card.locator("[data-assistant-action-error]")).toHaveCount(0);
+
+    const log = await storedAction(actionId);
+    expect(log!.status).toBe("succeeded");
+    const outcome = log!.result as { kind: string; id: string; label: string };
+    expect(outcome).toMatchObject({ kind: "presentation", label: prompt });
+    createdPresentationIds.push(outcome.id);
+
+    // The deck row is real and queued; the job names exactly this deck and the
+    // worker never ran.
+    const deck = await service
+      .from("presentations")
+      .select("id, status, prompt")
+      .eq("id", outcome.id)
+      .single();
+    expect(deck.error).toBeNull();
+    expect(deck.data).toMatchObject({ status: "queued", prompt });
+    const jobs = await service
+      .from("jobs")
+      .select("id, status, payload")
+      .eq("user_id", qa1Id)
+      .eq("kind", "presentation.generate")
+      .contains("payload", { presentationId: outcome.id });
+    expect(jobs.error).toBeNull();
+    expect(jobs.data).toHaveLength(1);
+    expect(jobs.data![0].status).toBe("queued");
+    createdJobIds.push(jobs.data![0].id);
+
+    await page.waitForTimeout(600);
+    await page.screenshot({
+      path: "screenshots/t27d-presentation-created.png",
+      fullPage: true,
+    });
+    expect(errors, "the wired presentation path stays console-clean").toEqual(
+      [],
+    );
   });
 
   test("a stubbed fenced turn registers through the real action and confirms from the panel", async ({

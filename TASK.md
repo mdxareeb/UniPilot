@@ -2030,19 +2030,104 @@ to assert the stronger privilege-level denial where grants were removed.
 
 # 27. AI ACTION ENGINE
 
-- [ ] 27.1 Action schema
-- [ ] 27.2 Add task
-- [ ] 27.3 Add reminder
-- [ ] 27.4 Create event
-- [ ] 27.5 Related notes
-- [ ] 27.6 Confirmation before persistence
-- [ ] 27.7 Success/failure
-- [ ] 27.8 Action log
-- [ ] 27.9 Duplicate prevention
-- [ ] 27.10 Creation-tool actions
-- [ ] 27.11 Confirmation before expensive generation
-- [ ] 27.12 Success/failure state
-- [ ] 27.13 Idempotency
+- [x] 27.1 Action schema
+  - `frontend/lib/ai/actionSchema.ts`: the closed type union (`task.create`,
+    `reminder.create`, `event.create`, `presentation.create`), per-type payload
+    validators that reuse the services' own parsers (`parseTaskDraft`,
+    `parseEventDraft`, `parsePresentationRequest`), `parseAssistantAction`
+    (unknown types rejected; `requiresConfirmation` forced true, never
+    model-controlled), `summarizeAssistantAction` ("Create …", never
+    "Created …") and `normalizeAssistantActionForExecution` — the exact drafts
+    the services take, so the card and the write cannot drift. 26.9's
+    `toolContracts.ts` API (fence, collector, instruction) is intact and
+    re-exports the contract.
+  - [!] BLOCKED BY 26.1 provider (R6): the model cannot actually emit an action
+    — the registry is deliberately empty and no provider client or key exists.
+    The extraction path is proven through the SSE stub fixture
+    (`tests/qa/assistantTurnStub.ts`) and directly-constructed actions in the
+    backend specs; extraction against a real model is untested and stays [!].
+- [x] 27.2 Add task
+  - `task.create` → `createTask` through the caller's session client, with the
+    action's `description` as the related-notes text and the owner-verified
+    document link as `source_document_id`; the executor claims the log row
+    first and settles `succeeded` with `{ kind: "task", id, label }`.
+- [x] 27.3 Add reminder
+  - R1: `reminder.create` is a task with `due_date` (the tasks board is the
+    workspace reminder surface) — day-granular by ruling (`remindAt` must be a
+    real `YYYY-MM-DD`; the tasks service resolves it to 00:00 in the profile's
+    zone), no invented reminders entity.
+- [x] 27.4 Create event
+  - `event.create` → `createEvent` with the profile-zone wall-clock resolution
+    and the same owner-verified document link; `allDay` and end-before-start
+    are bounded by the events parser.
+- [x] 27.5 Related notes
+  - The created task/event carries the related-notes text (`description`) and
+    an optional owner-verified document link (`source_document_id`, the
+    designed provenance column) — R2. The executor re-checks ownership with
+    `getDocument`; a foreign or missing id fails honestly
+    (`DOCUMENT_NOT_FOUND`, no row, `failed` log row).
+- [x] 27.6 Confirmation before persistence
+  - Nothing executes without a user decision: proposals render as confirmation
+    cards in the assistant bubble (`AssistantActionCard`) and in the launcher
+    panel's live turn; Confirm/Reject call the real Server Actions
+    (`confirmAssistantActionAction` / `rejectAssistantActionAction`), and a
+    reject never calls the executor. A confirm claims the log row
+    (`proposed → confirmed`, one winner) and settles it.
+- [x] 27.7 Success/failure
+  - The card reports the real created row (`Created task/event/presentation:
+    <label>` plus a link to `/tasks`, `/calendar` or `/tools/presentation`) or
+    the stored sanitized copy; `UNCERTAIN` is used wherever a write may have
+    landed (a lost response), while `FAILED`'s "nothing was created" appears
+    only where that is certain. `revalidatePath` marks `/assistant`, `/tasks`,
+    `/calendar` and `/tools/presentation` after a settled confirm.
+- [x] 27.8 Action log
+  - `public.assistant_actions` (`20260923083919_assistant_actions.sql`): one
+    row per proposal — closed `type`/`status` CHECKs, the normalized `payload`
+    jsonb, `result`/`error`, `proposed_at`/`settled_at`, `message_id` SET NULL,
+    `unique (user_id, idempotency_key)`; owner-SELECT RLS only, every write
+    service-side (R3). `frontend/lib/data/assistantActionLog.ts` owns
+    register/list/confirm/reject/execute, and the turn pipeline registers a
+    message's fenced actions best-effort — a registration failure never turns a
+    delivered answer into a failed turn.
+- [x] 27.9 Duplicate prevention
+  - The deterministic key
+    `hash(user, conversation, message|live, index, type, normalized payload)`
+    plus the unique constraint makes re-registering identical content a stable
+    no-op (R4); a message with no valid fences touches the database not at all.
+- [~] 27.10 Creation-tool actions
+  - `presentation.create` is wired end to end (R5): the executor calls
+    `createPresentationForUser` — the same creation internals the tool's Server
+    Action uses — which writes a real `presentations` row (`queued`) and
+    enqueues `presentation.generate`; the outcome is the real deck's
+    id/prompt. The engine generates nothing: the worker driving Presenton stays
+    [!] with the documented provider dependency.
+  - [!] The other creation tools (flashcards, quiz, mind-map, data table) have
+    no assistant entry points — their tools are planned, and the action
+    vocabulary is closed at the four types above, so the model cannot propose
+    one. No stub and no fake.
+- [x] 27.11 Confirmation before expensive generation
+  - No deck and no job exist before the confirm: the proposal is a `proposed`
+    log row, and only a confirmed `presentation.create` creates the
+    `presentations` row and the queued job (proved in both the backend and the
+    UI specs). An unconfigured `PRESENTON_URL` answers the not-connected guard
+    copy and writes nothing.
+- [x] 27.12 Success/failure state
+  - The settled state is the log's own: `succeeded` carries the created row's
+    `{ kind, id, label }` and a reload reads it back; `failed` carries the
+    sanitized copy; `confirmed` renders "Working…" with no controls. The
+    presentation outcome links `/tools/presentation`, where the queued deck is
+    listed.
+- [x] 27.13 Idempotency
+  - Settle-once on the log row (a settled row returns its stored result and
+    never re-executes) plus the schema-level anchor
+    (`20260923125254_assistant_action_source_anchors.sql`):
+    `tasks`/`events.source_action_id` → `assistant_actions` (SET NULL) with the
+    partial unique `(user_id, source_action_id) where source_action_id is not
+    null`. A crashed confirmation (row `confirmed`, settle write failed)
+    recovers the created row through the anchor and settles `succeeded`;
+    without a target it stays honestly UNAVAILABLE. Presentations carry no
+    anchor (recorded boundary), so a crashed presentation confirmation stays
+    UNAVAILABLE rather than double-creating a deck.
 
 ---
 
@@ -4016,7 +4101,7 @@ Then:
 
 25. 26.x Assistant backend — ✅ backend (persistence, RAG, limits, streaming contract, injection guard); provider legs [!] blocked (no key/client), 26.8 streamed leg [~]; QA 153/153; see CURRENT STATE
 26. 19.x Assistant UI bound to real backend
-27. 27.x AI action engine
+27. 27.x AI action engine — ✅ shipped (typed action schema, `assistant_actions` log, confirmation-gated executor + confirmation UI, wired `presentation.create` with a real deck row and a queued job); provider-driven extraction [!] blocked on 26.1 (no provider/key), the remaining creation tools [!]; see the 27.x section
 28. 28.x Academic intelligence
 
 ---

@@ -47,6 +47,11 @@ type EventUpdate = Database["public"]["Tables"]["events"]["Update"];
  */
 export type EventServiceOptions = {
   client?: SupabaseClient<Database>;
+  /**
+   * 27.13 (T27-D) — the assistant action whose confirmation created this row;
+   * see `TaskServiceOptions.sourceActionId`.
+   */
+  sourceActionId?: string;
 };
 
 /** The writable columns, shared by insert and update. */
@@ -185,6 +190,8 @@ export async function createEvent(
       // 27.5 (R2): provenance is set at creation only — an update must never
       // clear or rewrite the link. The caller verified ownership first.
       source_document_id: local.sourceDocumentId ?? null,
+      // 27.13 (T27-D): the action anchor, executor-only (see the options type).
+      source_action_id: options.sourceActionId ?? null,
     })
     .select(EVENT_COLUMNS)
     .single();

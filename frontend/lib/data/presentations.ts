@@ -1,5 +1,9 @@
 /**
- * The presentations service (Task 31.x) — server-only.
+ * The presentations service (Task 31.x) — server-only, and deliberately **not**
+ * a `"use server"` module: every export of such a module is registered as a
+ * client-callable Server Function, and the creation internals below must stay
+ * reachable only from the gated Server Action and the 27.x executor (both
+ * server-side callers), never from a browser with a forged `userId`.
  *
  * Same split as `documents.ts` and `jobs.ts` combine:
  * - **reads** use the request-scoped cookie client: the owner-SELECT RLS
@@ -15,9 +19,20 @@
  * mirroring these shapes. `docs/integrations/presenton.md` is the shared
  * contract.
  */
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { isPresentonConfigured } from "@/lib/integrations/presentonConfig";
 import type { Database } from "@/lib/supabase/database.types";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { getDocument } from "./documents";
+import { enqueueJob } from "./jobs";
+import {
+  PRESENTATION_NOT_CONNECTED_ERROR,
+  PRESENTATION_QUEUE_ERROR,
+  PRESENTATION_SAVE_ERROR,
+  PRESENTATION_SOURCE_NOT_FOUND_ERROR,
+  PRESENTATION_SOURCE_UNSUPPORTED_ERROR,
+} from "./presentationErrors";
 import { readProfileTimeZone } from "./profileTime";
 import {
   presentationRowToItem,
@@ -26,6 +41,9 @@ import {
   type PresentationItem,
   type PresentationRow,
 } from "./presentationValues";
+
+const DOCX_MIME =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 /**
  * The row + its generated-document embed (many-to-one: an object or null at
@@ -262,6 +280,94 @@ export async function markPresentationFailed(
   } catch {
     // Best effort; the action's error response is the user-facing outcome.
   }
+}
+
+/**
+ * The creation function's answer: on success the new request's id; on failure
+ * the sanitized copy and no id. The topic+options shape is documented in
+ * `docs/integrations/presenton.md` §3.1; the function's job is to write the row
+ * and hand the runner an id, nothing more.
+ */
+export type CreatePresentationForUserResult =
+  | { error: null; presentationId: string }
+  | { error: string; presentationId: null };
+
+/** The caller-scoped client to check source ownership with, when one is held. */
+export type PresentationServiceOptions = {
+  client?: SupabaseClient<Database>;
+};
+
+/**
+ * The creation internals (Task 27.10), shared by the tool's Server Action and
+ * the 27.x executor. They live here — a plain server module, not the
+ * `"use server"` action file — precisely because every export of a
+ * `"use server"` module is a client-callable Server Function: exposing this
+ * one would let a browser pass an arbitrary `userId` and mint a service-role
+ * `presentations` insert plus a job for that user.
+ *
+ * No request context is touched: the writes go through the service role
+ * (`insertPresentation`, `enqueueJob`) exactly as the tool's action always did,
+ * and the only session-scoped read is the per-source ownership check, which
+ * accepts the caller's client for the one non-request call site (the
+ * executor's live QA spec).
+ *
+ * The Presenton-configured guard is repeated here on purpose: the executor
+ * reaches this function directly, and an unconfigured engine must never get a
+ * row or a job (no fake generation). The caller owns the session gate and the
+ * revalidation.
+ */
+export async function createPresentationForUser(
+  userId: string,
+  draft: PresentationDraft,
+  options: PresentationServiceOptions = {},
+): Promise<CreatePresentationForUserResult> {
+  if (!isPresentonConfigured()) {
+    return { error: PRESENTATION_NOT_CONNECTED_ERROR, presentationId: null };
+  }
+
+  // Every source document must be the caller's own and readable by the
+  // service. The worker re-checks ownership before it hands any bytes to
+  // Presenton.
+  for (const sourceDocumentId of draft.sourceDocumentIds) {
+    let source: Awaited<ReturnType<typeof getDocument>>;
+    try {
+      source = await getDocument(userId, sourceDocumentId, {
+        client: options.client,
+      });
+    } catch {
+      return { error: PRESENTATION_SAVE_ERROR, presentationId: null };
+    }
+    if (source === null) {
+      return { error: PRESENTATION_SOURCE_NOT_FOUND_ERROR, presentationId: null };
+    }
+    if (source.mimeType !== "application/pdf" && source.mimeType !== DOCX_MIME) {
+      return {
+        error: PRESENTATION_SOURCE_UNSUPPORTED_ERROR,
+        presentationId: null,
+      };
+    }
+  }
+
+  let created: { id: string };
+  try {
+    created = await insertPresentation(userId, draft);
+  } catch {
+    return { error: PRESENTATION_SAVE_ERROR, presentationId: null };
+  }
+
+  try {
+    await enqueueJob(
+      "presentation.generate",
+      { presentationId: created.id },
+      { userId },
+    );
+  } catch {
+    // A request with no job would sit at `queued` forever; settle it honestly.
+    await markPresentationFailed(userId, created.id, PRESENTATION_QUEUE_ERROR);
+    return { error: PRESENTATION_QUEUE_ERROR, presentationId: null };
+  }
+
+  return { error: null, presentationId: created.id };
 }
 
 /**

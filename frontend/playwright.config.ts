@@ -252,6 +252,12 @@ export default defineConfig({
       // 27.1/27.8's action-contract + action-log proof runs with the 26.x
       // backend proof: both are local-only, DB-first and id-scoped.
       testMatch: /assistant-(backend|actions)\.spec\.ts/,
+      // One worker: the two files share the QA identities destructively — the
+      // 26.x spec's teardown deletes every QA job row, and the 27.x action
+      // proof now enqueues real `presentation.generate` jobs (T27-D) that must
+      // survive until their assertions. Serial execution is the honest
+      // ordering; neither file needs the other's rows.
+      workers: 1,
       dependencies: [
         "qa-auth-setup",
         "qa-onboarding",
