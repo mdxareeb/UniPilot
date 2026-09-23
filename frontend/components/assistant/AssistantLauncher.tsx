@@ -16,6 +16,9 @@ import {
   morphTransition,
   softSpring,
 } from "@/components/motion/presets";
+import { AssistantComposer } from "./AssistantComposer";
+import { AssistantPanelChat } from "./AssistantPanelChat";
+import { useAssistantTurn } from "./useAssistantTurn";
 
 const PANEL_ID = "unipilot-assistant-panel";
 const COLLAPSED_KEY = "unipilot-assistant-collapsed";
@@ -102,18 +105,21 @@ function measureLauncher(): LauncherMetrics {
  * The six things people arrive wanting to do, and where in UniPilot each one
  * lives.
  *
- * They are links, not prompts. Nothing here sends a message or produces an
- * answer, because nothing behind them can yet: three go to workspace routes that
- * exist, three go to the part of the features page that explains a tool that
- * does not. A chip that opened a chat and printed a made-up reply would be the
- * one thing this panel must never do.
+ * They stay links, not prompts: each one navigates to the part of UniPilot it
+ * works from (three workspace routes that exist, three to the part of the
+ * features page that explains a tool that does not), and none of them ever
+ * sends a turn or prints a made-up reply. The panel's composer is the one
+ * place a turn is sent from, and it streams the real route or says honestly
+ * that it cannot.
  *
  * The three workspace routes are guest-viewable now: opening one shows the real
  * route with an empty state rather than a redirect. The launcher itself reads
  * no session and makes no Supabase call — inside the workspace shell it asks
  * the shared sign-in prompt (a context fed by a streamed server flag), so a
  * guest opening the panel is invited to sign in; on marketing pages there is no
- * provider and the panel opens exactly as it always did.
+ * provider, the panel opens for everyone, and the only session read is the
+ * turn route's own server-side auth (whose 401 copy the panel surfaces
+ * verbatim).
  */
 const STARTERS: readonly { label: string; href: string }[] = [
   { label: "Ask about my workspace", href: "/assistant" },
@@ -173,6 +179,29 @@ const STARTERS: readonly { label: string; href: string }[] = [
  * The panel is a sibling of the shell rather than a child, because the shell
  * clips its contents; the outside-press check treats both as the launcher.
  *
+ * 19.16 — the panel is a real conversation surface, not a second chat system.
+ * It renders the shared architecture from `frontend/components/assistant/`:
+ * the same `useAssistantTurn` stream hook over `POST /api/assistant/turn`, the
+ * same `AssistantComposer`, and the same `MessageList` bubbles and source
+ * references as `/assistant`. The hook lives HERE, in the launcher rather than
+ * inside the popover, for two reasons: closing the panel then does not abort
+ * the client read (only unmounting the shell does — the server pipeline keeps
+ * its own request and persists what it settles on either way), and reopening
+ * shows the settled turn instead of losing it. The `start` frame's
+ * conversation id is held in component state so a follow-up send continues the
+ * same conversation, and the panel offers "Open in Assistant" →
+ * `/assistant?c=<id>` for the full stored conversation. That state is
+ * deliberately not persisted: a reload, or a shell change that remounts the
+ * launcher, starts the panel fresh — the conversation itself is stored and
+ * remains on the Assistant page as the most recent one. The provider verdict
+ * is not read here (the launcher performs no session or database read on any
+ * route): the route's frames and JSON errors are the only truth, so an
+ * unconfigured turn streams its honest copy and a marketing page's 401
+ * surfaces the route's own "Sign in to use the assistant." as failure text —
+ * never a fabricated reply. `failedCopy` is the server's sanitized
+ * transport-failure fallback, passed by the shell exactly like the assistant
+ * page passes it, so the two surfaces can never drift apart.
+ *
  * Mounted once per shell, inside the element that carries `bg-dotted-grid`.
  * That placement is deliberate on two counts. The dotted canvas utility sets
  * `isolation: isolate`, so the shell is a stacking context — a launcher
@@ -188,17 +217,32 @@ const STARTERS: readonly { label: string; href: string }[] = [
  * in, which is the right outcome: Bricolage alongside marketing copy, Geist
  * inside the workspace.
  */
-export function AssistantLauncher() {
+export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
   const pathname = usePathname();
   /* Null outside the workspace shell (the marketing mount), where the panel
-     opens exactly as before. Inside the shell a guest is asked to sign in
-     before the panel opens. */
+     opens for everyone. Inside the shell a guest is asked to sign in before
+     the panel opens. */
   const prompt = useSignInPromptOptional();
   const reduced = useReducedMotion() ?? false;
   /* Keyed on the path that opened it rather than a plain boolean, so
      following a link closes the panel without an effect watching the
      router. */
   const [openedFor, setOpenedFor] = useState<string | null>(null);
+  /* 19.16 — the conversation the panel's next send targets. `null` lets the
+     server create one; the `start` frame's id lands here at settle and every
+     follow-up send then continues that conversation. Component state on
+     purpose (see the class doc): nothing about it is persisted, and the
+     stored conversation is one "Open in Assistant" click away. */
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  /* The shared turn hook. It reads no session and no database — it only
+     streams the route once a send happens. `refreshOnSettle` is off because
+     the panel has no server-rendered rows to reconcile. */
+  const { turn, busy, send } = useAssistantTurn({
+    conversationId,
+    failedCopy,
+    refreshOnSettle: false,
+    onConversationStarted: setConversationId,
+  });
   /* The bar. True at first render on both server and client, so the bar is
      what SSR paints and there is no hydration disagreement; the mount effect
      below may then dock it from the remembered session choice. */
@@ -485,7 +529,7 @@ export function AssistantLauncher() {
           open={open}
           id={PANEL_ID}
           direction="up"
-          className="flex w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-y-auto overscroll-contain rounded-card border border-border bg-glass-strong p-4 shadow-overlay backdrop-blur-md sm:w-[23rem] lg:w-[25rem] max-h-[min(28rem,calc(100dvh-10rem))]"
+          className="flex max-h-[min(36rem,calc(100dvh-10rem))] w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-hidden overscroll-contain rounded-card border border-border bg-glass-strong p-4 shadow-overlay backdrop-blur-md sm:w-[23rem] lg:w-[25rem]"
         >
           <div className="flex flex-col gap-1">
             <h2 className="text-body-lg font-semibold text-foreground">
@@ -496,28 +540,65 @@ export function AssistantLauncher() {
             </p>
           </div>
           <Divider />
-          <ul className="flex list-none flex-wrap gap-2">
-            {STARTERS.map((starter) => (
-              <li key={starter.label} className="min-w-0">
-                {/* Prefetch off: the panel is closed on load, so six
-                    destinations would be fetched for a panel most visitors
-                    never open — and three of them are gated routes whose
-                    prefetch would run a session read on every page view. */}
-                <Link
-                  href={starter.href}
-                  prefetch={false}
-                  onClick={() => setOpenedFor(null)}
-                  className="inline-flex rounded-pill border border-border bg-card px-3 py-1.5 font-heading text-label-sm text-muted-foreground transition-colors hover:border-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                >
-                  {starter.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-          <p className="text-label-sm text-muted-foreground">
-            The assistant cannot answer yet. Each of these opens the part
-            of UniPilot it will work from.
-          </p>
+          {/* The starter links and the pre-send note are the panel's idle
+              state. Once a turn exists they give the room to the conversation
+              (the page's empty states give way to the body the same way):
+              a 23rem panel cannot host six chips, a footnote and a readable
+              exchange at once. They return whenever the panel's turn state
+              resets — a reload, or a shell remount.
+              This region is its own `min-h-0 overflow-y-auto` flex child: on
+              a short viewport it shrinks and scrolls, so the composer below
+              is never pushed out of the panel with no way back to it. */}
+          {turn === null ? (
+            <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
+              <ul className="flex list-none flex-wrap gap-2">
+                {STARTERS.map((starter) => (
+                  <li key={starter.label} className="min-w-0">
+                    {/* Prefetch off: the panel is closed on load, so six
+                        destinations would be fetched for a panel most visitors
+                        never open — and three of them are gated routes whose
+                        prefetch would run a session read on every page view. */}
+                    <Link
+                      href={starter.href}
+                      prefetch={false}
+                      onClick={() => setOpenedFor(null)}
+                      className="inline-flex rounded-pill border border-border bg-card px-3 py-1.5 font-heading text-label-sm text-muted-foreground transition-colors hover:border-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    >
+                      {starter.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-label-sm text-muted-foreground">
+                Answers stream in from the same assistant as the Assistant
+                page. If no AI provider is connected, it says so instead of
+                answering. Each starter above opens the part of UniPilot it
+                works from.
+              </p>
+            </div>
+          ) : null}
+          {/* 19.16 — the compact chat, on the same architecture as
+              `/assistant` (shared hook, composer, bubbles, sources). It
+              renders nothing invented before the first send, and the
+              conversation link appears once the `start` frame has named a
+              real conversation. */}
+          <AssistantPanelChat
+            turn={turn}
+            conversationId={conversationId}
+            onNavigate={() => setOpenedFor(null)}
+          />
+          {/* The composer is the panel's pinned bottom child — a direct,
+              non-shrinking flex item, so a short viewport can shrink the
+              scrollable regions above it but can never clip the send path
+              (the panel itself is `overflow-hidden`). */}
+          <div className="shrink-0">
+            <AssistantComposer
+              compact
+              conversationId={conversationId}
+              busy={busy}
+              onSend={(content) => void send(content)}
+            />
+          </div>
         </MotionPopover>
       </div>
     </div>

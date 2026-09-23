@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AssistantLauncher } from "@/components/assistant/AssistantLauncher";
 import { Navbar } from "@/components/marketing/Navbar";
 import { Footer } from "@/components/marketing/Footer";
+import { ASSISTANT_FAILED_COPY } from "@/lib/data/assistantValues";
 
 export const metadata: Metadata = {
   title: {
@@ -34,8 +35,13 @@ export default function MarketingLayout({
         <Footer />
         {/* Inside this element, not beside it: `bg-dotted-grid` sets
             `isolation: isolate`, so the launcher has to share this stacking
-            context to stay under the navbar rather than over it. */}
-        <AssistantLauncher />
+            context to stay under the navbar rather than over it. The
+            `failedCopy` prop is the server's sanitized transport-failure
+            fallback (19.16), read from the client-safe vocabulary module so
+            global chrome does not import the server pipeline; marketing has
+            no sign-in provider, so the panel opens for everyone and the turn
+            route's own 401 copy is what a guest's send surfaces. */}
+        <AssistantLauncher failedCopy={ASSISTANT_FAILED_COPY} />
       </div>
     </>
   );

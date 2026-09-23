@@ -22,11 +22,14 @@ import {
 } from "@/lib/data/assistantActions";
 import type { MessageItem } from "@/lib/data/assistantValues";
 import type { ConversationItem } from "@/lib/data/conversations";
-import { AssistantComposer } from "./AssistantComposer";
+import { AssistantComposer } from "@/components/assistant/AssistantComposer";
+import { MessageList } from "@/components/assistant/MessageList";
+import {
+  useAssistantTurn,
+  type LocalTurn,
+} from "@/components/assistant/useAssistantTurn";
 import { ConversationPanelHeader } from "./ConversationPanelHeader";
 import { ConversationSidebar } from "./ConversationSidebar";
-import { MessageList } from "./MessageList";
-import { useAssistantTurn, type LocalTurn } from "./useAssistantTurn";
 
 type AssistantWorkspaceProps = {
   /** The caller's conversations, newest first (the 26.3 service order). */
@@ -81,11 +84,13 @@ type AssistantWorkspaceProps = {
  * optimism. `selectedItem` is the local copy of the selected row so an
  * optimistic rename lands in the panel title as well as the sidebar.
  *
- * Composing (19.7–19.11) lives in `useAssistantTurn` + `AssistantComposer`:
- * a send appends the optimistic turn, streams `POST /api/assistant/turn`
- * through C1's frame vocabulary, then reconciles with the server
- * (`router.refresh()`, plus `router.replace` when `start` created a
- * conversation) so the stored rows are the source of truth.
+ * Composing (19.7–19.11) lives in the shared pieces under
+ * `frontend/components/assistant/` — `useAssistantTurn` + `AssistantComposer`
+ * + `MessageList` — so the 19.16 launcher panel renders the exact same turn
+ * pipeline: a send appends the optimistic turn, streams
+ * `POST /api/assistant/turn` through C1's frame vocabulary, then reconciles
+ * with the server (`router.refresh()`, plus the URL moving to `?c=` when
+ * `start` created a conversation) so the stored rows are the source of truth.
  *
  * Where the composer is deliberately absent:
  * - a guest gets the guest empty state and no composer (no data, no send);
@@ -126,6 +131,14 @@ export function AssistantWorkspace({
     conversationId: selected?.id ?? null,
     failedCopy,
     messages,
+    /* The page owns its URL: a `start` frame for a conversation the send did
+       not target moves `?c=` here (guarded by the hook against a caller who
+       has meanwhile selected another conversation). The 19.16 launcher panel
+       passes its own state setter instead — same hook, one settle contract. */
+    onConversationStarted: (conversationId) =>
+      router.replace(`/assistant?c=${encodeURIComponent(conversationId)}`, {
+        scroll: false,
+      }),
   });
   const showComposer = !guest && !selectionUnavailable;
 

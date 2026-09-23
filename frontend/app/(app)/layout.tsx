@@ -8,6 +8,7 @@ import { WorkspaceSidebar } from "@/components/app/WorkspaceSidebar";
 import { SignInPromptProvider } from "@/components/auth/SignInPromptProvider";
 import { SignInPromptSession } from "@/components/auth/SignInPromptSession";
 import { RouteTransition } from "@/components/motion/RouteTransition";
+import { ASSISTANT_FAILED_COPY } from "@/lib/data/assistantValues";
 
 /**
  * The same shape `(marketing)/layout.tsx` uses, so a route group owns the titles
@@ -102,8 +103,12 @@ export default function AppLayout({
         {/* Inside the dotted container so it shares that stacking context: at
             `z-20` it sits over the page and the `z-10` rail, and under the
             `z-30` mobile bar. It reads no session itself — the prompt it
-            guards with is answered by the provider's streamed flag. */}
-        <AssistantLauncher />
+            guards with is answered by the provider's streamed flag. The
+            `failedCopy` prop is the same server-sanitized transport-failure
+            fallback the assistant page passes to its composer (19.16), read
+            from the client-safe vocabulary module so the shell does not pull
+            the server pipeline for one string. */}
+        <AssistantLauncher failedCopy={ASSISTANT_FAILED_COPY} />
       </div>
     </SignInPromptProvider>
   );

@@ -8,14 +8,16 @@ import { SourceReferences } from "./SourceReferences";
 
 /**
  * Tasks 19.4 (user bubble), 19.5 (AI bubble) and 19.11 (source references) —
- * one message, stored or still being received.
+ * one message, stored or still being received. Shared by the `/assistant`
+ * conversation and the 19.16 launcher panel, so both surfaces render the exact
+ * same chrome.
  *
  * Role-aligned: the caller's own turns sit at the trailing edge on `bg-muted`,
  * the assistant's turns at the leading edge with 19.6's avatar and a
- * `bg-glass-subtle` surface — the bubble is nested inside the page's glass
- * panel, so it takes the one-step-up fill rather than a second glass layer.
- * `system` rows, the one other role the 26.4 contract stores, belong to
- * neither party and render as a centred mono note.
+ * `bg-glass-subtle` surface — the bubble is nested inside a glass panel, so it
+ * takes the one-step-up fill rather than a second glass layer. `system` rows,
+ * the one other role the 26.4 contract stores, belong to neither party and
+ * render as a centred mono note.
  *
  * The stored contract is the only source of text: `content` is printed exactly
  * as persisted (whitespace preserved), and a `failed` status is labelled

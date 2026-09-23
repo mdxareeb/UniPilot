@@ -62,8 +62,39 @@ async function readErrorCopy(response: Response): Promise<string | null> {
   return null;
 }
 
+export type UseAssistantTurnOptions = {
+  /** The conversation a send targets; `null` lets the server create one. */
+  conversationId: string | null;
+  /** The server's sanitized fallback copy for transport-level failures. */
+  failedCopy: string;
+  /**
+   * The stored rows currently rendered, used to retire the local turn. A
+   * surface with no server read of its own (the 19.16 launcher panel) omits
+   * it: the live turn is then the only rendering of that exchange, and the
+   * stored conversation is one link away.
+   */
+  messages?: MessageItem[];
+  /**
+   * Called after a settle that announced a conversation the send did not
+   * target — and only while the caller's selection is still where the send
+   * aimed, so a caller who has meanwhile selected (or created, 19.2) another
+   * conversation is never overruled. The `/assistant` page replaces its URL
+   * here; the 19.16 launcher panel holds the id in component state instead.
+   */
+  onConversationStarted?: (conversationId: string) => void;
+  /**
+   * True (the route's default) to `router.refresh()` after every settle so the
+   * stored rows become the source of truth. The launcher panel has no stored
+   * rows to reconcile and passes `false`.
+   */
+  refreshOnSettle?: boolean;
+};
+
 /**
- * `POST /api/assistant/turn` as the UI consumes it (26.8 → 19.10).
+ * `POST /api/assistant/turn` as the UI consumes it (26.8 → 19.10 → 19.16).
+ *
+ * One hook for every chat surface — the `/assistant` page and the global
+ * launcher panel — so the streaming turn is never implemented twice.
  *
  * On submit the hook appends the optimistic turn (the exact typed text plus a
  * `streaming` assistant entry) and fetches the route. The response body is read
@@ -82,13 +113,13 @@ async function readErrorCopy(response: Response): Promise<string | null> {
  * - an `error` frame keeps its own copy; `done` statuses are copied verbatim,
  *   so `unconfigured` never folds into `failed` or `complete`.
  *
- * Reconciliation: after settle the hook calls `router.refresh()` so the stored
- * rows become the source of truth, and — when `start` announced a conversation
- * the composer did not have selected — `router.replace("/assistant?c=<id>")`
- * so the URL, the sidebar and the read side agree. That replace only runs
- * while the selection is still where the send aimed: if the caller has
- * meanwhile selected — or created (19.2) — another conversation, settling
- * must not steal the URL back.
+ * Reconciliation: after settle the hook calls `router.refresh()` (unless the
+ * caller opted out) so the stored rows become the source of truth, and — when
+ * `start` announced a conversation the composer did not have selected — hands
+ * that id to `onConversationStarted`, so the URL (`/assistant`) or the
+ * launcher's component state can move to it. That handoff only runs while the
+ * selection is still where the send aimed: if the caller has meanwhile selected
+ * another conversation, settling must not steal the choice back.
  *
  * Visibility is derived, never duplicated: the hook returns the local turn only
  * while it belongs to the currently selected conversation (or to the new one it
@@ -107,15 +138,10 @@ async function readErrorCopy(response: Response): Promise<string | null> {
 export function useAssistantTurn({
   conversationId,
   failedCopy,
-  messages,
-}: {
-  /** The conversation a send targets; `null` lets the server create one. */
-  conversationId: string | null;
-  /** The server's sanitized fallback copy for transport-level failures. */
-  failedCopy: string;
-  /** The stored rows currently rendered, used to retire the local turn. */
-  messages: MessageItem[];
-}) {
+  messages = [],
+  onConversationStarted,
+  refreshOnSettle = true,
+}: UseAssistantTurnOptions) {
   const router = useRouter();
   const [turn, setTurn] = useState<LocalTurn | null>(null);
   const [busy, setBusy] = useState(false);
@@ -129,6 +155,12 @@ export function useAssistantTurn({
   useEffect(() => {
     selectionRef.current = conversationId;
   }, [conversationId]);
+  /* The settle callback is read through a ref too, so a caller's inline arrow
+     (the route's `router.replace`) never changes `send`'s identity. */
+  const startedRef = useRef(onConversationStarted);
+  useEffect(() => {
+    startedRef.current = onConversationStarted;
+  }, [onConversationStarted]);
 
   /* A page unmount (navigation away) cancels the read; the server pipeline
      keeps its own request and persists whatever it settles on. */
@@ -238,16 +270,13 @@ export function useAssistantTurn({
             entry.conversationId !== targetConversationId &&
             selectionRef.current === targetConversationId
           ) {
-            router.replace(
-              `/assistant?c=${encodeURIComponent(entry.conversationId)}`,
-              { scroll: false },
-            );
+            startedRef.current?.(entry.conversationId);
           }
-          router.refresh();
+          if (refreshOnSettle) router.refresh();
         }
       }
     },
-    [conversationId, failedCopy, router],
+    [conversationId, failedCopy, refreshOnSettle, router],
   );
 
   const visibleTurn =

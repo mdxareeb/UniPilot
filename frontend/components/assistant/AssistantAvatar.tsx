@@ -6,8 +6,9 @@ import { Bot } from "lucide-react";
  * One place for the assistant's identity mark: a bordered circle holding the
  * same `Bot` icon the workspace rail uses for `/assistant`, so the mark and the
  * navigation label can never disagree. The page's own chat surface renders it
- * beside every assistant bubble; the 19.16 launcher/panel work reuses it rather
- * than drawing a second mark.
+ * beside every assistant bubble, and the 19.16 launcher panel renders the same
+ * component through the shared `AssistantBubble` rather than drawing a second
+ * mark.
  *
  * Decorative by construction: `aria-hidden`, because the message's role is
  * already announced by the bubble's own "Assistant" label (and its

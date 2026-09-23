@@ -8,6 +8,17 @@
 
 export const MESSAGE_CONTENT_MAX_LENGTH = 4_000;
 
+/**
+ * 26.12/19.16 — the sanitized copy a failed assistant turn carries when no
+ * more specific message exists (a transport failure, a truncated stream, a
+ * missing response body). Client-safe by construction: the server pipeline
+ * re-exports it as `ASSISTANT_COPY.FAILED`, and the global chrome (the
+ * launcher's `failedCopy` prop) imports it from here, so the two shells do
+ * not pull the service client, retrieval or provider modules for one string.
+ */
+export const ASSISTANT_FAILED_COPY =
+  "The assistant couldn't answer that just now. Please try again.";
+
 export type MessageRole = "user" | "assistant" | "system";
 export type MessageStatus = "complete" | "failed";
 

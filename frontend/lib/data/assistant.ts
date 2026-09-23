@@ -42,6 +42,7 @@ import {
 } from "./conversations";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
+  ASSISTANT_FAILED_COPY,
   MESSAGE_CONTENT_MAX_LENGTH,
   type AssistantSource,
   type AssistantStreamFrame,
@@ -69,7 +70,9 @@ export const ASSISTANT_COPY = {
     "You're sending messages faster than the limit allows. Wait a moment and try again.",
   SPEND_LIMIT:
     "The assistant's usage limit for this month has been reached. It resets next month.",
-  FAILED: "The assistant couldn't answer that just now. Please try again.",
+  /* The client-safe constant (19.16), so the launcher's fallback and this
+     object can never drift apart. */
+  FAILED: ASSISTANT_FAILED_COPY,
   INVALID: `Send a message between 1 and ${MESSAGE_CONTENT_MAX_LENGTH} characters.`,
 } as const;
 

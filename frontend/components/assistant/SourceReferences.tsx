@@ -1,7 +1,8 @@
 import type { AssistantSource } from "@/lib/data/assistantValues";
 
 /**
- * Task 19.11 — the workspace chunks one assistant turn cited.
+ * Task 19.11 — the workspace chunks one assistant turn cited. Shared by the
+ * `/assistant` conversation and the 19.16 launcher panel.
  *
  * The contract is the stored one (`AssistantSource`, 26.7): a document name, an
  * optional page and the chunk index. The page and the chunk index are

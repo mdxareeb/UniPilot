@@ -6,7 +6,9 @@ import { AssistantBubble, MessageBubble, UserBubble } from "./MessageBubble";
 import type { LocalTurn } from "./useAssistantTurn";
 
 /**
- * Tasks 19.3/19.4/19.5/19.10 — a conversation's turns, in order.
+ * Tasks 19.3/19.4/19.5/19.10 — a conversation's turns, in order. Shared by the
+ * `/assistant` page (stored rows + the live turn) and the 19.16 launcher panel
+ * (the live turn alone, with `messages` empty).
  *
  * The stored order is `listMessages`' contract (`created_at`, then `id`) and is
  * deliberately not re-sorted here.
@@ -14,9 +16,11 @@ import type { LocalTurn } from "./useAssistantTurn";
  * C3 appends the tab's live turn (`19.10`) after the stored rows: the
  * optimistic user bubble then the streaming assistant bubble, both marked
  * `data-message-local` and both using the same bubble chrome as stored rows.
- * The list is `aria-busy` while the assistant entry is still streaming. The
- * live turn disappears when the stored rows catch up (the workspace hook
- * retires it), so it can never double-render a persisted message.
+ * The list is `aria-busy` while the assistant entry is still streaming. On the
+ * route the live turn disappears when the stored rows catch up (the workspace
+ * hook retires it), so it can never double-render a persisted message; in the
+ * launcher panel there is no stored read, so the live turn stays as the
+ * panel's rendering of that exchange until the next send replaces it.
  *
  * Motion: each row is one `MotionReveal as="li"` — a mount-time reveal on the
  * shared vocabulary, and the `data-reveal` the app layout's `<noscript>` rule

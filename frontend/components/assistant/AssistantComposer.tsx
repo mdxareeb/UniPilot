@@ -18,6 +18,11 @@ import { MESSAGE_CONTENT_MAX_LENGTH } from "@/lib/data/assistantValues";
  * environment is unconfigured, and a chip that auto-sent would surface the
  * honest unconfigured copy as if a question had been asked — confusing and
  * dishonest about what happened.
+ *
+ * The 19.16 launcher panel renders the composer in its `compact` form, where
+ * the chips are omitted: the panel is 23rem wide and already carries the six
+ * starter links, so a second row of suggestions would crowd out the
+ * conversation. The chip behaviour above is unchanged wherever they render.
  */
 const ACTION_CHIPS = [
   "Summarise my latest document",
@@ -35,13 +40,19 @@ type AssistantComposerProps = {
    * (or otherwise hands the caller a fresh writing surface). A changed,
    * non-zero value focuses the textarea; the initial 0 never steals focus.
    */
-  focusRequest: number;
+  focusRequest?: number;
+  /**
+   * The 19.16 launcher panel's compact layout: no suggested-prompt chips (the
+   * panel's own starter links already own that role) and a shorter input.
+   */
+  compact?: boolean;
   /** Receives the exact typed text; the composer never trims or rewrites it. */
   onSend: (content: string) => void;
 };
 
 /**
- * Tasks 19.8 (input) and 19.9 (send) — the conversation composer.
+ * Tasks 19.8 (input) and 19.9 (send) — the conversation composer, shared by
+ * the `/assistant` page (19.7–19.9) and the 19.16 launcher panel.
  *
  * A real labelled `<textarea>` (`sr-only` label, the compact-layout idiom the
  * global search already uses) bounded by the contract's own
@@ -70,7 +81,8 @@ type AssistantComposerProps = {
 export function AssistantComposer({
   conversationId,
   busy,
-  focusRequest,
+  focusRequest = 0,
+  compact = false,
   onSend,
 }: AssistantComposerProps) {
   const [value, setValue] = useState("");
@@ -127,29 +139,32 @@ export function AssistantComposer({
     <div
       ref={composerRef}
       data-assistant-composer=""
+      data-assistant-composer-variant={compact ? "compact" : "page"}
       aria-busy={busy}
       className="flex min-w-0 flex-col gap-3 border-t border-border pt-4"
     >
-      <div
-        role="group"
-        aria-label="Suggested prompts"
-        className="flex min-w-0 flex-wrap gap-2"
-      >
-        {ACTION_CHIPS.map((chip) => (
-          <button
-            key={chip}
-            type="button"
-            data-assistant-chip=""
-            onClick={() => {
-              setValue(chip);
-              inputRef.current?.focus();
-            }}
-            className="inline-flex rounded-pill border border-border bg-card px-3 py-1.5 font-heading text-label-sm text-muted-foreground transition-colors hover:border-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-          >
-            {chip}
-          </button>
-        ))}
-      </div>
+      {!compact ? (
+        <div
+          role="group"
+          aria-label="Suggested prompts"
+          className="flex min-w-0 flex-wrap gap-2"
+        >
+          {ACTION_CHIPS.map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              data-assistant-chip=""
+              onClick={() => {
+                setValue(chip);
+                inputRef.current?.focus();
+              }}
+              className="inline-flex rounded-pill border border-border bg-card px-3 py-1.5 font-heading text-label-sm text-muted-foreground transition-colors hover:border-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <form
         className="flex min-w-0 flex-col gap-2"
@@ -165,7 +180,7 @@ export function AssistantComposer({
           ref={inputRef}
           id={inputId}
           data-assistant-input=""
-          rows={3}
+          rows={compact ? 2 : 3}
           maxLength={MESSAGE_CONTENT_MAX_LENGTH}
           value={value}
           placeholder="Ask about your workspace…"

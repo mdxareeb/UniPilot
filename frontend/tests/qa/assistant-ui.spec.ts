@@ -35,6 +35,16 @@
  *    conversation; a row that is already gone surfaces the action's own
  *    "no longer exists" copy with no silent switch. Guests keep every verb
  *    away.
+ * 5. C5 (19.16): the global launcher panel as a real conversation surface on
+ *    the same architecture — the shared turn hook, composer, bubbles and
+ *    source rendering. The panel opens on a workspace route and on a
+ *    marketing route (and keeps its composer reachable at 375×667 and
+ *    1280×640), a live send streams the verbatim unconfigured copy and
+ *    offers the full-conversation link, a stubbed turn grows incrementally
+ *    with sources and a follow-up continues the same conversation, a guest in
+ *    the shell is prompted instead of given a panel, and a marketing guest's
+ *    401 surfaces the route's own copy with no fabricated reply and no
+ *    per-user read.
  *
  * This project stays green with no provider configured.
  */
@@ -1766,5 +1776,444 @@ test.describe("assistant conversation shell (live)", () => {
     ).toHaveCount(0);
     await expect(page.locator("[data-assistant-composer]")).toHaveCount(0);
     expect(errors, "the refused delete stays console-clean").toEqual([]);
+  });
+
+  /* -----------------------------------------------------------------------
+     C5 (19.16) — the global launcher panel as a real conversation surface.
+     The panel renders the shared architecture (`components/assistant/`): the
+     same turn hook over the same route, the same composer, the same bubbles
+     and source references. The live case drives the real endpoint; the
+     stubbed case replaces only the HTTP boundary.
+     ----------------------------------------------------------------------- */
+
+  test("the launcher panel opens on a workspace route and keeps its dismissal behaviour", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    await page.goto("/tasks");
+
+    const bar = page.getByRole("button", { name: /Ask UniPilot anything/i });
+    // The guest-browsing probe's exact label (19.16 keeps it).
+    await expect(bar).toHaveAttribute(
+      "aria-label",
+      "Ask UniPilot anything — opens search and the assistant",
+    );
+    await bar.click();
+
+    const panel = page.locator("#unipilot-assistant-panel");
+    await expect(panel).toBeVisible();
+    // The starter links and the honest note survive the panel becoming a
+    // conversation surface.
+    await expect(
+      panel.getByRole("link", { name: "Create a presentation" }),
+    ).toBeVisible();
+    await expect(panel).toContainText(
+      "Answers stream in from the same assistant as the Assistant page.",
+    );
+    // The real, shared composer — not a link to one — and no invented
+    // transcript before the first send.
+    await expect(panel.locator("[data-assistant-composer]")).toBeVisible();
+    await expect(panel.locator("[data-assistant-input]")).toBeVisible();
+    await expect(panel.locator("[data-assistant-send]")).toBeDisabled();
+    await expect(panel.locator("[data-assistant-panel-empty]")).toBeVisible();
+    await expect(panel.locator("[data-assistant-open]")).toHaveCount(0);
+    // Let the panel's entrance and the reveal ladder settle before the shot.
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: "screenshots/c5-panel-open.png" });
+
+    // Escape closes the panel and hands focus back to the bar body (the
+    // committed behaviour, unchanged).
+    await page.keyboard.press("Escape");
+    await expect(panel).not.toBeVisible();
+    await expect(bar).toBeFocused();
+
+    // A pointer press outside the shell and the panel closes it too.
+    await bar.click();
+    await expect(panel).toBeVisible();
+    await page.locator("h1").first().click();
+    await expect(panel).not.toBeVisible();
+
+    expect(errors, "the launcher panel stays console-clean").toEqual([]);
+  });
+
+  test("the idle panel keeps its composer reachable on short viewports", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    /* A settled stub, so the reachability proof never spends a real turn. */
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: "c5-short-viewport",
+          configured: true,
+        }),
+        frameToSse({ type: "done", status: "complete", messageId: null }),
+      ],
+    });
+
+    try {
+      for (const [width, height] of [
+        [375, 667],
+        [1280, 640],
+      ] as const) {
+        await page.setViewportSize({ width, height });
+        await page.goto("/tasks");
+        await page
+          .getByRole("button", { name: /Ask UniPilot anything/i })
+          .click();
+        const panel = page.locator("#unipilot-assistant-panel");
+        await expect(panel).toBeVisible();
+
+        // The idle region (six starters + the note) shrinks and scrolls on a
+        // short viewport, but the composer and its Send control are the
+        // panel's pinned bottom child. The panel is `overflow-hidden`, so a
+        // clipped composer would have no wheel/touch path back: prove the
+        // composer and Send are already inside the panel's visible box and
+        // the viewport, with the panel itself unscrolled, before any
+        // interaction.
+        const composer = panel.locator("[data-assistant-composer]");
+        await expect(composer).toBeVisible();
+        const input = panel.locator("[data-assistant-input]");
+        await expect(input).toBeVisible();
+        const send = panel.locator("[data-assistant-send]");
+        await expect(send).toBeVisible();
+        await expect(send).toBeDisabled();
+
+        const reachable = await page.evaluate(() => {
+          const panelEl = document.querySelector("#unipilot-assistant-panel");
+          const composerEl = panelEl?.querySelector("[data-assistant-composer]");
+          const sendEl = panelEl?.querySelector("[data-assistant-send]");
+          if (!panelEl || !composerEl || !sendEl) return null;
+          const pr = panelEl.getBoundingClientRect();
+          const inside = (rect: DOMRect) =>
+            rect.top >= pr.top - 1 &&
+            rect.bottom <= pr.bottom + 1 &&
+            rect.bottom <= window.innerHeight + 1;
+          return {
+            panelScrollTop: panelEl.scrollTop,
+            composerInside: inside(composerEl.getBoundingClientRect()),
+            sendInside: inside(sendEl.getBoundingClientRect()),
+          };
+        });
+        expect(reachable, "the panel's chat chrome is mounted").not.toBeNull();
+        expect(
+          reachable!.panelScrollTop,
+          `${width}px: the overflow-hidden panel must not be programmatically scrolled`,
+        ).toBe(0);
+        expect(
+          reachable!.composerInside,
+          `${width}px: the composer sits inside the panel's visible box`,
+        ).toBe(true);
+        expect(
+          reachable!.sendInside,
+          `${width}px: Send sits inside the panel's visible box`,
+        ).toBe(true);
+
+        if (width === 375) {
+          await page.waitForTimeout(600);
+          await page.screenshot({
+            path: "screenshots/c5-panel-short-viewport.png",
+          });
+        }
+
+        await input.fill(`${PREFIX} short ${width}`);
+        await expect(send).toBeEnabled();
+        await send.click();
+        await expect(
+          panel.locator(
+            '[data-message-role="user"][data-message-local] [data-message-content]',
+          ),
+        ).toHaveText(`${PREFIX} short ${width}`);
+
+        // The launcher chrome stays inside the viewport at both widths.
+        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }));
+        expect(
+          scrollWidth,
+          `${width}px must not scroll horizontally`,
+        ).toBeLessThanOrEqual(clientWidth);
+      }
+
+      expect(stub.requestCount(), "both sends reached the stub").toBe(2);
+      expect(errors, "the short-viewport panel stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("a live send from the panel streams the unconfigured copy and opens the conversation", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const question = `${PREFIX} panel live question`;
+
+    await page.goto("/tasks");
+    await page.getByRole("button", { name: /Ask UniPilot anything/i }).click();
+    const panel = page.locator("#unipilot-assistant-panel");
+    await expect(panel).toBeVisible();
+
+    await panel.locator("[data-assistant-input]").fill(question);
+    await panel.locator("[data-assistant-send]").click();
+
+    // The optimistic bubble carries the exact typed text, and the live entry
+    // streams the route's verbatim 26.1 copy and settles `unconfigured` — the
+    // same honesty rules as the page, from the same hook.
+    await expect(
+      panel.locator(
+        '[data-message-role="user"][data-message-local] [data-message-content]',
+      ),
+    ).toHaveText(question);
+    const assistant = panel.locator(
+      '[data-message-role="assistant"][data-message-local]',
+    );
+    await expect(assistant).toHaveAttribute(
+      "data-message-status",
+      "unconfigured",
+      { timeout: 20_000 },
+    );
+    await expect(assistant.locator("[data-message-content]")).toContainText(
+      ASSISTANT_UNCONFIGURED_COPY,
+    );
+    await expect(assistant.locator("[data-assistant-sources]")).toHaveCount(0);
+    // Let the panel's entrance and the reveal ladder settle before the shot.
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: "screenshots/c5-panel-unconfigured.png" });
+
+    // The `start` frame's conversation id is held in state and offered as the
+    // full-conversation link; following it lands on the stored conversation.
+    const open = panel.locator("[data-assistant-open]");
+    await expect(open).toBeVisible({ timeout: 20_000 });
+    await expect(open).toHaveAttribute("href", /^\/assistant\?c=[0-9a-f-]{36}$/i);
+    const href = await open.getAttribute("href");
+    const createdId = new URL(href!, "http://localhost:3000").searchParams.get(
+      "c",
+    );
+    expect(createdId, "the panel's link names no conversation").not.toBeNull();
+    if (createdId === null) throw new Error("the panel link never carried an id");
+    createdConversationIds.push(createdId);
+
+    await open.click();
+    await expect(page).toHaveURL(new RegExp(`c=${createdId}`));
+    await waitForAssistantTree(page);
+    await expect(
+      page.locator('[data-message-role="user"] [data-message-content]'),
+    ).toHaveText(question);
+    await expect(page.locator('[data-message-role="assistant"]')).toContainText(
+      ASSISTANT_UNCONFIGURED_COPY,
+    );
+    await expect(page.locator("[data-message-local]")).toHaveCount(0);
+    expect(errors, "the panel's live turn stays console-clean").toEqual([]);
+  });
+
+  test("a stubbed panel turn renders incrementally with sources and the follow-up continues it", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "panel stubbed stream",
+      ahead(FUTURE_MINUTES),
+    );
+    const firstQuestion = `${PREFIX} panel stubbed question`;
+    const followUp = `${PREFIX} panel follow-up`;
+
+    /* The C3 stream shape: a start, a delta held mid-stream, a delta frame
+       split across two writes, a malformed block, the sources frame and the
+       terminal done. The stub records each POST body, which is how the
+       follow-up's conversation id is proven. */
+    const chunks = [
+      frameToSse({
+        type: "start",
+        conversationId: conversation,
+        configured: true,
+      }),
+      frameToSse({ type: "delta", text: "Photosynthesis " }),
+      'data: {"type":"delta","text":"converts light',
+      ' into sugar"}\n\n',
+      "data: {not json\n\n",
+      frameToSse({ type: "sources", sources: [SOURCE_A, SOURCE_B] }),
+      frameToSse({
+        type: "done",
+        status: "complete",
+        messageId: "stub-c5-message",
+      }),
+    ];
+    const stub = await stubAssistantTurn(page, { chunks, holdAfter: 2 });
+
+    try {
+      await page.goto("/tasks");
+      await page.getByRole("button", { name: /Ask UniPilot anything/i }).click();
+      const panel = page.locator("#unipilot-assistant-panel");
+      await expect(panel).toBeVisible();
+
+      await panel.locator("[data-assistant-input]").fill(firstQuestion);
+      await panel.locator("[data-assistant-send]").click();
+
+      const bubble = panel.locator(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      // Mid-stream: the first delta is on screen, the rest is still held.
+      await expect(bubble).toHaveAttribute("data-message-status", "streaming");
+      await expect(bubble.locator("[data-message-content]")).toHaveText(
+        "Photosynthesis ",
+      );
+      await expect(bubble.locator("[data-message-streaming]")).toBeVisible();
+      await expect(panel.locator("[data-message-list] > li").last()).toHaveCSS(
+        "opacity",
+        "1",
+      );
+      await expect(panel.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "true",
+      );
+      // The stream is held, so a short pause only lets the reveal settle.
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: "screenshots/c5-panel-streaming.png" });
+
+      stub.release();
+
+      // The rest reassembles: the split frame, the dropped malformed block,
+      // the sources and the terminal status — the same renderer as the page.
+      await expect(bubble).toHaveAttribute("data-message-status", "complete", {
+        timeout: 20_000,
+      });
+      await expect(bubble.locator("[data-message-content]")).toHaveText(
+        "Photosynthesis converts light into sugar",
+      );
+      const sources = bubble.locator("[data-assistant-sources]");
+      await expect(sources.locator("[data-assistant-source]")).toHaveCount(2);
+      await expect(sources).toContainText("Syllabus.pdf");
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: "screenshots/c5-panel-sources.png" });
+
+      // The link names the conversation the `start` frame announced.
+      await expect(panel.locator("[data-assistant-open]")).toHaveAttribute(
+        "href",
+        `/assistant?c=${conversation}`,
+      );
+
+      // Continuity: the panel held that id in component state, so the
+      // follow-up POST targets the same conversation instead of starting a
+      // new one. (The panel shows the latest exchange; the full conversation
+      // is what the link opens.)
+      await expect(panel.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+      await panel.locator("[data-assistant-input]").fill(followUp);
+      await panel.locator("[data-assistant-send]").click();
+      await expect.poll(() => stub.requests().length).toBe(2);
+      expect(stub.requests()[0]).toEqual({
+        conversationId: null,
+        content: firstQuestion,
+      });
+      expect(stub.requests()[1]).toEqual({
+        conversationId: conversation,
+        content: followUp,
+      });
+      await expect(
+        panel.locator(
+          '[data-message-role="user"][data-message-local] [data-message-content]',
+        ),
+      ).toHaveText(followUp);
+
+      expect(errors, "the stubbed panel stream stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("a guest in the workspace shell gets the sign-in prompt and no panel", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      storageState: { cookies: [], origins: [] },
+    });
+    const page = await context.newPage();
+    const errors = trackConsoleErrors(page);
+
+    await page.goto("/tasks");
+    await expect(page.locator('[data-signed-in="false"]')).toBeAttached();
+    await page.getByRole("button", { name: /Ask UniPilot anything/i }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByText("Sign in to ask the assistant about your workspace."),
+    ).toBeVisible();
+    // No panel, no composer, no send path for a guest.
+    await expect(page.locator("#unipilot-assistant-panel")).toHaveCount(0);
+    await expect(page.locator("[data-assistant-composer]")).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Continue browsing" }).click();
+    await expect(dialog).not.toBeVisible();
+
+    expect(errors, "the guest launcher stays console-clean").toEqual([]);
+    await context.close();
+  });
+
+  test("the marketing panel opens for a guest without a session read, and a 401 surfaces the route's copy", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      storageState: { cookies: [], origins: [] },
+    });
+    const page = await context.newPage();
+    const errors = trackConsoleErrors(page);
+    const dataReads: string[] = [];
+    page.on("request", (request) => {
+      if (/\/rest\/v1\//.test(request.url())) dataReads.push(request.url());
+    });
+
+    await page.goto("/pricing");
+    // Marketing mounts no sign-in provider: no session verdict is read, and
+    // the launcher reads no session of its own on any route.
+    await expect(page.locator("[data-signed-in]")).toHaveCount(0);
+    await page.getByRole("button", { name: /Ask UniPilot anything/i }).click();
+    const panel = page.locator("#unipilot-assistant-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("[data-assistant-composer]")).toBeVisible();
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: "screenshots/c5-panel-marketing.png" });
+
+    const question = `${PREFIX} marketing guest question`;
+    await panel.locator("[data-assistant-input]").fill(question);
+    await panel.locator("[data-assistant-send]").click();
+
+    // The route's own 401 copy is the failure text — never a fabricated
+    // reply, never an invented answer, and no conversation id to open.
+    const bubble = panel.locator(
+      '[data-message-role="assistant"][data-message-local]',
+    );
+    await expect(bubble).toHaveAttribute("data-message-status", "failed");
+    await expect(bubble.locator("[data-assistant-failure]")).toHaveText(
+      "Sign in to use the assistant.",
+    );
+    await expect(bubble.locator("[data-message-content]")).toHaveCount(0);
+    await expect(
+      panel.locator(
+        '[data-message-role="user"][data-message-local] [data-message-content]',
+      ),
+    ).toHaveText(question);
+    await expect(panel.locator("[data-assistant-open]")).toHaveCount(0);
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: "screenshots/c5-panel-marketing-401.png" });
+
+    expect(dataReads, "the marketing launcher must not read user data").toEqual(
+      [],
+    );
+    // The deliberate unauthenticated POST is logged by Chromium at the
+    // network layer ("Failed to load resource … 401"); the app itself must
+    // have added no console error of its own. The copy above proves the 401
+    // was handled honestly, not swallowed.
+    const unexpected = errors.filter(
+      (message) => !/Failed to load resource.*401/.test(message),
+    );
+    expect(unexpected, "the marketing panel stays console-clean").toEqual([]);
+    await context.close();
   });
 });
