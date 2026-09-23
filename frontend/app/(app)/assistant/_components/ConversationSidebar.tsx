@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { motionIndex } from "@/components/motion/stagger";
 import { MotionListItem } from "@/components/motion/MotionListItem";
+import { MotionNotice } from "@/components/motion/MotionNotice";
 import { MotionSelectionRing } from "@/components/motion/MotionSelectionRing";
+import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Divider } from "@/components/ui/Divider";
 import type { ConversationItem } from "@/lib/data/conversations";
@@ -15,10 +18,18 @@ type ConversationSidebarProps = {
   selectedId: string | null;
   /** True for a visitor without a session — no conversation is listed. */
   guest: boolean;
+  /** 19.2 — asks the 26.x action for a real conversation row. */
+  onCreate: () => void;
+  /** True while that request is in flight; the control blocks repeats. */
+  creating: boolean;
+  /** The create verb's sanitized failure copy, or null when there is none. */
+  createError: string | null;
+  /** A polite list-level outcome, e.g. a confirmed deletion. */
+  notice: string | null;
 };
 
 /**
- * Task 19.1 — the conversation sidebar.
+ * Task 19.1 — the conversation sidebar, with 19.2's create control.
  *
  * Rows are the service's own order (most recently active first) and each row is
  * a real `Link` to `/assistant?c=<id>`, so selection is URL state the server
@@ -27,6 +38,15 @@ type ConversationSidebarProps = {
  * (`layoutId="assistant-conversation"`, `softSpring`) so the selection travels
  * from row to row instead of blinking; `bg-glass-strong` marks the same state
  * for pointer users. Titles truncate; the updated label is mono metadata.
+ *
+ * 19.2: the header's "New conversation" control is a real button wired to
+ * `createConversationAction` — it creates a row server-side, never a local
+ * placeholder. It is absent for a guest (the header's sign-in action and the
+ * panel's guest empty state are the guest's real affordances), blocks a repeat
+ * request while one is in flight (`aria-busy`), and its only failure copy is
+ * the action's sanitized string, shown in place as an alert. The polite
+ * `notice` line reports a confirmed outcome (a deletion) without colouring a
+ * failure as a success.
  *
  * Responsive, same idiom as the viewer's slide rail: a horizontal strip below
  * `lg` (where a full-height rail would push the messages off-screen) and a
@@ -38,6 +58,10 @@ export function ConversationSidebar({
   conversations,
   selectedId,
   guest,
+  onCreate,
+  creating,
+  createError,
+  notice,
 }: ConversationSidebarProps) {
   return (
     <aside
@@ -50,12 +74,50 @@ export function ConversationSidebar({
           <h2 className="font-mono text-label-caps uppercase text-muted-foreground">
             Conversations
           </h2>
-          {conversations.length > 0 ? (
-            <span className="font-mono text-label-sm text-muted-foreground">
-              {conversations.length}
-            </span>
-          ) : null}
+          <div className="flex min-w-0 items-center gap-2">
+            {conversations.length > 0 ? (
+              <span className="font-mono text-label-sm text-muted-foreground">
+                {conversations.length}
+              </span>
+            ) : null}
+            {guest ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                data-assistant-new="sidebar"
+                aria-label="New conversation"
+                onClick={onCreate}
+                disabled={creating}
+                aria-busy={creating}
+              >
+                <Plus aria-hidden="true" className="size-3.5" />
+                New
+              </Button>
+            )}
+          </div>
         </div>
+
+        {createError !== null ? (
+          <MotionNotice
+            role="alert"
+            data-assistant-create-error=""
+            className="text-label-sm text-destructive"
+          >
+            {createError}
+          </MotionNotice>
+        ) : null}
+
+        {notice !== null ? (
+          <MotionNotice
+            role="status"
+            data-assistant-notice=""
+            className="text-label-sm text-muted-foreground"
+          >
+            {notice}
+          </MotionNotice>
+        ) : null}
+
         <Divider />
 
         {conversations.length === 0 ? (

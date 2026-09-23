@@ -30,6 +30,12 @@ type AssistantComposerProps = {
   conversationId: string | null;
   /** True while a turn is in flight; the send is blocked, typing is not. */
   busy: boolean;
+  /**
+   * 19.2 — bumped by the workspace after a verb creates a new conversation
+   * (or otherwise hands the caller a fresh writing surface). A changed,
+   * non-zero value focuses the textarea; the initial 0 never steals focus.
+   */
+  focusRequest: number;
   /** Receives the exact typed text; the composer never trims or rewrites it. */
   onSend: (content: string) => void;
 };
@@ -53,6 +59,8 @@ type AssistantComposerProps = {
  * sent (Enter in the textarea, or the Send button), it returns to the textarea
  * once the turn settles — unless the caller has meanwhile focused something
  * outside the composer, in which case focus is deliberately left alone.
+ * 19.2's create verb is the other focus path: its `focusRequest` bump lands
+ * the caret in the textarea of the conversation it just created.
  *
  * No composer is rendered for a guest (the guest empty state owns that) or in
  * the `?c=`-unavailable state (see `AssistantWorkspace`: a send there would
@@ -62,6 +70,7 @@ type AssistantComposerProps = {
 export function AssistantComposer({
   conversationId,
   busy,
+  focusRequest,
   onSend,
 }: AssistantComposerProps) {
   const [value, setValue] = useState("");
@@ -71,6 +80,19 @@ export function AssistantComposer({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const restoreFocus = useRef(false);
   const wasBusy = useRef(false);
+  const handledFocusRequest = useRef(0);
+
+  /* 19.2: the workspace bumps `focusRequest` when a conversation verb created
+     the surface the caller is about to write into. The ref makes this run
+     exactly once per request — including on a mount that arrives with the
+     request already pending — and never on the initial 0. */
+  useEffect(() => {
+    if (focusRequest === 0 || focusRequest === handledFocusRequest.current) {
+      return;
+    }
+    handledFocusRequest.current = focusRequest;
+    inputRef.current?.focus();
+  }, [focusRequest]);
 
   useEffect(() => {
     const settled = wasBusy.current && !busy;

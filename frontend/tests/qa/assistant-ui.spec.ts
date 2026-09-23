@@ -27,6 +27,14 @@
  *    for the in-flight double-send proof. No provider is configured, so every
  *    live case also pins the honest unconfigured state — the shell never
  *    fabricates a reply.
+ * 4. C4's conversation verbs (19.2/19.3): the sidebar's and the empty state's
+ *    real "New conversation" controls create a row through
+ *    `createConversationAction` and move `?c=`/selection together; rename
+ *    persists through `renameConversationAction`; delete confirms in the
+ *    shared `Modal`, removes the row and selects the next most recent
+ *    conversation; a row that is already gone surfaces the action's own
+ *    "no longer exists" copy with no silent switch. Guests keep every verb
+ *    away.
  *
  * This project stays green with no provider configured.
  */
@@ -463,11 +471,18 @@ function trackConsoleErrors(page: Page): string[] {
  * document load the hidden streamed segment and the mounted tree can coexist
  * in the DOM (a framework behaviour recorded at the Phase E gate — it settles
  * with no console error and no product defect). An unscoped strict locator can
- * therefore resolve to two copies. Polling the workspace root to one copy
- * proves the tree has settled before the test interacts with it.
+ * therefore resolve to two copies, and there are windows where the parked
+ * hidden copy is momentarily the *only* copy of the tree (proved from a trace:
+ * `<div hidden id="S:4">` holding a full copy while the visible shell has no
+ * panel content yet). So the settle condition is: exactly one *visible*
+ * workspace root, and no hidden streamed holder carrying a copy of it. Only
+ * then can a later interaction resolve to the real, mounted tree.
  */
 async function waitForAssistantTree(page: Page): Promise<void> {
-  await expect(page.locator("[data-assistant-status]")).toHaveCount(1);
+  await expect(page.locator("[data-assistant-status]:visible")).toHaveCount(1);
+  await expect(
+    page.locator("[hidden] [data-assistant-status]"),
+  ).toHaveCount(0);
 }
 
 test.describe("assistant conversation shell (live)", () => {
@@ -601,9 +616,11 @@ test.describe("assistant conversation shell (live)", () => {
       .in("id", ids)
       .select("id");
     expect(removed.error, `teardown delete: ${removed.error?.message}`).toBeNull();
-    expect(removed.data ?? [], "every seeded conversation is removed").toHaveLength(
-      ids.length,
-    );
+    /* `removed.data` lists the rows that were still there. A conversation the
+       test itself already deleted — through the UI, or through the service
+       role for the "already gone" case — is legitimately absent, so the
+       count is not asserted; the id-scoped residue probes below are the
+       authority that nothing this spec created remains. */
 
     const conversationResidue = await service
       .from("conversations")
@@ -843,6 +860,10 @@ test.describe("assistant conversation shell (live)", () => {
     await expect(page.locator("[data-message-role]")).toHaveCount(0);
     // A guest never gets the composer (19.7–19.9): no send, no data.
     await expect(page.locator("[data-assistant-composer]")).toHaveCount(0);
+    // 19.2/19.3: a guest gets no conversation verbs either — the header's
+    // sign-in action is the only "New conversation" affordance on the page.
+    await expect(page.locator("[data-assistant-new]")).toHaveCount(0);
+    await expect(page.locator("[data-conversation-verb]")).toHaveCount(0);
 
     await page.screenshot({
       path: "screenshots/c2-assistant-guest.png",
@@ -1434,5 +1455,316 @@ test.describe("assistant conversation shell (live)", () => {
         }
       }
     }
+  });
+
+  /* -----------------------------------------------------------------------
+     C4 — the conversation verbs (19.2/19.3): create through
+     `createConversationAction`, rename through `renameConversationAction`,
+     delete through `deleteConversationAction`. These are live cases only:
+     the contract under test is the action plus URL/selection coherence, so
+     no stub could prove anything here.
+     ----------------------------------------------------------------------- */
+
+  test("New conversation creates a real row, selects it and focuses the composer", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    /* In the past, so the created row (now) takes the newest sidebar slot. */
+    const existing = await seedConversation(
+      qa1Id,
+      "existing conversation",
+      ahead(-5),
+    );
+
+    await page.goto(`/assistant?c=${existing}`);
+    await waitForAssistantTree(page);
+    await expect(
+      page.locator(`[data-conversation-id="${existing}"]`),
+    ).toHaveAttribute("aria-current", "true");
+
+    const control = page.locator('[data-assistant-new="sidebar"]');
+    await expect(control).toBeVisible();
+    await control.click();
+
+    // The action round-trips and pushes a new id. The URL we were on already
+    // matches the generic `?c=` shape, so poll for the id to actually change
+    // (and for the action to report no failure) before reading it.
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("c"), {
+        message: "the create verb never moved the URL",
+        timeout: 15_000,
+      })
+      .not.toBe(existing);
+    await expect(page.locator("[data-assistant-create-error]")).toHaveCount(0);
+
+    const createdId = new URL(page.url()).searchParams.get("c");
+    expect(createdId, "the create flow produced no conversation id").not.toBeNull();
+    expect(createdId).not.toBe(existing);
+    if (createdId === null) throw new Error("create never produced an id");
+    createdConversationIds.push(createdId);
+
+    const createdRow = page.locator(`[data-conversation-id="${createdId}"]`);
+    await expect(createdRow).toHaveCount(1);
+    await expect(createdRow).toHaveAttribute("aria-current", "true");
+    await expect(createdRow).toContainText("New conversation");
+    await expect(page.locator("[data-conversation-title]")).toHaveText(
+      "New conversation",
+    );
+    await expect(
+      page.locator('[data-assistant-empty="empty-conversation"]'),
+    ).toBeVisible();
+    // 19.2: the new conversation is ready to be written into.
+    await expect(page.locator("[data-assistant-input]")).toBeFocused();
+
+    // The row is really in the database, owned by the caller.
+    const stored = await service
+      .from("conversations")
+      .select("id, user_id, title")
+      .eq("id", createdId)
+      .single();
+    expect(stored.error, `read created row: ${stored.error?.message}`).toBeNull();
+    expect(stored.data).toMatchObject({
+      id: createdId,
+      user_id: qa1Id,
+      title: "New conversation",
+    });
+
+    await page.screenshot({
+      path: "screenshots/c4-new-conversation.png",
+      fullPage: true,
+    });
+
+    // A reload still finds the URL naming it and the sidebar selecting it.
+    await page.reload();
+    await waitForAssistantTree(page);
+    await expect(page).toHaveURL(new RegExp(`c=${createdId}`));
+    await expect(
+      page.locator(`[data-conversation-id="${createdId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[data-conversation-title]")).toHaveText(
+      "New conversation",
+    );
+    await expect(
+      page.locator('[data-assistant-empty="empty-conversation"]'),
+    ).toBeVisible();
+    expect(errors, "the create flow stays console-clean").toEqual([]);
+  });
+
+  test("the no-conversations empty state creates the first conversation through its own control", async ({
+    page,
+  }) => {
+    const { count, error } = await service
+      .from("conversations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id);
+    expect(error).toBeNull();
+    test.skip(
+      (count ?? 0) > 0,
+      `QA1 owns ${count} conversation(s) (residue from other flows); the empty state cannot be proven without deleting real rows`,
+    );
+    const errors = trackConsoleErrors(page);
+
+    await page.goto("/assistant");
+    await waitForAssistantTree(page);
+    const empty = page.locator('[data-assistant-empty="none"]');
+    await expect(empty).toBeVisible();
+
+    const control = empty.locator('[data-assistant-new="empty"]');
+    await expect(control).toBeVisible();
+    await control.click();
+
+    await expect(page).toHaveURL(/\/assistant\?c=[0-9a-f-]{36}/i);
+    const createdId = new URL(page.url()).searchParams.get("c");
+    if (createdId === null) throw new Error("create never produced an id");
+    createdConversationIds.push(createdId);
+
+    await expect(page.locator('[data-assistant-empty="none"]')).toHaveCount(0);
+    await expect(
+      page.locator(`[data-conversation-id="${createdId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[data-conversation-title]")).toHaveText(
+      "New conversation",
+    );
+    await expect(page.locator("[data-assistant-input]")).toBeFocused();
+    expect(errors, "the empty-state create stays console-clean").toEqual([]);
+  });
+
+  test("rename updates the sidebar and the panel, persists, and cancels cleanly", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const first = await seedConversation(qa1Id, "rename me", ahead(FUTURE_MINUTES));
+    const second = await seedConversation(
+      qa1Id,
+      "other conversation",
+      ahead(FUTURE_MINUTES - 1),
+    );
+    const renamed = `${PREFIX} renamed conversation`;
+
+    await page.goto(`/assistant?c=${first}`);
+    await waitForAssistantTree(page);
+
+    // Cancel first: the draft is abandoned and the stored title is untouched.
+    await page.locator('[data-conversation-verb="rename"]').click();
+    const input = page.locator("[data-conversation-rename-input]");
+    await expect(input).toBeVisible();
+    await expect(input).toHaveValue(`${PREFIX} rename me`);
+    // The service's own bound (CONVERSATION_TITLE_MAX_LENGTH, 120).
+    await expect(input).toHaveAttribute("maxlength", "120");
+    await input.fill("Junk name");
+    await page.locator("[data-conversation-rename-cancel]").click();
+    await expect(page.locator("[data-conversation-rename-input]")).toHaveCount(0);
+    await expect(page.locator("[data-conversation-title]")).toHaveText(
+      `${PREFIX} rename me`,
+    );
+
+    // Rename for real: the title changes in place, then the settled row is
+    // reconciled; the stored title is what the reload proves.
+    await page.locator('[data-conversation-verb="rename"]').click();
+    await page.locator("[data-conversation-rename-input]").fill(renamed);
+    await page.screenshot({
+      path: "screenshots/c4-rename.png",
+      fullPage: true,
+    });
+    await page.locator("[data-conversation-rename-save]").click();
+    await expect(page.locator("[data-conversation-title]")).toHaveText(renamed);
+    await expect(page.locator(`[data-conversation-id="${first}"]`)).toContainText(
+      renamed,
+    );
+
+    const stored = await service
+      .from("conversations")
+      .select("title")
+      .eq("id", first)
+      .single();
+    expect(stored.error, `read renamed row: ${stored.error?.message}`).toBeNull();
+    expect((stored.data as { title: string } | null)?.title).toBe(renamed);
+
+    await page.reload();
+    await waitForAssistantTree(page);
+    await expect(page.locator("[data-conversation-title]")).toHaveText(renamed);
+    await expect(page.locator(`[data-conversation-id="${first}"]`)).toContainText(
+      renamed,
+    );
+    // The neighbour is untouched by the rename.
+    await expect(
+      page.locator(`[data-conversation-id="${second}"]`),
+    ).toContainText(`${PREFIX} other conversation`);
+    expect(errors, "the rename flow stays console-clean").toEqual([]);
+  });
+
+  test("delete confirms, removes the row and selects the next most recent conversation", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const first = await seedConversation(qa1Id, "delete me", ahead(FUTURE_MINUTES));
+    const second = await seedConversation(
+      qa1Id,
+      "the survivor",
+      ahead(FUTURE_MINUTES - 1),
+    );
+
+    await page.goto(`/assistant?c=${first}`);
+    await waitForAssistantTree(page);
+
+    await page.locator('[data-conversation-verb="delete"]').click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByRole("heading", { name: "Delete this conversation?" }),
+    ).toBeVisible();
+    await expect(dialog).toContainText(`${PREFIX} delete me`);
+    await page.screenshot({
+      path: "screenshots/c4-delete-confirm.png",
+      fullPage: true,
+    });
+
+    await dialog.locator("[data-conversation-delete-confirm]").click();
+
+    // The selection moves to the next most recent conversation, honestly: the
+    // URL and `aria-current` agree, and the deleted row is gone from the list.
+    await expect(page).toHaveURL(new RegExp(`c=${second}`));
+    await expect(page.locator(`[data-conversation-id="${first}"]`)).toHaveCount(0);
+    await expect(
+      page.locator(`[data-conversation-id="${second}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[data-assistant-notice]")).toHaveText(
+      "Conversation deleted.",
+    );
+    // Closing the confirmation returns focus to the control that opened it.
+    await expect(page.locator('[data-conversation-verb="delete"]')).toBeFocused();
+
+    const gone = await service.from("conversations").select("id").eq("id", first);
+    expect(gone.error).toBeNull();
+    expect(gone.data ?? []).toHaveLength(0);
+
+    await page.reload();
+    await waitForAssistantTree(page);
+    await expect(page).toHaveURL(new RegExp(`c=${second}`));
+    await expect(page.locator(`[data-conversation-id="${first}"]`)).toHaveCount(0);
+    await expect(
+      page.locator(`[data-conversation-id="${second}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    expect(errors, "the delete flow stays console-clean").toEqual([]);
+  });
+
+  test("a delete for a row already gone surfaces the action's copy and never switches silently", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const vanished = await seedConversation(
+      qa1Id,
+      "vanishing row",
+      ahead(FUTURE_MINUTES),
+    );
+    const survivor = await seedConversation(
+      qa1Id,
+      "still here",
+      ahead(FUTURE_MINUTES - 1),
+    );
+
+    await page.goto(`/assistant?c=${vanished}`);
+    await waitForAssistantTree(page);
+
+    // The row disappears behind the UI's back (another tab, another flow);
+    // the service-role delete is exactly what the action will then meet.
+    const removed = await service
+      .from("conversations")
+      .delete()
+      .eq("id", vanished)
+      .select("id");
+    expect(removed.error).toBeNull();
+    const index = createdConversationIds.indexOf(vanished);
+    if (index !== -1) createdConversationIds.splice(index, 1);
+
+    await page.locator('[data-conversation-verb="delete"]').click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.locator("[data-conversation-delete-confirm]").click();
+
+    // The action's own copy, inside the dialog, where the caller is looking.
+    await expect(dialog.locator("[data-assistant-delete-error]")).toHaveText(
+      "That conversation no longer exists.",
+    );
+    // No silent switch: the URL still names the conversation the caller asked
+    // about, the survivor is never marked selected, and no success is claimed.
+    await expect(page).toHaveURL(new RegExp(`c=${vanished}`));
+    await expect(
+      page.locator(`[data-conversation-id="${survivor}"]`),
+    ).not.toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[data-assistant-notice]")).toHaveCount(0);
+
+    // Closing leaves the honest unavailable state — the server read is the
+    // authority, not a fabricated success — with no composer to send from.
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await waitForAssistantTree(page);
+    await expect(
+      page.locator('[data-assistant-empty="unavailable"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator(`[data-conversation-id="${vanished}"]`),
+    ).toHaveCount(0);
+    await expect(page.locator("[data-assistant-composer]")).toHaveCount(0);
+    expect(errors, "the refused delete stays console-clean").toEqual([]);
   });
 });

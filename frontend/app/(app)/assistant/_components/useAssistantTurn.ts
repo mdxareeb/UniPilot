@@ -85,7 +85,10 @@ async function readErrorCopy(response: Response): Promise<string | null> {
  * Reconciliation: after settle the hook calls `router.refresh()` so the stored
  * rows become the source of truth, and — when `start` announced a conversation
  * the composer did not have selected — `router.replace("/assistant?c=<id>")`
- * so the URL, the sidebar and the read side agree.
+ * so the URL, the sidebar and the read side agree. That replace only runs
+ * while the selection is still where the send aimed: if the caller has
+ * meanwhile selected — or created (19.2) — another conversation, settling
+ * must not steal the URL back.
  *
  * Visibility is derived, never duplicated: the hook returns the local turn only
  * while it belongs to the currently selected conversation (or to the new one it
@@ -118,6 +121,14 @@ export function useAssistantTurn({
   const [busy, setBusy] = useState(false);
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  /* The live selection, read at settle time rather than from the send's
+     closure: 19.2's "New conversation" can move the selection while a turn is
+     still streaming, and the settle must then leave the caller's choice
+     alone. */
+  const selectionRef = useRef(conversationId);
+  useEffect(() => {
+    selectionRef.current = conversationId;
+  }, [conversationId]);
 
   /* A page unmount (navigation away) cancels the read; the server pipeline
      keeps its own request and persists whatever it settles on. */
@@ -224,7 +235,8 @@ export function useAssistantTurn({
           setBusy(false);
           if (
             entry.conversationId !== null &&
-            entry.conversationId !== targetConversationId
+            entry.conversationId !== targetConversationId &&
+            selectionRef.current === targetConversationId
           ) {
             router.replace(
               `/assistant?c=${encodeURIComponent(entry.conversationId)}`,

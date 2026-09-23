@@ -41,9 +41,10 @@ export const metadata: Metadata = {
  * real endpoint's unconfigured answer when a turn is sent, and never
  * fabricates a reply. `ASSISTANT_COPY.FAILED` is passed the same way: the
  * client's transport-failure fallback is the server's sanitized copy, not a
- * second string invented in the browser. The conversation verbs (19.2/19.4)
- * are later 19.x tasks; this page is a server component and hands the client
- * boundary only serializable data.
+ * second string invented in the browser. The conversation verbs (19.2/19.3)
+ * run through the committed 26.x Server Actions (`assistantActions.ts`) and
+ * live in the client boundary; this page stays a server component and hands
+ * that boundary only serializable data.
  *
  * A visitor without a session renders the same header with the sign-in action
  * and the real shell with its guest empty state, and no data call happens at
