@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { SendHorizontal } from "lucide-react";
+import { SendHorizontal, Square } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Textarea";
 import { MESSAGE_CONTENT_MAX_LENGTH } from "@/lib/data/assistantValues";
@@ -36,6 +36,12 @@ type AssistantComposerProps = {
   /** True while a turn is in flight; the send is blocked, typing is not. */
   busy: boolean;
   /**
+   * C6 — cancels the in-flight turn (a real abort of the client read; the
+   * hook settles it as a sanitized failure). While it runs, the composer
+   * offers an explicit Stop control next to the disabled Send.
+   */
+  onStop?: () => void;
+  /**
    * 19.2 — bumped by the workspace after a verb creates a new conversation
    * (or otherwise hands the caller a fresh writing surface). A changed,
    * non-zero value focuses the textarea; the initial 0 never steals focus.
@@ -62,9 +68,12 @@ type AssistantComposerProps = {
  *
  * Send is honestly disabled — never a dead-looking live control — when the
  * composer is empty/whitespace-only or while a turn is in flight; the textarea
- * itself stays enabled so the next message can be typed during a stream. The
- * busy state is announced twice over: `aria-busy` on the composer and a polite
- * status line (the hint's row, so nothing shifts when it becomes busy).
+ * itself stays enabled so the next message can be typed during a stream. While
+ * a turn is in flight the caller's `onStop` renders a real Stop control beside
+ * the disabled Send (C6): a stream that never settles can always be left, and
+ * the hook settles it as a sanitized failure. The busy state is announced
+ * twice over: `aria-busy` on the composer and a polite status line (the hint's
+ * row, so nothing shifts when it becomes busy).
  *
  * Focus after a settle: if focus was inside the composer when the turn was
  * sent (Enter in the textarea, or the Send button), it returns to the textarea
@@ -81,6 +90,7 @@ type AssistantComposerProps = {
 export function AssistantComposer({
   conversationId,
   busy,
+  onStop,
   focusRequest = 0,
   compact = false,
   onSend,
@@ -206,17 +216,36 @@ export function AssistantComposer({
             data-assistant-busy=""
             className="text-label-sm text-muted-foreground"
           >
-            {busy ? "The assistant is answering…" : hint}
+            {busy
+              ? "The assistant is answering… You can stop it."
+              : hint}
           </p>
-          <Button
-            type="submit"
-            size="sm"
-            data-assistant-send=""
-            disabled={busy || value.trim() === ""}
-          >
-            <SendHorizontal aria-hidden="true" className="size-4" />
-            Send
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* C6 — a real way out of a stream that never settles. Only while
+                a turn is in flight; Send stays visible but disabled, so the
+                composer's shape does not change under the caller. */}
+            {busy && onStop !== undefined ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                data-assistant-stop=""
+                onClick={onStop}
+              >
+                <Square aria-hidden="true" className="size-3.5" />
+                Stop
+              </Button>
+            ) : null}
+            <Button
+              type="submit"
+              size="sm"
+              data-assistant-send=""
+              disabled={busy || value.trim() === ""}
+            >
+              <SendHorizontal aria-hidden="true" className="size-4" />
+              Send
+            </Button>
+          </div>
         </div>
       </form>
     </div>

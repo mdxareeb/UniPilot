@@ -14,12 +14,24 @@
  * interception and server are torn down by `dispose()` — no leakage across
  * tests.
  *
+ * Local development fixture story (19.13): local development deliberately has
+ * no AI provider configured (26.1), so the real route is itself the first
+ * fixture — `POST /api/assistant/turn` streams the honest `unconfigured` copy
+ * through the complete production path (auth, persistence, SSE framing, the
+ * client reducer) with no model and no fake data anywhere in the app. This
+ * stub is the second, test-level fixture: it exercises the *configured* frame
+ * vocabulary (deltas, split frames, sources, terminal statuses, transport
+ * failures) that no configured provider exists locally to produce. It lives in
+ * `tests/qa/`, is never imported by application code, never enters the app
+ * bundle, and persists nothing; there is no fake-data path in the product.
+ *
  * `chunks` are raw SSE writes, so the caller controls exactly what arrives:
  * whole `data: <json>\n\n` frames, one frame split across two entries (the
  * split-frame case), malformed blocks that must be dropped, anything.
  * `holdAfter` stops the response after that many writes until `release()` —
  * which is how a test observes a genuinely in-flight turn (mid-stream
- * rendering, double-send blocking) instead of guessing at timing.
+ * rendering, double-send blocking, and a stream that never closes) instead of
+ * guessing at timing.
  *
  * The stub counts requests (`requestCount()`), so a double-send is proven by
  * the second POST never arriving, not by an UI count alone. It also records
@@ -138,6 +150,13 @@ export async function stubAssistantTurn(
   };
 
   const server: Server = createServer((request, response) => {
+    /* A client that aborts the read — the composer's Stop, or a navigation
+       while the body is held open — makes the socket's writes fail. Without a
+       listener on the response, Node treats that as an unhandled 'error' and
+       takes the test process down with it. */
+    response.on("error", () => {
+      /* The client went away; there is nobody left to write to. */
+    });
     if (request.method === "OPTIONS") {
       request.resume();
       response.writeHead(204, cors);
@@ -152,59 +171,77 @@ export async function stubAssistantTurn(
     }
 
     void (async () => {
-      /* Read the body before answering so `requests()` is exact: by the time
-         the stub has replied, the body it replied to is recorded. */
-      bodies.push(parseTurnRequest(await readBody(request)));
-      requests += 1;
+      try {
+        /* Read the body before answering so `requests()` is exact: by the time
+           the stub has replied, the body it replied to is recorded. */
+        bodies.push(parseTurnRequest(await readBody(request)));
+        requests += 1;
 
-      response.writeHead(status, {
-        ...cors,
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-store",
-      });
+        response.writeHead(status, {
+          ...cors,
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-store",
+        });
 
-      let written = 0;
-      for (const chunk of chunks) {
+        let written = 0;
+        for (const chunk of chunks) {
+          if (holdAfter !== undefined && written === holdAfter) await hold();
+          response.write(chunk);
+          written += 1;
+          if (gapMs > 0) await sleep(gapMs);
+        }
         if (holdAfter !== undefined && written === holdAfter) await hold();
-        response.write(chunk);
-        written += 1;
-        if (gapMs > 0) await sleep(gapMs);
-      }
-      if (holdAfter !== undefined && written === holdAfter) await hold();
 
-      response.end();
+        response.end();
+      } catch {
+        /* The response guard above already covers a vanished client; any
+           other throw must not become an unhandled rejection that fails an
+           unrelated test. */
+      }
     })();
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  const port = typeof address === "object" && address !== null ? address.port : 0;
-  if (port <= 0) {
-    server.close();
-    throw new Error("assistant turn stub failed to bind a loopback port");
-  }
-
-  const handler = (route: Route) =>
-    route.continue({ url: `http://127.0.0.1:${port}/stub/assistant-turn` });
-  await page.route(ASSISTANT_TURN_ROUTE, handler);
-
-  return {
-    requestCount: () => requests,
-    requests: () => bodies,
-    release: () => {
-      released = true;
-      releaseGate?.();
-    },
-    dispose: async () => {
-      releaseGate?.();
-      await page.unroute(ASSISTANT_TURN_ROUTE, handler);
-      const closed = new Promise<void>((resolve) => {
-        server.close(() => resolve());
+  /* Registration inside a try: a bind or `page.route` failure must not leak
+     the loopback server into the rest of the run. */
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
       });
-      server.closeAllConnections();
-      await closed;
-    },
-  };
+    });
+    const address = server.address();
+    const port =
+      typeof address === "object" && address !== null ? address.port : 0;
+    if (port <= 0) {
+      throw new Error("assistant turn stub failed to bind a loopback port");
+    }
+
+    const handler = (route: Route) =>
+      route.continue({ url: `http://127.0.0.1:${port}/stub/assistant-turn` });
+    await page.route(ASSISTANT_TURN_ROUTE, handler);
+
+    return {
+      requestCount: () => requests,
+      requests: () => bodies,
+      release: () => {
+        released = true;
+        releaseGate?.();
+      },
+      dispose: async () => {
+        releaseGate?.();
+        await page.unroute(ASSISTANT_TURN_ROUTE, handler);
+        const closed = new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+        server.closeAllConnections();
+        await closed;
+      },
+    };
+  } catch (error) {
+    server.closeAllConnections();
+    server.close();
+    throw error;
+  }
 }

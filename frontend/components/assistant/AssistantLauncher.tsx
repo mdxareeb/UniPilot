@@ -202,6 +202,15 @@ const STARTERS: readonly { label: string; href: string }[] = [
  * transport-failure fallback, passed by the shell exactly like the assistant
  * page passes it, so the two surfaces can never drift apart.
  *
+ * C6 closes the short-viewport residual the C5 review disclosed: below roughly
+ * 520px of viewport height the panel's fixed chrome (header + composer) can no
+ * longer fit in `min(36rem, 100dvh - 10rem)`, so at that threshold the panel
+ * itself becomes the scroll container (`[@media(max-height:520px)]`) and its
+ * children stop flexing — the composer wrapper scrolls into view with the
+ * rest instead of being clipped past the panel's visible box. Above the
+ * threshold the committed behaviour is unchanged: the idle region shrinks and
+ * scrolls internally and the composer stays pinned.
+ *
  * Mounted once per shell, inside the element that carries `bg-dotted-grid`.
  * That placement is deliberate on two counts. The dotted canvas utility sets
  * `isolation: isolate`, so the shell is a stacking context — a launcher
@@ -237,7 +246,7 @@ export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
   /* The shared turn hook. It reads no session and no database — it only
      streams the route once a send happens. `refreshOnSettle` is off because
      the panel has no server-rendered rows to reconcile. */
-  const { turn, busy, send } = useAssistantTurn({
+  const { turn, busy, send, stop } = useAssistantTurn({
     conversationId,
     failedCopy,
     refreshOnSettle: false,
@@ -529,9 +538,9 @@ export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
           open={open}
           id={PANEL_ID}
           direction="up"
-          className="flex max-h-[min(36rem,calc(100dvh-10rem))] w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-hidden overscroll-contain rounded-card border border-border bg-glass-strong p-4 shadow-overlay backdrop-blur-md sm:w-[23rem] lg:w-[25rem]"
+          className="flex max-h-[min(36rem,calc(100dvh-10rem))] w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-hidden overscroll-contain rounded-card border border-border bg-glass-strong p-4 shadow-overlay backdrop-blur-md sm:w-[23rem] lg:w-[25rem] [@media(max-height:520px)]:overflow-y-auto"
         >
-          <div className="flex flex-col gap-1">
+          <div className="flex shrink-0 flex-col gap-1">
             <h2 className="text-body-lg font-semibold text-foreground">
               UniPilot Assistant
             </h2>
@@ -539,7 +548,7 @@ export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
               Ask questions, plan your work, or create something.
             </p>
           </div>
-          <Divider />
+          <Divider className="shrink-0" />
           {/* The starter links and the pre-send note are the panel's idle
               state. Once a turn exists they give the room to the conversation
               (the page's empty states give way to the body the same way):
@@ -548,9 +557,12 @@ export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
               resets — a reload, or a shell remount.
               This region is its own `min-h-0 overflow-y-auto` flex child: on
               a short viewport it shrinks and scrolls, so the composer below
-              is never pushed out of the panel with no way back to it. */}
+              is never pushed out of the panel with no way back to it. Below
+              the C6 height threshold the panel itself is the scroll container
+              (see the panel class), so this region stops shrinking and
+              contributes its full height instead. */}
           {turn === null ? (
-            <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
+            <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain [@media(max-height:520px)]:shrink-0 [@media(max-height:520px)]:overflow-visible">
               <ul className="flex list-none flex-wrap gap-2">
                 {STARTERS.map((starter) => (
                   <li key={starter.label} className="min-w-0">
@@ -590,12 +602,16 @@ export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
           {/* The composer is the panel's pinned bottom child — a direct,
               non-shrinking flex item, so a short viewport can shrink the
               scrollable regions above it but can never clip the send path
-              (the panel itself is `overflow-hidden`). */}
+              (the panel itself is `overflow-hidden`). Below the C6 height
+              threshold the panel scrolls as a whole, so this wrapper scrolls
+              into view with it instead of being clipped past the panel's
+              visible box. */}
           <div className="shrink-0">
             <AssistantComposer
               compact
               conversationId={conversationId}
               busy={busy}
+              onStop={stop}
               onSend={(content) => void send(content)}
             />
           </div>

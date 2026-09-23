@@ -29,6 +29,45 @@ export type LocalTurn = {
   failureCopy: string | null;
 };
 
+/**
+ * C6 (deferred C3 Important) — the client-side deadline for a whole turn.
+ *
+ * The read loop below consumes the streaming body; a server or proxy that
+ * accepted the POST and then never wrote a frame or never closed the body
+ * would otherwise pin the composer in `busy` for the rest of the session.
+ * The deadline is composed with the caller's abort controller into the fetch
+ * signal, so a turn that has not settled within this window fails with the
+ * server's sanitized copy (`ASSISTANT_FAILED_COPY` by default) and the
+ * composer recovers — even if the caller never uses Stop. Two minutes is a
+ * deliberate outer bound for one conversational turn: it is generous for any
+ * normal streamed answer, and a turn that genuinely outlives it is cut off
+ * honestly rather than left running invisibly.
+ */
+export const ASSISTANT_TURN_DEADLINE_MS = 120_000;
+
+/**
+ * Composes the caller's abort controller with the client deadline.
+ * `AbortSignal.any` is the native composition where it exists; the manual
+ * fallback keeps older engines (Safari < 17.4) working without it.
+ */
+function composeDeadline(signal: AbortSignal, ms: number): AbortSignal {
+  const deadline = AbortSignal.timeout(ms);
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any([signal, deadline]);
+  }
+  const composed = new AbortController();
+  const abort = (reason: unknown) => composed.abort(reason);
+  if (signal.aborted) abort(signal.reason);
+  else if (deadline.aborted) abort(deadline.reason);
+  else {
+    signal.addEventListener("abort", () => abort(signal.reason), { once: true });
+    deadline.addEventListener("abort", () => abort(deadline.reason), {
+      once: true,
+    });
+  }
+  return composed.signal;
+}
+
 /** A turn belongs to the currently selected conversation, or to a new one. */
 function belongsToSelection(
   turn: LocalTurn,
@@ -88,6 +127,22 @@ export type UseAssistantTurnOptions = {
    * rows to reconcile and passes `false`.
    */
   refreshOnSettle?: boolean;
+  /**
+   * C6 (deferred C4 Important) — reads the caller's selection intent
+   * *synchronously* at settle time, instead of the last committed
+   * `conversationId` prop.
+   *
+   * The handoff guard below must compare against where the caller's selection
+   * is when the stream settles. The prop is one render behind: a create/delete
+   * verb (or a row navigation) can have moved the selection while the turn was
+   * still streaming, and the effect that mirrors the prop has not run yet — so
+   * the handoff would overrule the caller's move. `/assistant` passes a
+   * callback that reads the live URL (which `router.push`/`replace` updates
+   * before the render commits) and its own synchronous verb intent; the
+   * launcher panel, whose selection only ever changes through this hook, keeps
+   * the default.
+   */
+  selectionIntent?: () => string | null;
 };
 
 /**
@@ -119,7 +174,20 @@ export type UseAssistantTurnOptions = {
  * that id to `onConversationStarted`, so the URL (`/assistant`) or the
  * launcher's component state can move to it. That handoff only runs while the
  * selection is still where the send aimed: if the caller has meanwhile selected
- * another conversation, settling must not steal the choice back.
+ * another conversation, settling must not steal the choice back. The
+ * comparison reads the caller's `selectionIntent` synchronously (C6); the
+ * committed prop is only the fallback, because a create/delete verb can move
+ * the selection before this component has re-rendered with it.
+ *
+ * Recovery (C6, closing the deferred C3 Important): a turn has two ways out
+ * that are not a normal settle — the caller's `stop()` (the composer's Stop
+ * control while `busy`) and the client deadline
+ * (`ASSISTANT_TURN_DEADLINE_MS`, composed with the caller's controller into
+ * the fetch signal). Both end the read and settle the entry as a sanitized
+ * failure carrying `failedCopy`, so the composer leaves `busy` instead of
+ * staying wedged on a body that never closes, and no fabricated text is ever
+ * shown. An unmount is the one abort that stays silent: the component that
+ * would have reported it is gone.
  *
  * Visibility is derived, never duplicated: the hook returns the local turn only
  * while it belongs to the currently selected conversation (or to the new one it
@@ -132,8 +200,9 @@ export type UseAssistantTurnOptions = {
  * so it reappears if its conversation is re-selected — it is never invented and
  * never presented as an answer.
  *
- * One turn at a time: `send` refuses while a turn is in flight, and the
- * composer's disabled states make that visible.
+ * One turn at a time: `send` refuses while a turn is in flight, the
+ * composer's disabled states make that visible, and `stop` is the caller's
+ * explicit way out of a stream that never settles.
  */
 export function useAssistantTurn({
   conversationId,
@@ -141,16 +210,26 @@ export function useAssistantTurn({
   messages = [],
   onConversationStarted,
   refreshOnSettle = true,
+  selectionIntent,
 }: UseAssistantTurnOptions) {
   const router = useRouter();
   const [turn, setTurn] = useState<LocalTurn | null>(null);
   const [busy, setBusy] = useState(false);
-  const inFlightRef = useRef(false);
-  const abortRef = useRef<AbortController | null>(null);
+  /* The one turn this tab has in flight, or null. `cancelled` marks an
+     unmount (nothing to report); every other abort — the caller's Stop, the
+     deadline, a network failure — settles as a sanitized failure, so the flag
+     is what decides and a plain `signal.aborted` check would misread a Stop
+     as an unmount. */
+  const inFlightRef = useRef<{
+    controller: AbortController;
+    cancelled: boolean;
+  } | null>(null);
   /* The live selection, read at settle time rather than from the send's
      closure: 19.2's "New conversation" can move the selection while a turn is
      still streaming, and the settle must then leave the caller's choice
-     alone. */
+     alone. The caller's `selectionIntent` (C6) is the synchronous authority;
+     the committed prop is the fallback for callers that have no intent of
+     their own (the launcher panel). */
   const selectionRef = useRef(conversationId);
   useEffect(() => {
     selectionRef.current = conversationId;
@@ -161,20 +240,49 @@ export function useAssistantTurn({
   useEffect(() => {
     startedRef.current = onConversationStarted;
   }, [onConversationStarted]);
+  const intentRef = useRef(selectionIntent);
+  useEffect(() => {
+    intentRef.current = selectionIntent;
+  }, [selectionIntent]);
 
   /* A page unmount (navigation away) cancels the read; the server pipeline
      keeps its own request and persists whatever it settles on. */
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      const flight = inFlightRef.current;
+      if (flight === null) return;
+      flight.cancelled = true;
+      flight.controller.abort();
+    },
+    [],
+  );
+
+  /**
+   * C6 (deferred C3 Important) — the caller's own Stop for a turn that is
+   * still streaming. The abort settles the turn as a sanitized failure
+   * (below), so the composer recovers instead of staying wedged in `busy`.
+   */
+  const stop = useCallback(() => {
+    const flight = inFlightRef.current;
+    if (flight === null) return;
+    flight.controller.abort();
+  }, []);
 
   const send = useCallback(
     async (content: string) => {
-      if (inFlightRef.current) return;
-      inFlightRef.current = true;
+      if (inFlightRef.current !== null) return;
+      const controller = new AbortController();
+      const flight = { controller, cancelled: false };
+      inFlightRef.current = flight;
       setBusy(true);
 
       const targetConversationId = conversationId;
-      const controller = new AbortController();
-      abortRef.current = controller;
+      /* C6 — the client deadline is composed with the caller's controller, so
+         a body that never closes (and never errors) still fails honestly. */
+      const signal = composeDeadline(
+        controller.signal,
+        ASSISTANT_TURN_DEADLINE_MS,
+      );
 
       let entry = createAssistantEntry({ conversationId: targetConversationId });
       const update = (frame: AssistantStreamFrame) => {
@@ -206,7 +314,7 @@ export function useAssistantTurn({
             conversationId: targetConversationId,
             content,
           }),
-          signal: controller.signal,
+          signal,
         });
 
         if (!response.ok) {
@@ -256,19 +364,21 @@ export function useAssistantTurn({
           update({ type: "error", error: failedCopy });
         }
       } catch {
-        /* Aborting on unmount is not a failure to report; anything else is. */
-        if (!controller.signal.aborted) {
+        /* An unmount is not a failure to report; a Stop, the client deadline,
+           a network error or a missing body is — the sanitized copy is the
+           only failure text and the composer recovers below. */
+        if (!flight.cancelled) {
           update({ type: "error", error: failedCopy });
         }
       } finally {
-        abortRef.current = null;
-        inFlightRef.current = false;
-        if (!controller.signal.aborted) {
+        inFlightRef.current = null;
+        if (!flight.cancelled) {
           setBusy(false);
           if (
             entry.conversationId !== null &&
             entry.conversationId !== targetConversationId &&
-            selectionRef.current === targetConversationId
+            (intentRef.current?.() ?? selectionRef.current) ===
+              targetConversationId
           ) {
             startedRef.current?.(entry.conversationId);
           }
@@ -289,5 +399,5 @@ export function useAssistantTurn({
       ? turn
       : null;
 
-  return { turn: visibleTurn, busy, send };
+  return { turn: visibleTurn, busy, send, stop };
 }

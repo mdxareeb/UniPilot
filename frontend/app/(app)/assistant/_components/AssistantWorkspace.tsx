@@ -1,6 +1,11 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   MessageSquareText,
@@ -65,9 +70,10 @@ type AssistantWorkspaceProps = {
  * Server Actions (`assistantActions.ts`) — never a client write and never a
  * fabricated row:
  * - **create** asks the action for a real row, inserts the returned item at the
- *   top of the local list and pushes `?c=<id>`; the composer is focused so the
- *   new conversation is ready to be written into. A failure shows the action's
- *   sanitized copy and leaves the list untouched.
+ *   top of the local list and pushes `?c=<id>`; the composer is focused only
+ *   once the selection has actually committed that id (C6), so the caret can
+ *   never land in the previous conversation's composer on a fast paste+Enter.
+ *   A failure shows the action's sanitized copy and leaves the list untouched.
  * - **rename** is optimistic with rollback (the documents-hub precedent): the
  *   title changes in the sidebar and the panel immediately, the settled row
  *   reconciles from the action's response, and a refusal restores the snapshot
@@ -91,6 +97,13 @@ type AssistantWorkspaceProps = {
  * `POST /api/assistant/turn` through C1's frame vocabulary, then reconciles
  * with the server (`router.refresh()`, plus the URL moving to `?c=` when
  * `start` created a conversation) so the stored rows are the source of truth.
+ *
+ * C6 closes the two deferred C4 review findings here. The hook is given a
+ * synchronous `selectionIntent` (the verb ref above plus the live URL) so a
+ * settle that lands between a create/delete and its committed render compares
+ * against where the caller actually is, never the last committed prop. And the
+ * composer's `stop` is wired through, so a stream that never settles can be
+ * left from either surface; the hook settles it as a sanitized failure.
  *
  * Where the composer is deliberately absent:
  * - a guest gets the guest empty state and no composer (no data, no send);
@@ -127,8 +140,34 @@ export function AssistantWorkspace({
   children,
 }: AssistantWorkspaceProps) {
   const router = useRouter();
-  const { turn, busy, send } = useAssistantTurn({
-    conversationId: selected?.id ?? null,
+  const selectedId = selected?.id ?? null;
+  /* C6 (deferred C4) — the selection *intent*, read synchronously at settle.
+     `router.push`/`replace` update the address bar before the server render
+     commits, so the live URL is the authority; the verb ref covers the instant
+     between a create/delete resolving and that navigation reaching the URL. It
+     is only consulted while the URL still names the selection the verb ran
+     against, so a later move by the caller always wins. */
+  const intentRef = useRef<{ id: string | null; at: string | null } | null>(null);
+  const liveSelection = useCallback(
+    () => new URLSearchParams(window.location.search).get("c"),
+    [],
+  );
+  const selectionIntent = useCallback((): string | null => {
+    const live = liveSelection();
+    const intent = intentRef.current;
+    if (intent !== null && live === intent.at) return intent.id;
+    return live;
+  }, [liveSelection]);
+
+  /* The create verb's new conversation until the selection commits (C6). The
+     composer may not focus before `selectedId` equals this id, and while it is
+     pending it is the honest send target: the returned row is real, so a send
+     before the URL commits belongs to it, never to the previous conversation. */
+  const [pendingCreateId, setPendingCreateId] = useState<string | null>(null);
+  const createOriginRef = useRef<string | null>(null);
+
+  const { turn, busy, send, stop } = useAssistantTurn({
+    conversationId: pendingCreateId ?? selectedId,
     failedCopy,
     messages,
     /* The page owns its URL: a `start` frame for a conversation the send did
@@ -139,6 +178,7 @@ export function AssistantWorkspace({
       router.replace(`/assistant?c=${encodeURIComponent(conversationId)}`, {
         scroll: false,
       }),
+    selectionIntent,
   });
   const showComposer = !guest && !selectionUnavailable;
 
@@ -157,7 +197,26 @@ export function AssistantWorkspace({
   const [notice, setNotice] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState(0);
 
-  const selectedId = selected?.id ?? null;
+  /* C6 — the create verb's selection lands as a real navigation: focus the
+     composer only once the URL/selection has actually committed the created
+     id, so a fast paste+Enter can never write into the conversation the caller
+     just left. If the caller picks another row first, the intent is abandoned
+     rather than stealing focus later. React's documented render-phase
+     adjustment (the same idiom the list above uses) keeps the focus request in
+     the very commit that carries the new selection. */
+  const [trackedSelectionId, setTrackedSelectionId] = useState(selectedId);
+  if (trackedSelectionId !== selectedId) {
+    setTrackedSelectionId(selectedId);
+    if (pendingCreateId !== null) {
+      if (selectedId === pendingCreateId) {
+        setPendingCreateId(null);
+        setFocusRequest((request) => request + 1);
+      } else if (selectedId !== createOriginRef.current) {
+        setPendingCreateId(null);
+      }
+    }
+  }
+
   /* The optimistic copy of the selected row (a rename lands here before the
      server render does), falling back to the server's own item. */
   const selectedItem =
@@ -193,16 +252,22 @@ export function AssistantWorkspace({
 
     const created = result.conversation;
     /* The returned row is real (the action inserted it), so showing it now is
-       not a fabricated success — and the URL moves with it. */
+       not a fabricated success — and the URL moves with it. C6: the composer
+       focus waits for the selection commit (the render-phase adjustment
+       above), and until then the created id is what a send targets and what a
+       settle guard compares against — never the conversation the caller just
+       left. */
     setList((current) => [
       created,
       ...current.filter((conversation) => conversation.id !== created.id),
     ]);
-    setFocusRequest((request) => request + 1);
+    createOriginRef.current = selectionIntent();
+    intentRef.current = { id: created.id, at: createOriginRef.current };
+    setPendingCreateId(created.id);
     router.push(`/assistant?c=${encodeURIComponent(created.id)}`, {
       scroll: false,
     });
-  }, [creating, failedCopy, router]);
+  }, [creating, failedCopy, router, selectionIntent]);
 
   const rename = useCallback(
     async (id: string, title: string): Promise<string | null> => {
@@ -274,7 +339,13 @@ export function AssistantWorkspace({
       if (moveSelection) {
         /* The next most recent conversation, or the honest no-selection state
            — the URL and the selection move together, never silently to a row
-           the caller did not ask for. */
+           the caller did not ask for. C6: the intent is recorded
+           synchronously, so a turn that settles before this navigation
+           commits can never pull the selection back to the deleted id. */
+        intentRef.current = {
+          id: next?.id ?? null,
+          at: liveSelection(),
+        };
         router.replace(
           next === null
             ? "/assistant"
@@ -286,7 +357,7 @@ export function AssistantWorkspace({
       }
       return null;
     },
-    [list, selectedId, failedCopy, router],
+    [list, selectedId, failedCopy, router, liveSelection],
   );
 
   const statusLine = selected
@@ -356,8 +427,9 @@ export function AssistantWorkspace({
 
           {showComposer ? (
             <AssistantComposer
-              conversationId={selectedId}
+              conversationId={pendingCreateId ?? selectedId}
               busy={busy}
+              onStop={stop}
               focusRequest={focusRequest}
               onSend={(content) => void send(content)}
             />

@@ -45,10 +45,26 @@
  *    the shell is prompted instead of given a panel, and a marketing guest's
  *    401 surfaces the route's own copy with no fabricated reply and no
  *    per-user read.
+ * 6. C6 (19.13/19.15 closeout): the responsive and accessibility pass and the
+ *    deferred review fixes. `/assistant` renders at 320/375/768/1024/1280 and
+ *    in a 667×375 landscape viewport with no horizontal overflow and no
+ *    clipped primary control; the launcher panel holds the same contract at
+ *    every width and, below the 520px height threshold, scrolls its composer
+ *    into reach instead of clipping it. The composer's keyboard contract
+ *    (label, described hint, chips, Enter/Shift+Enter, busy) and the shell's
+ *    live regions are asserted; the rename form and the shared delete `Modal`
+ *    are exercised for focus placement and return; the launcher's bar, bubble
+ *    and panel are exercised for keyboard focus handoff; and a reduced-motion
+ *    context proves both surfaces render content immediately. The deferred
+ *    fixes are pinned here too: Stop recovers a stream that never closes, the
+ *    non-OK / missing-body / truncated-stream branches settle with sanitized
+ *    copy, a created conversation's composer focus waits for the selection
+ *    commit, and a settle during a held create navigation never steals the
+ *    caller's selection.
  *
  * This project stays green with no provider configured.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Route } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { ASSISTANT_UNCONFIGURED_COPY } from "../../lib/ai/provider";
 import {
@@ -495,6 +511,73 @@ async function waitForAssistantTree(page: Page): Promise<void> {
   ).toHaveCount(0);
 }
 
+/**
+ * C6 — holds client-side navigation fetches to `/assistant` open.
+ *
+ * Both deferred C4 fixes are windows that close as soon as the router commits
+ * the new selection: the created conversation's focus must wait for that
+ * commit, and a settle must read the caller's intent as it is *now*, not as
+ * the last committed prop. Holding Next's RSC navigation fetch (a GET to
+ * `/assistant`, not a document load; the created row's own prefetch is held
+ * the same way, so no request path can commit the selection early) keeps that
+ * window open long enough to prove both deterministically.
+ */
+type HeldAssistantNavigation = {
+  /** Resolves once a navigation fetch is held; never resolves if none comes. */
+  engaged: Promise<void>;
+  /** The URL of the first held navigation (its `?c=` is the target selection). */
+  heldUrl: () => string | null;
+  /** Lets every held navigation continue. */
+  release: () => void;
+  /** Removes the interception. */
+  dispose: () => Promise<void>;
+};
+
+async function holdAssistantNavigation(
+  page: Page,
+  /** The selection currently committed: its refreshes/prefetches pass through. */
+  current: string | null,
+): Promise<HeldAssistantNavigation> {
+  let releaseGate: (() => void) | null = null;
+  const released = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  let signalEngaged: (() => void) | null = null;
+  const engaged = new Promise<void>((resolve) => {
+    signalEngaged = resolve;
+  });
+  let heldUrl: string | null = null;
+
+  const handler = async (route: Route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const selection = url.searchParams.get("c");
+    const isTargetNavigation =
+      request.method() === "GET" &&
+      url.pathname === "/assistant" &&
+      request.resourceType() !== "document" &&
+      selection !== current;
+    if (!isTargetNavigation) {
+      /* Defer, never continue: this handler shares the page with the turn
+         stub, and `route.continue()` would bypass that later handler. */
+      await route.fallback();
+      return;
+    }
+    if (heldUrl === null) heldUrl = request.url();
+    signalEngaged?.();
+    await released;
+    await route.fallback();
+  };
+
+  await page.route("**/assistant**", handler);
+  return {
+    engaged,
+    heldUrl: () => heldUrl,
+    release: () => releaseGate?.(),
+    dispose: () => page.unroute("**/assistant**", handler),
+  };
+}
+
 test.describe("assistant conversation shell (live)", () => {
   let service: SupabaseClient;
   let qa1Id = "";
@@ -645,6 +728,35 @@ test.describe("assistant conversation shell (live)", () => {
       .in("conversation_id", ids);
     expect(messageResidue.error).toBeNull();
     expect(messageResidue.data ?? [], "no message residue").toHaveLength(0);
+
+    /* C6 residue hole: the create test and the panel's live send track their
+       rows by URL id, but a failure before the URL surfaced could strand one.
+       This owner-scoped, creation-window sweep catches exactly the rows a UI
+       flow can create: the create verb's own title ("New conversation") and
+       any row whose title carries this spec's PREFIX (a composer first send
+       derives the title from the typed text). Seeded rows are explicitly
+       future-dated and tracked by id, so they are never in this window; the
+       window starts at this test's own `beforeEach` timestamp. Messages
+       cascade with the conversations. */
+    const uiSweep = await service
+      .from("conversations")
+      .delete()
+      .eq("user_id", qa1Id)
+      .gte("created_at", testStartedAt)
+      .or(`title.eq."New conversation",title.like."${PREFIX}%"`)
+      .select("id");
+    expect(uiSweep.error, `teardown UI sweep: ${uiSweep.error?.message}`).toBeNull();
+
+    const uiResidue = await service
+      .from("conversations")
+      .select("id")
+      .eq("user_id", qa1Id)
+      .gte("created_at", testStartedAt)
+      .or(`title.eq."New conversation",title.like."${PREFIX}%"`);
+    expect(uiResidue.error).toBeNull();
+    expect(uiResidue.data ?? [], "no UI-created conversation residue").toHaveLength(
+      0,
+    );
   });
 
   test("sidebar order, selection and the stored bubbles", async ({ page }) => {
@@ -898,7 +1010,9 @@ test.describe("assistant conversation shell (live)", () => {
     await context.close();
   });
 
-  test("renders at 375, 768 and 1280 with no horizontal overflow", async ({ page }) => {
+  test("renders at 320, 375, 768, 1024 and 1280 with no horizontal overflow", async ({
+    page,
+  }) => {
     test.slow();
     const errors = trackConsoleErrors(page);
 
@@ -911,8 +1025,10 @@ test.describe("assistant conversation shell (live)", () => {
     await seedMessage(conversation, "assistant", `${PREFIX} responsive answer`);
 
     for (const [width, height] of [
+      [320, 568],
       [375, 812],
       [768, 1024],
+      [1024, 768],
       [1280, 900],
     ] as const) {
       await page.setViewportSize({ width, height });
@@ -921,28 +1037,82 @@ test.describe("assistant conversation shell (live)", () => {
       await expect(page.locator("[data-message-list]")).toContainText(
         `${PREFIX} responsive answer`,
       );
-      // The composer (19.7–19.9) is part of the shell at every width.
+      // The composer (19.7–19.9) is part of the shell at every width, and the
+      // provider verdict stays honest at every width.
       await expect(page.locator("[data-assistant-composer]")).toBeVisible();
       await expect(page.locator("[data-assistant-input]")).toBeVisible();
       await expect(page.locator("[data-assistant-send]")).toBeVisible();
+      await expect(page.locator('[data-assistant-status="unconfigured"]')).toBeAttached();
+      await expect(page.locator("[data-assistant-unconfigured]")).toBeVisible();
+      await expect(page.locator('[data-assistant-empty="empty-conversation"]')).toHaveCount(0);
 
       // Let the shared entrance ladder settle before measuring/shooting.
       await page.waitForTimeout(600);
-      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-      }));
+      const metrics = await page.evaluate(() => {
+        const send = document.querySelector("[data-assistant-send]");
+        const composer = document.querySelector("[data-assistant-composer]");
+        if (send === null || composer === null) return null;
+        return {
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+          send: send.getBoundingClientRect().toJSON(),
+          composer: composer.getBoundingClientRect().toJSON(),
+        };
+      });
+      expect(metrics, `${width}px: the composer is mounted`).not.toBeNull();
       expect(
-        scrollWidth,
-        `${width}px must not scroll horizontally (scrollWidth ${scrollWidth} > clientWidth ${clientWidth})`,
-      ).toBeLessThanOrEqual(clientWidth);
+        metrics!.scrollWidth,
+        `${width}px must not scroll horizontally (scrollWidth ${metrics!.scrollWidth} > clientWidth ${metrics!.clientWidth})`,
+      ).toBeLessThanOrEqual(metrics!.clientWidth);
+      // No clipped primary control: Send and the composer sit inside the
+      // viewport's horizontal box (a control past the right edge is the
+      // failure mode `scrollWidth` alone would not catch once the page wraps).
+      expect(metrics!.send.left, `${width}px: Send starts on-screen`).toBeGreaterThanOrEqual(-1);
+      expect(
+        metrics!.send.right,
+        `${width}px: Send ends on-screen`,
+      ).toBeLessThanOrEqual(metrics!.clientWidth + 1);
+      expect(
+        metrics!.composer.left,
+        `${width}px: the composer starts on-screen`,
+      ).toBeGreaterThanOrEqual(-1);
+      expect(
+        metrics!.composer.right,
+        `${width}px: the composer ends on-screen`,
+      ).toBeLessThanOrEqual(metrics!.clientWidth + 1);
 
       // Real-Chromium evidence for the task report (git-ignored directory).
       await page.screenshot({
-        path: `screenshots/c2-assistant-${width}.png`,
+        path: `screenshots/c6-assistant-${width}.png`,
         fullPage: true,
       });
     }
+
+    // C6 landscape residual: a phone-height viewport (667×375) must still
+    // reach the composer, through the document's own scroll — the page is a
+    // normal scrolling document, so `scrollIntoViewIfNeeded` is the proof
+    // that no fixed chrome traps the send path.
+    await page.setViewportSize({ width: 667, height: 375 });
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+    const landscapeComposer = page.locator("[data-assistant-composer]");
+    await landscapeComposer.scrollIntoViewIfNeeded();
+    await expect(landscapeComposer).toBeVisible();
+    await expect(page.locator("[data-assistant-input]")).toBeVisible();
+    await expect(page.locator("[data-assistant-send]")).toBeVisible();
+    await page.waitForTimeout(600);
+    const landscape = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(
+      landscape.scrollWidth,
+      "667×375 must not scroll horizontally",
+    ).toBeLessThanOrEqual(landscape.clientWidth);
+    await page.screenshot({
+      path: "screenshots/c6-assistant-667x375.png",
+      fullPage: true,
+    });
 
     expect(errors, "the responsive pass stays console-clean").toEqual([]);
   });
@@ -1080,7 +1250,9 @@ test.describe("assistant conversation shell (live)", () => {
         messageId: "stub-c3-message",
       }),
     ];
-    const stub = await stubAssistantTurn(page, { chunks, holdAfter: 2 });
+    /* C6: a small gapMs so the split frame really arrives in separate reads
+       (the wire carry path), not coalesced into one chunk. */
+    const stub = await stubAssistantTurn(page, { chunks, holdAfter: 2, gapMs: 25 });
 
     try {
       await page.goto(`/assistant?c=${conversation}`);
@@ -1402,6 +1574,213 @@ test.describe("assistant conversation shell (live)", () => {
     }
   });
 
+  test("Stop ends a stream that never closes and recovers with the sanitized copy", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "stopped stream",
+      ahead(FUTURE_MINUTES),
+    );
+    /* C6 (deferred C3 Important): the stub writes the start frame and then
+       holds the body open forever — a live stream that never closes. Without
+       the Stop affordance the composer would stay wedged in `busy`. */
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: conversation,
+          configured: true,
+        }),
+      ],
+      holdAfter: 1,
+    });
+
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      const composer = page.locator("[data-assistant-composer]");
+      const input = page.locator("[data-assistant-input]");
+      const send = page.locator("[data-assistant-send]");
+      const stop = page.locator("[data-assistant-stop]");
+
+      await input.fill(`${PREFIX} never closes`);
+      await input.press("Enter");
+      await expect.poll(() => stub.requestCount()).toBe(1);
+      // Busy, with a real way out; the field stays typable.
+      await expect(composer).toHaveAttribute("aria-busy", "true");
+      await expect(stop).toBeVisible();
+      await expect(send).toBeDisabled();
+      await expect(input).toBeEnabled();
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: "screenshots/c6-stream-busy.png" });
+
+      await stop.click();
+
+      // The abort settles as a sanitized failure: the composer recovers,
+      // focus returns to the textarea, and the only failure text is the
+      // server's copy — never invented answer text.
+      const bubble = page.locator(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      await expect(bubble).toHaveAttribute("data-message-status", "failed");
+      await expect(bubble.locator("[data-assistant-failure]")).toHaveText(
+        FAILED_COPY,
+      );
+      await expect(bubble.locator("[data-message-content]")).toHaveCount(0);
+      await expect(bubble).not.toContainText(ASSISTANT_UNCONFIGURED_COPY);
+      await expect(composer).toHaveAttribute("aria-busy", "false");
+      await expect(stop).toHaveCount(0);
+      await expect(input).toBeFocused();
+      await page.screenshot({ path: "screenshots/c6-stream-stopped.png" });
+
+      // Recovered means sendable: a second turn reaches the stub.
+      await input.fill(`${PREFIX} after the stop`);
+      await expect(send).toBeEnabled();
+      await input.press("Enter");
+      await expect.poll(() => stub.requestCount()).toBe(2);
+      await expect(composer).toHaveAttribute("aria-busy", "true");
+      expect(errors, "the stopped turn stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("a non-OK response uses the route's copy, else the sanitized fallback", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "non-OK turn",
+      ahead(FUTURE_MINUTES),
+    );
+    const bubble = page.locator(
+      '[data-message-role="assistant"][data-message-local]',
+    );
+
+    /* C6 (deferred C3 minor): the non-OK branch with a real JSON `{ error }`
+       body — the route's own sanitized copy is the failure text. */
+    const refused = await stubAssistantTurn(page, {
+      status: 401,
+      chunks: ['{"error":"Sign in to use the assistant."}'],
+    });
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      await page.locator("[data-assistant-input]").fill(`${PREFIX} unauthorized`);
+      await page.locator("[data-assistant-send]").click();
+
+      await expect(bubble).toHaveAttribute("data-message-status", "failed");
+      await expect(bubble.locator("[data-assistant-failure]")).toHaveText(
+        "Sign in to use the assistant.",
+      );
+      await expect(bubble.locator("[data-message-content]")).toHaveCount(0);
+      await expect(page.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+    } finally {
+      await refused.dispose();
+    }
+
+    /* And the same branch with a body that is not JSON: the server-passed
+       transport fallback is used, never a guessed message. */
+    const broken = await stubAssistantTurn(page, {
+      status: 500,
+      chunks: ["<html>upstream failed</html>"],
+    });
+    try {
+      await page.locator("[data-assistant-input]").fill(`${PREFIX} server error`);
+      await page.locator("[data-assistant-send]").click();
+      await expect(bubble).toHaveAttribute("data-message-status", "failed");
+      await expect(bubble.locator("[data-assistant-failure]")).toHaveText(
+        FAILED_COPY,
+      );
+      await expect(bubble.locator("[data-message-content]")).toHaveCount(0);
+    } finally {
+      await broken.dispose();
+    }
+
+    // The deliberate non-OK responses are logged by Chromium at the network
+    // layer ("Failed to load resource … 401/500"); the app adds no console
+    // error of its own, and the copy assertions above prove both were handled.
+    const unexpected = errors.filter(
+      (message) => !/Failed to load resource.*(401|500)/.test(message),
+    );
+    expect(unexpected, "the non-OK turns stay console-clean").toEqual([]);
+  });
+
+  test("a missing body and a truncated stream both settle as sanitized failures", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "broken streams",
+      ahead(FUTURE_MINUTES),
+    );
+    const bubble = page.locator(
+      '[data-message-role="assistant"][data-message-local]',
+    );
+
+    /* C6 (deferred C3 minor): an OK response with no body at all (204) is a
+       failure, never an empty answer. */
+    const noBody = await stubAssistantTurn(page, { status: 204, chunks: [] });
+    try {
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      await page.locator("[data-assistant-input]").fill(`${PREFIX} no body`);
+      await page.locator("[data-assistant-send]").click();
+
+      await expect(bubble).toHaveAttribute("data-message-status", "failed");
+      await expect(bubble.locator("[data-assistant-failure]")).toHaveText(
+        FAILED_COPY,
+      );
+      await expect(bubble.locator("[data-message-content]")).toHaveCount(0);
+      await expect(page.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+    } finally {
+      await noBody.dispose();
+    }
+
+    /* A body that ends without any terminal frame keeps exactly the delivered
+       text and is marked failed — a truncated turn is not a silent success. */
+    const truncated = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: conversation,
+          configured: true,
+        }),
+        frameToSse({ type: "delta", text: "Half an answer" }),
+      ],
+    });
+    try {
+      await page.locator("[data-assistant-input]").fill(`${PREFIX} truncated`);
+      await page.locator("[data-assistant-send]").click();
+      await expect(bubble).toHaveAttribute("data-message-status", "failed");
+      await expect(bubble.locator("[data-message-content]")).toHaveText(
+        "Half an answer",
+      );
+      await expect(bubble.locator("[data-assistant-failure]")).toHaveText(
+        FAILED_COPY,
+      );
+      await expect(bubble).toContainText("Failed");
+      await expect(page.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+    } finally {
+      await truncated.dispose();
+    }
+
+    expect(errors, "the broken streams stay console-clean").toEqual([]);
+  });
+
   test("the first send from the no-conversations state starts the conversation", async ({
     page,
   }) => {
@@ -1642,13 +2021,25 @@ test.describe("assistant conversation shell (live)", () => {
       renamed,
     );
 
-    const stored = await service
-      .from("conversations")
-      .select("title")
-      .eq("id", first)
-      .single();
-    expect(stored.error, `read renamed row: ${stored.error?.message}`).toBeNull();
-    expect((stored.data as { title: string } | null)?.title).toBe(renamed);
+    /* C6 (deferred minor): the action's response and the row it wrote are not
+       the same instant, so poll the stored title instead of reading once. */
+    await expect
+      .poll(
+        async () => {
+          const stored = await service
+            .from("conversations")
+            .select("title")
+            .eq("id", first)
+            .single();
+          expect(
+            stored.error,
+            `read renamed row: ${stored.error?.message}`,
+          ).toBeNull();
+          return (stored.data as { title: string } | null)?.title ?? null;
+        },
+        { message: "the rename never reached the stored row", timeout: 10_000 },
+      )
+      .toBe(renamed);
 
     await page.reload();
     await waitForAssistantTree(page);
@@ -1778,6 +2169,167 @@ test.describe("assistant conversation shell (live)", () => {
     expect(errors, "the refused delete stays console-clean").toEqual([]);
   });
 
+  test("New conversation focuses the composer only once the selection commits", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const existing = await seedConversation(qa1Id, "focus origin", ahead(-5));
+
+    await page.goto(`/assistant?c=${existing}`);
+    await waitForAssistantTree(page);
+    await expect(page.locator("[data-conversation-title]")).toHaveText(
+      `${PREFIX} focus origin`,
+    );
+
+    /* Hold the create navigation open: the window in which the C4 defect
+       focused the previous conversation's composer before the new selection
+       had committed. */
+    const navigation = await holdAssistantNavigation(page, existing);
+    try {
+      await page.locator('[data-assistant-new="sidebar"]').click();
+
+      // The action resolved (the real row is in the sidebar) but its
+      // navigation is held: the selection has not committed yet.
+      const createdRow = page.locator("[data-conversation-id]").first();
+      await expect(createdRow).toContainText("New conversation");
+      const createdId = await createdRow.getAttribute("data-conversation-id");
+      expect(createdId, "the created row carries no id").not.toBeNull();
+      if (createdId === null) throw new Error("create never produced an id");
+      createdConversationIds.push(createdId);
+
+      await navigation.engaged;
+      await page.waitForTimeout(400);
+      await expect(page.locator("[data-assistant-composer]")).toBeVisible();
+      await expect(page.locator("[data-conversation-title]")).toHaveText(
+        `${PREFIX} focus origin`,
+      );
+      await expect(page.locator("[data-assistant-input]")).not.toBeFocused();
+
+      navigation.release();
+
+      // The held navigation was the create's own target, and the commit lands
+      // only now — with the caret arriving with it.
+      const held = navigation.heldUrl();
+      expect(held, "the create navigation never reached the router").not.toBeNull();
+      expect(
+        new URL(held!, "http://localhost:3000").searchParams.get("c"),
+        "the held navigation must name the created conversation",
+      ).toBe(createdId);
+      await expect(page.locator("[data-conversation-title]")).toHaveText(
+        "New conversation",
+      );
+      await expect(page.locator("[data-assistant-input]")).toBeFocused();
+
+      /* The typed send targets the created conversation — the exact harm the
+         deferred C4 finding described (a fast paste+Enter writing into the
+         conversation the caller just left). */
+      const turnStub = await stubAssistantTurn(page, {
+        chunks: [
+          frameToSse({
+            type: "start",
+            conversationId: createdId,
+            configured: true,
+          }),
+          frameToSse({ type: "done", status: "complete", messageId: null }),
+        ],
+      });
+      try {
+        await page.locator("[data-assistant-input]").fill(`${PREFIX} fast write`);
+        await page.locator("[data-assistant-input]").press("Enter");
+        await expect.poll(() => turnStub.requests().length).toBe(1);
+        expect(turnStub.requests()[0]).toEqual({
+          conversationId: createdId,
+          content: `${PREFIX} fast write`,
+        });
+      } finally {
+        await turnStub.dispose();
+      }
+      expect(errors, "the create-focus flow stays console-clean").toEqual([]);
+    } finally {
+      navigation.release();
+      await navigation.dispose();
+    }
+  });
+
+  test("a settle during a held create navigation never steals the new selection", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const origin = await seedConversation(qa1Id, "steal origin", ahead(-5));
+    const announcedId = "11111111-1111-1111-1111-111111111111";
+
+    /* The stream is held before any frame; when it settles it announces a
+       conversation the send did not target (the stub's `start`), which is the
+       handoff the settle guard exists for. */
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: announcedId,
+          configured: true,
+        }),
+        frameToSse({ type: "done", status: "complete", messageId: null }),
+      ],
+      holdAfter: 0,
+    });
+    const navigation = await holdAssistantNavigation(page, origin);
+
+    try {
+      await page.goto(`/assistant?c=${origin}`);
+      await waitForAssistantTree(page);
+      await page.locator("[data-assistant-input]").fill(`${PREFIX} steal probe`);
+      await page.locator("[data-assistant-input]").press("Enter");
+      await expect.poll(() => stub.requestCount()).toBe(1);
+      await expect(page.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "true",
+      );
+
+      // The caller asks for a new conversation while the turn is still
+      // streaming; its navigation is held open so the settle lands before the
+      // selection prop commits — the window the deferred C4 finding named.
+      await page.locator('[data-assistant-new="sidebar"]').click();
+      const createdRow = page.locator("[data-conversation-id]").first();
+      await expect(createdRow).toContainText("New conversation");
+      const createdId = await createdRow.getAttribute("data-conversation-id");
+      expect(createdId, "the created row carries no id").not.toBeNull();
+      if (createdId === null) throw new Error("create never produced an id");
+      createdConversationIds.push(createdId);
+      await navigation.engaged;
+
+      stub.release();
+
+      // The settle runs entirely inside the held window: the composer leaves
+      // busy with the new selection still pending.
+      await expect(page.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+
+      navigation.release();
+
+      // The caller's choice stands: the URL commits the created conversation,
+      // never the stream's announced one, and no selection was stolen.
+      await expect(page).toHaveURL(new RegExp(`c=${createdId}`));
+      await expect(page.locator("[data-conversation-title]")).toHaveText(
+        "New conversation",
+      );
+      expect(page.url()).not.toContain(announcedId);
+      await expect(
+        page.locator(`[data-conversation-id="${createdId}"]`),
+      ).toHaveAttribute("aria-current", "true");
+      expect(errors, "the held create navigation stays console-clean").toEqual(
+        [],
+      );
+    } finally {
+      navigation.release();
+      await navigation.dispose();
+      await stub.dispose();
+    }
+  });
+
   /* -----------------------------------------------------------------------
      C5 (19.16) — the global launcher panel as a real conversation surface.
      The panel renders the shared architecture (`components/assistant/`): the
@@ -1854,6 +2406,7 @@ test.describe("assistant conversation shell (live)", () => {
 
     try {
       for (const [width, height] of [
+        [320, 568],
         [375, 667],
         [1280, 640],
       ] as const) {
@@ -1926,7 +2479,7 @@ test.describe("assistant conversation shell (live)", () => {
           ),
         ).toHaveText(`${PREFIX} short ${width}`);
 
-        // The launcher chrome stays inside the viewport at both widths.
+        // The launcher chrome stays inside the viewport at every width.
         const { scrollWidth, clientWidth } = await page.evaluate(() => ({
           scrollWidth: document.documentElement.scrollWidth,
           clientWidth: document.documentElement.clientWidth,
@@ -1937,7 +2490,7 @@ test.describe("assistant conversation shell (live)", () => {
         ).toBeLessThanOrEqual(clientWidth);
       }
 
-      expect(stub.requestCount(), "both sends reached the stub").toBe(2);
+      expect(stub.requestCount(), "every viewport's send reached the stub").toBe(3);
       expect(errors, "the short-viewport panel stays console-clean").toEqual([]);
     } finally {
       await stub.dispose();
@@ -2043,7 +2596,9 @@ test.describe("assistant conversation shell (live)", () => {
         messageId: "stub-c5-message",
       }),
     ];
-    const stub = await stubAssistantTurn(page, { chunks, holdAfter: 2 });
+    /* C6: a small gapMs so the split frame really arrives in separate reads
+       (the wire carry path), not coalesced into one chunk. */
+    const stub = await stubAssistantTurn(page, { chunks, holdAfter: 2, gapMs: 25 });
 
     try {
       await page.goto("/tasks");
@@ -2215,5 +2770,394 @@ test.describe("assistant conversation shell (live)", () => {
     );
     expect(unexpected, "the marketing panel stays console-clean").toEqual([]);
     await context.close();
+  });
+
+  test("the launcher panel keeps its controls reachable across widths and in landscape viewports", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    /* A settled stub, so the reachability proof never spends a real turn. */
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: "c6-landscape",
+          configured: true,
+        }),
+        frameToSse({ type: "done", status: "complete", messageId: null }),
+      ],
+    });
+
+    try {
+      for (const [width, height] of [
+        [667, 375],
+        [1024, 500],
+      ] as const) {
+        await page.setViewportSize({ width, height });
+        await page.goto("/tasks");
+        await page
+          .getByRole("button", { name: /Ask UniPilot anything/i })
+          .click();
+        const panel = page.locator("#unipilot-assistant-panel");
+        await expect(panel).toBeVisible();
+        const composer = panel.locator("[data-assistant-composer]");
+        const input = panel.locator("[data-assistant-input]");
+        const send = panel.locator("[data-assistant-send]");
+
+        // C6: below the height threshold the panel itself is the scroll
+        // container. Scroll it to the bottom and prove the composer wrapper
+        // (with every primary control in it) is inside the panel's visible box
+        // and the viewport — no `overflow-hidden` dead end.
+        await panel.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+        await expect(composer).toBeVisible();
+        await expect(input).toBeVisible();
+        await expect(send).toBeVisible();
+
+        const reachable = await page.evaluate(() => {
+          const panelEl = document.querySelector("#unipilot-assistant-panel");
+          const composerEl = panelEl?.querySelector("[data-assistant-composer]");
+          const sendEl = panelEl?.querySelector("[data-assistant-send]");
+          if (!panelEl || !composerEl || !sendEl) return null;
+          const pr = panelEl.getBoundingClientRect();
+          const inside = (rect: DOMRect) =>
+            rect.top >= pr.top - 1 &&
+            rect.bottom <= pr.bottom + 1 &&
+            rect.bottom <= window.innerHeight + 1;
+          return {
+            panelScrollable: panelEl.scrollHeight > panelEl.clientHeight,
+            panelScrollTop: panelEl.scrollTop,
+            composerInside: inside(composerEl.getBoundingClientRect()),
+            sendInside: inside(sendEl.getBoundingClientRect()),
+          };
+        });
+        expect(reachable, "the panel's chat chrome is mounted").not.toBeNull();
+        expect(
+          reachable!.panelScrollable,
+          `${width}×${height}: the panel must offer a scroll path below the height threshold`,
+        ).toBe(true);
+        expect(
+          reachable!.panelScrollTop,
+          `${width}×${height}: the panel scrolled to its reachable bottom`,
+        ).toBeGreaterThan(0);
+        expect(
+          reachable!.composerInside,
+          `${width}×${height}: the composer sits inside the panel's visible box`,
+        ).toBe(true);
+        expect(
+          reachable!.sendInside,
+          `${width}×${height}: Send sits inside the panel's visible box`,
+        ).toBe(true);
+
+        if (width === 667) {
+          await page.waitForTimeout(600);
+          await page.screenshot({ path: "screenshots/c6-panel-landscape.png" });
+        }
+
+        // The reachable composer still sends, and the exchange that grows
+        // above it keeps the same reachable path.
+        await input.fill(`${PREFIX} landscape ${width}`);
+        await expect(send).toBeEnabled();
+        await send.click();
+        await expect(
+          panel.locator(
+            '[data-message-role="user"][data-message-local] [data-message-content]',
+          ),
+        ).toHaveText(`${PREFIX} landscape ${width}`);
+        await panel.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+        await expect(send).toBeVisible();
+        await expect(send).toBeInViewport();
+
+        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }));
+        expect(
+          scrollWidth,
+          `${width}px must not scroll horizontally`,
+        ).toBeLessThanOrEqual(clientWidth);
+      }
+
+      // The committed pinned layout, above the height threshold: at every task
+      // width the composer and Send sit inside the panel's visible box and the
+      // viewport without any scrolling, and the panel never widens the page.
+      for (const [width, height] of [
+        [320, 568],
+        [375, 667],
+        [768, 720],
+        [1024, 768],
+        [1280, 900],
+      ] as const) {
+        await page.setViewportSize({ width, height });
+        await page.goto("/tasks");
+        await page
+          .getByRole("button", { name: /Ask UniPilot anything/i })
+          .click();
+        const panel = page.locator("#unipilot-assistant-panel");
+        await expect(panel).toBeVisible();
+        await expect(panel.locator("[data-assistant-composer]")).toBeVisible();
+        await expect(panel.locator("[data-assistant-input]")).toBeVisible();
+        await expect(panel.locator("[data-assistant-send]")).toBeVisible();
+
+        const pinned = await page.evaluate(() => {
+          const panelEl = document.querySelector("#unipilot-assistant-panel");
+          const composerEl = panelEl?.querySelector("[data-assistant-composer]");
+          const sendEl = panelEl?.querySelector("[data-assistant-send]");
+          if (!panelEl || !composerEl || !sendEl) return null;
+          const pr = panelEl.getBoundingClientRect();
+          const inside = (rect: DOMRect) =>
+            rect.top >= pr.top - 1 &&
+            rect.bottom <= pr.bottom + 1 &&
+            rect.bottom <= window.innerHeight + 1;
+          return {
+            panelScrollTop: panelEl.scrollTop,
+            composerInside: inside(composerEl.getBoundingClientRect()),
+            sendInside: inside(sendEl.getBoundingClientRect()),
+            scrollWidth: document.documentElement.scrollWidth,
+            clientWidth: document.documentElement.clientWidth,
+          };
+        });
+        expect(pinned, "the panel's chat chrome is mounted").not.toBeNull();
+        expect(
+          pinned!.panelScrollTop,
+          `${width}×${height}: the pinned panel is not scrolled`,
+        ).toBe(0);
+        expect(
+          pinned!.composerInside,
+          `${width}×${height}: the composer sits inside the panel's visible box`,
+        ).toBe(true);
+        expect(
+          pinned!.sendInside,
+          `${width}×${height}: Send sits inside the panel's visible box`,
+        ).toBe(true);
+        expect(
+          pinned!.scrollWidth,
+          `${width}px must not scroll horizontally`,
+        ).toBeLessThanOrEqual(pinned!.clientWidth);
+
+        await page.keyboard.press("Escape");
+        await expect(panel).not.toBeVisible();
+      }
+
+      expect(stub.requestCount(), "both landscape sends reached the stub").toBe(2);
+      expect(errors, "the landscape panel stays console-clean").toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("the shell's keyboard surface and live regions are labelled and reachable", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "keyboard pass",
+      ahead(FUTURE_MINUTES),
+    );
+    await seedMessage(conversation, "user", `${PREFIX} keyboard question`);
+
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+
+    // The composer: a real label, and a described hint announced politely.
+    const composer = page.locator("[data-assistant-composer]");
+    const input = page.locator("[data-assistant-input]");
+    await expect(page.getByLabel("Message the assistant")).toHaveCount(1);
+    const describedBy = await input.getAttribute("aria-describedby");
+    expect(describedBy, "the composer hint must be described").toBeTruthy();
+    const hint = page.locator(`#${describedBy}`);
+    await expect(hint).toHaveAttribute("role", "status");
+    await expect(hint).toContainText("Enter sends");
+    await expect(composer).toHaveAttribute("aria-busy", "false");
+
+    // The action chips: a labelled group of real buttons, keyboard-operable,
+    // and a chip never sends on its own.
+    const chips = page.getByRole("group", { name: "Suggested prompts" });
+    await expect(chips).toBeVisible();
+    const chip = chips.locator("[data-assistant-chip]").first();
+    await expect(chip).toHaveAttribute("type", "button");
+    const chipText = (await chip.textContent())?.trim() ?? "";
+    await chip.focus();
+    await page.keyboard.press("Enter");
+    await expect(input).toHaveValue(chipText);
+    await expect(input).toBeFocused();
+    await expect(page.locator("[data-message-local]")).toHaveCount(0);
+
+    // The sidebar rows are real links, and the selected row says so.
+    const row = page.locator(`[data-conversation-id="${conversation}"]`);
+    await expect(row).toHaveRole("link");
+    await expect(row).toHaveAttribute("aria-current", "true");
+    await expect(row).toHaveAccessibleName(new RegExp("keyboard pass"));
+
+    // Rename: a labelled form, autofocused, returning focus on cancel.
+    await page.locator('[data-conversation-verb="rename"]').click();
+    const renameInput = page.locator("[data-conversation-rename-input]");
+    await expect(renameInput).toBeFocused();
+    await expect(renameInput).toHaveAttribute("aria-label", "Conversation name");
+    await page.locator('[data-conversation-rename-cancel]').click();
+    await expect(page.locator('[data-conversation-verb="rename"]')).toBeFocused();
+
+    // Delete: the shared Modal is a named dialog, focus starts inside it, no
+    // control on the inert page behind it can be reached by Tab, and closing
+    // hands focus back to the control that opened it. (Chromium parks focus
+    // on <body> for one Tab stop between the dialog's first and last control —
+    // its documented `dialog` behaviour; the inert page is never reachable.)
+    await page.locator('[data-conversation-verb="delete"]').click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAccessibleName("Delete this conversation?");
+    const startsInside = await page.evaluate(() => {
+      const dialogEl = document.querySelector("dialog[open]");
+      return dialogEl !== null && dialogEl.contains(document.activeElement);
+    });
+    expect(startsInside, "focus starts inside the dialog").toBe(true);
+
+    const visited = new Set<string>();
+    for (let press = 0; press < 6; press += 1) {
+      await page.keyboard.press("Tab");
+      const focusState = await page.evaluate(() => {
+        const dialogEl = document.querySelector("dialog[open]");
+        const active = document.activeElement as HTMLElement | null;
+        const inside = dialogEl !== null && active !== null && dialogEl.contains(active);
+        return {
+          dialogPresent: dialogEl !== null,
+          inside,
+          /* Any focusable element that is neither the dialog's content nor the
+             document body (Chromium's between-wraps stop). */
+          outsideInteractive:
+            active !== null &&
+            active !== document.body &&
+            !(dialogEl?.contains(active) ?? false),
+          activeLabel:
+            active?.getAttribute("aria-label") ??
+            (active?.textContent ?? "").trim().slice(0, 40),
+        };
+      });
+      expect(focusState.dialogPresent, `Tab ${press + 1}: the dialog closes`).toBe(
+        true,
+      );
+      expect(
+        focusState.outsideInteractive,
+        `Tab ${press + 1} reached "${focusState.activeLabel}" outside the dialog`,
+      ).toBe(false);
+      if (focusState.inside) visited.add(focusState.activeLabel);
+    }
+    expect(visited, "Tab visits the dialog's own controls").toContain("Cancel");
+    expect(visited, "Tab visits the dialog's own controls").toContain(
+      "Delete conversation",
+    );
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.locator('[data-conversation-verb="delete"]')).toBeFocused();
+
+    // The message list announces busy only while a turn is streaming; this
+    // stored conversation is at rest.
+    await expect(page.locator("[data-message-list]")).not.toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+
+    expect(errors, "the keyboard pass stays console-clean").toEqual([]);
+  });
+
+  test("the launcher's bar, bubble and panel hand focus over on the keyboard", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    await page.goto("/tasks");
+
+    const bar = page.getByRole("button", { name: /Ask UniPilot anything/i });
+    await expect(bar).toHaveAttribute("aria-expanded", "false");
+    await expect(bar).toHaveAttribute("aria-controls", "unipilot-assistant-panel");
+    await bar.focus();
+    await page.keyboard.press("Enter");
+
+    const panel = page.locator("#unipilot-assistant-panel");
+    await expect(panel).toBeVisible();
+    await expect(bar).toHaveAttribute("aria-expanded", "true");
+
+    // Minimize docks the launcher into the bubble and hands it focus; the
+    // bubble expands back and hands focus to the bar.
+    await page.getByRole("button", { name: "Minimize UniPilot search" }).click();
+    const bubble = page.getByRole("button", { name: "Expand UniPilot search" });
+    await expect(bubble).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(bar).toBeFocused();
+    await expect(bar).toHaveAttribute("aria-expanded", "false");
+
+    // Escape closes the open panel and returns focus to the bar body.
+    await page.keyboard.press("Enter");
+    await expect(panel).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel).not.toBeVisible();
+    await expect(bar).toBeFocused();
+
+    expect(errors, "the launcher keyboard pass stays console-clean").toEqual([]);
+  });
+
+  test("reduced motion: both surfaces render content immediately, nothing is gated", async ({
+    browser,
+  }) => {
+    /* A real session (the QA fixture's storage state), reduced motion on. */
+    const context = await browser.newContext({
+      reducedMotion: "reduce",
+      storageState:
+        process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+    });
+    const page = await context.newPage();
+    const errors = trackConsoleErrors(page);
+
+    try {
+      const conversation = await seedConversation(
+        qa1Id,
+        "reduced motion",
+        ahead(FUTURE_MINUTES),
+      );
+      await seedMessage(conversation, "user", `${PREFIX} reduced question`);
+      await seedMessage(conversation, "assistant", `${PREFIX} reduced answer`);
+
+      await page.goto(`/assistant?c=${conversation}`);
+      await waitForAssistantTree(page);
+      // Zero-duration reveals: the rows and the composer are visible straight
+      // away, never stuck at the hidden variant.
+      await expect(page.locator("[data-message-list] > li").first()).toHaveCSS(
+        "opacity",
+        "1",
+      );
+      await expect(page.locator("[data-message-list]")).toContainText(
+        `${PREFIX} reduced answer`,
+      );
+      await expect(page.locator("[data-assistant-composer]")).toBeVisible();
+      await expect(page.locator("[data-conversation-title]")).toBeVisible();
+      await page.screenshot({
+        path: "screenshots/c6-reduced-motion.png",
+        fullPage: true,
+      });
+
+      // The launcher panel opens instantly with its composer and starters
+      // reachable.
+      await page.goto("/tasks");
+      await page.getByRole("button", { name: /Ask UniPilot anything/i }).click();
+      const panel = page.locator("#unipilot-assistant-panel");
+      await expect(panel).toBeVisible();
+      await expect(panel.locator("[data-assistant-composer]")).toBeVisible();
+      await expect(
+        panel.getByRole("link", { name: "Create a presentation" }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(panel).not.toBeVisible();
+      await expect(
+        page.getByRole("button", { name: /Ask UniPilot anything/i }),
+      ).toBeFocused();
+
+      expect(errors, "the reduced-motion pass stays console-clean").toEqual([]);
+    } finally {
+      await context.close();
+    }
   });
 });

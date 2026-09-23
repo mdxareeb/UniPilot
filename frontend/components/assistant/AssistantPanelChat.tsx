@@ -56,12 +56,18 @@ export function AssistantPanelChat({
         /* Idle: the placeholder is an intrinsically sized hint, so the panel's
            idle region above it absorbs the shrink on a short viewport. Active:
            the exchange is the panel's flexible, scrollable middle — a long
-           answer must never push the pinned composer out of the panel. */
-        turn === null ? "shrink-0" : "flex-1"
+           answer must never push the pinned composer out of the panel. Below
+           the C6 height threshold the panel itself is the scroll container, so
+           the exchange stops flexing (C6: `flex-none`) and its scroller goes
+           intrinsic, making the whole exchange reachable by scrolling the
+           panel. */
+        turn === null
+          ? "shrink-0"
+          : "flex-1 [@media(max-height:520px)]:flex-none"
       }`}
     >
       {turn !== null ? (
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 [@media(max-height:520px)]:overflow-visible">
           <MessageList messages={[]} pending={turn} />
         </div>
       ) : (
