@@ -18,13 +18,15 @@
 import { revalidatePath } from "next/cache";
 import { requireOnboardedUser } from "@/lib/onboarding/gate";
 import {
-  ASSISTANT_ACTION_COPY,
   confirmAssistantAction,
   registerAssistantProposals,
   rejectAssistantAction,
+} from "./assistantActionLog";
+import {
+  ASSISTANT_ACTION_COPY,
   type AssistantActionItem,
   type AssistantActionMutationResult,
-} from "./assistantActionLog";
+} from "./assistantValues";
 
 /** Registration's answer: the content's proposals, or sanitized failure copy. */
 export type AssistantProposalsResult = {
@@ -38,10 +40,19 @@ export type AssistantMutationResult = AssistantActionMutationResult;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 27.9/27.11 — register one message's fenced actions (the stub/fixture path). */
+/**
+ * 27.9/27.11 — register one message's fenced actions (the stub/fixture path).
+ *
+ * `messageId` is the settled `done` frame's id (or null for live content).
+ * Passing it is what makes the client-side registration of a stubbed turn use
+ * the very key the turn pipeline used for the same message, so a turn that
+ * both persisted and registered server-side is a no-op when the client
+ * registers it again (T27-C's one-path-per-message hand-off).
+ */
 export async function registerAssistantProposalsAction(
   conversationId: unknown,
   content: unknown,
+  messageId?: unknown,
 ): Promise<AssistantProposalsResult> {
   const user = await requireOnboardedUser("/assistant");
 
@@ -50,10 +61,14 @@ export async function registerAssistantProposalsAction(
     return { error: ASSISTANT_ACTION_COPY.NOT_FOUND, actions: [] };
   }
 
+  const rawMessageId = typeof messageId === "string" ? messageId.trim() : "";
+  const message = rawMessageId === "" ? null : rawMessageId;
+
   let result: Awaited<ReturnType<typeof registerAssistantProposals>>;
   try {
     result = await registerAssistantProposals(user.id, {
       conversationId: id,
+      messageId: message,
       content: typeof content === "string" ? content : "",
     });
   } catch {
@@ -82,9 +97,18 @@ export async function confirmAssistantActionAction(
   try {
     const result = await confirmAssistantAction(user.id, id);
     revalidatePath("/assistant");
+    /* A confirmation can create a task or an event, so the board and the
+       calendar drop their cached renders too — the same posture as the
+       assistant surface itself. Both are revalidated on every settled call:
+       `revalidatePath` only marks the route for the next visit, and a
+       confirmation that failed wrote nothing either way. */
+    revalidatePath("/tasks");
+    revalidatePath("/calendar");
     return result;
   } catch {
-    return { error: ASSISTANT_ACTION_COPY.FAILED, action: null };
+    /* The confirm may have reached the executor before this response was
+       lost, so the catch-all never claims "nothing was created". */
+    return { error: ASSISTANT_ACTION_COPY.UNCERTAIN, action: null };
   }
 }
 
@@ -104,6 +128,9 @@ export async function rejectAssistantActionAction(
     revalidatePath("/assistant");
     return result;
   } catch {
+    /* A rejection never creates a task or an event (the executor is not
+       called), so `FAILED`'s "nothing was created" stays true here even when
+       the log transition itself may have landed. */
     return { error: ASSISTANT_ACTION_COPY.FAILED, action: null };
   }
 }

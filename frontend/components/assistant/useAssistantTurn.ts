@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { parseAssistantAction } from "@/lib/ai/actionSchema";
+import { collectStructuredActions } from "@/lib/ai/toolContracts";
+import { registerAssistantProposalsAction } from "@/lib/data/assistantActionActions";
 import {
   applyAssistantFrame,
   createAssistantEntry,
@@ -9,6 +12,8 @@ import {
   type AssistantEntry,
 } from "@/lib/data/assistantFrames";
 import type {
+  AssistantActionItem,
+  AssistantActionMutationResult,
   AssistantStreamFrame,
   MessageItem,
 } from "@/lib/data/assistantValues";
@@ -99,6 +104,19 @@ async function readErrorCopy(response: Response): Promise<string | null> {
     // Not JSON: no sanitized copy to surface; the caller uses the fallback.
   }
   return null;
+}
+
+/**
+ * T27-C — the client-side pre-check for registration: true only when the
+ * settled content carries at least one fenced action the typed 27.1 parser
+ * accepts. `toolContracts`/`actionSchema` are pure and client-safe, so the
+ * common no-action answer (the 26.1 unconfigured copy, any plain answer)
+ * never makes a Server Action call at all.
+ */
+function hasParsedAssistantAction(content: string): boolean {
+  return collectStructuredActions(content).some(
+    (structured) => parseAssistantAction(structured) !== null,
+  );
 }
 
 export type UseAssistantTurnOptions = {
@@ -200,6 +218,18 @@ export type UseAssistantTurnOptions = {
  * so it reappears if its conversation is re-selected — it is never invented and
  * never presented as an answer.
  *
+ * T27-C adds the action loop. After a turn settles `complete`, the hook
+ * pre-checks the settled content with the client-safe 27.1 parser (an ordinary
+ * answer never makes a call) and registers the proposals through the real
+ * `registerAssistantProposalsAction` with the `done` frame's message id. The
+ * idempotency key is the pipeline's own, so a turn the server already
+ * registered is a no-op, while a stubbed turn — which persists nothing
+ * server-side — still gets real, confirmable rows. Registration is
+ * best-effort: it can never turn a delivered answer into a failed turn. The
+ * returned `proposals` and `settleProposal` exist for the launcher panel,
+ * whose local state is the only rendering of its live exchange; the
+ * `/assistant` page's stored action read is the authority there.
+ *
  * One turn at a time: `send` refuses while a turn is in flight, the
  * composer's disabled states make that visible, and `stop` is the caller's
  * explicit way out of a stream that never settles.
@@ -215,6 +245,17 @@ export function useAssistantTurn({
   const router = useRouter();
   const [turn, setTurn] = useState<LocalTurn | null>(null);
   const [busy, setBusy] = useState(false);
+  /* T27-C — the settled turn's registered proposals, in content order. They
+     are cleared when a new send starts and set by the registration below; the
+     `/assistant` page ignores them (its stored action read is the authority
+     once the refresh lands), while the launcher panel renders them inline
+     because it has no stored read at all. */
+  const [proposals, setProposals] = useState<AssistantActionItem[]>([]);
+  /* T27-C — the registration's turn identity. Every `send` bumps this before
+     it starts, so a registration that resolves after a newer send (the
+     composer is free during its round trip) can never write the previous
+     turn's cards into the new turn's state. */
+  const registrationSeq = useRef(0);
   /* The one turn this tab has in flight, or null. `cancelled` marks an
      unmount (nothing to report); every other abort — the caller's Stop, the
      deadline, a network failure — settles as a sanitized failure, so the flag
@@ -268,6 +309,20 @@ export function useAssistantTurn({
     flight.controller.abort();
   }, []);
 
+  /**
+   * T27-C — apply one confirmation card's settled result to the local
+   * proposals list. The launcher panel passes this to its cards so a
+   * confirmed/rejected card stays settled after the panel is closed and
+   * reopened (its state lives in the launcher, not in the card).
+   */
+  const settleProposal = useCallback((result: AssistantActionMutationResult) => {
+    const settled = result.action;
+    if (settled === null) return;
+    setProposals((current) =>
+      current.map((item) => (item.id === settled.id ? settled : item)),
+    );
+  }, []);
+
   const send = useCallback(
     async (content: string) => {
       if (inFlightRef.current !== null) return;
@@ -275,6 +330,11 @@ export function useAssistantTurn({
       const flight = { controller, cancelled: false };
       inFlightRef.current = flight;
       setBusy(true);
+      setProposals([]);
+      /* The turn identity this send's registration belongs to. A later send
+         bumps the ref, so the stale registration's result is dropped (T27-C
+         review: it must never render under the newer turn's bubble). */
+      const registrationTurn = ++registrationSeq.current;
 
       const targetConversationId = conversationId;
       /* C6 — the client deadline is composed with the caller's controller, so
@@ -382,7 +442,49 @@ export function useAssistantTurn({
           ) {
             startedRef.current?.(entry.conversationId);
           }
-          if (refreshOnSettle) router.refresh();
+          /* T27-C — one registration path per message: a settled complete
+             answer that proposes actions is registered through the real
+             Server Action with the `done` frame's message id, so the key is
+             the pipeline's own (a turn it already registered is a no-op) and
+             a stubbed turn, which persists nothing server-side, still gets
+             real confirmable rows. Best-effort by contract — the answer is
+             already delivered — and the refresh waits for it so the stored
+             read cannot race the new rows.
+             The result lands only while this send is still the current turn:
+             the composer is free during the registration round trip, so a
+             second send can start (and clear the list) before this resolves;
+             `registrationTurn`/`flight.cancelled` keep the old turn's cards
+             out of the new turn's bubble (T27-C review). */
+          const register = async () => {
+            const conversation = entry.conversationId;
+            if (
+              entry.status !== "complete" ||
+              conversation === null ||
+              !hasParsedAssistantAction(entry.content)
+            ) {
+              return;
+            }
+            try {
+              const result = await registerAssistantProposalsAction(
+                conversation,
+                entry.content,
+                entry.messageId,
+              );
+              if (
+                !flight.cancelled &&
+                registrationSeq.current === registrationTurn &&
+                result.error === null &&
+                result.actions.length > 0
+              ) {
+                setProposals(result.actions);
+              }
+            } catch {
+              /* Registration is best-effort; the delivered answer stands. */
+            }
+          };
+          void register().finally(() => {
+            if (refreshOnSettle) router.refresh();
+          });
         }
       }
     },
@@ -399,5 +501,5 @@ export function useAssistantTurn({
       ? turn
       : null;
 
-  return { turn: visibleTurn, busy, send, stop };
+  return { turn: visibleTurn, busy, send, stop, proposals, settleProposal };
 }

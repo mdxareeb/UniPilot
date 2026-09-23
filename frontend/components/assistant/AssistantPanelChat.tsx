@@ -2,12 +2,23 @@
 
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
+import type {
+  AssistantActionItem,
+  AssistantActionMutationResult,
+} from "@/lib/data/assistantValues";
 import { MessageList } from "./MessageList";
 import type { LocalTurn } from "./useAssistantTurn";
 
 type AssistantPanelChatProps = {
   /** The live turn this tab sent from the panel, or null before the first send. */
   turn: LocalTurn | null;
+  /**
+   * The live turn's registered proposals (T27-C), held by the launcher so
+   * they survive the panel's close. Rendered inside the live assistant bubble.
+   */
+  proposals: AssistantActionItem[];
+  /** The launcher's local reconcile for a card's settled result. */
+  onActionSettled: (result: AssistantActionMutationResult) => void;
   /**
    * The conversation the next send targets. Held by `AssistantLauncher` in
    * component state from the `start` frame, so a follow-up send continues the
@@ -43,9 +54,17 @@ type AssistantPanelChatProps = {
  * history store exists here. `prefetch` stays off for the same reason the
  * starter links disable it: the gated route's prefetch would run a session
  * read on every page view.
+ *
+ * T27-C: the live turn's registered proposals (`proposals`, held by the
+ * launcher through the shared hook) render inside the live assistant bubble —
+ * this surface has no stored read, so its local state is the only rendering
+ * of the exchange. A card's confirm/reject settles against the real Server
+ * Actions and `onActionSettled` updates that local list.
  */
 export function AssistantPanelChat({
   turn,
+  proposals,
+  onActionSettled,
   conversationId,
   onNavigate,
 }: AssistantPanelChatProps) {
@@ -68,7 +87,12 @@ export function AssistantPanelChat({
     >
       {turn !== null ? (
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 [@media(max-height:520px)]:overflow-visible">
-          <MessageList messages={[]} pending={turn} />
+          <MessageList
+            messages={[]}
+            pending={turn}
+            pendingActions={proposals}
+            onActionSettled={onActionSettled}
+          />
         </div>
       ) : (
         <p

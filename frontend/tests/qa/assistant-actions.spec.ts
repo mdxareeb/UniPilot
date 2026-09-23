@@ -20,7 +20,8 @@
  *    event/document tables: registration idempotency (27.9), owner-verified
  *    links (27.5), the created rows' exact values (27.2–27.4), reminder
  *    instants in the profile zone (R1), rejection that writes nothing,
- *    settle-once/double-confirm (27.13) and the honest not-available
+ *    settle-once/double-confirm (27.13), the stuck-`confirmed` retry (T27-C:
+ *    UNAVAILABLE, nothing created) and the honest not-available
  *    presentation failure (27.10's boundary).
  *
  * The engine's reads/writes run through the same session clients the app's
@@ -1263,6 +1264,108 @@ test.describe("assistant action executor (27.2–27.6/27.13)", () => {
       .eq("user_id", qa1Id)
       .eq("title", title);
     expect(count.count).toBe(1);
+  });
+
+  test("a stuck confirmed row answers UNAVAILABLE and never executes", async () => {
+    /* T27-C review hand-off: a crash between the claim and the settle leaves
+       the row `confirmed`. A retry must not execute twice — it answers the
+       honest UNAVAILABLE copy and creates nothing; the row stays claimed. */
+    const title = `${PREFIX_B} stuck confirmed`;
+    const { conversationId, messageId, items } = await registerFenced(
+      qa1Id,
+      fence({ type: "task.create", payload: { title } }),
+    );
+    const actionId = items[0].id;
+
+    // Simulate the crash: claim the row without settling it.
+    const claimed = await service
+      .from("assistant_actions")
+      .update({ status: "confirmed" })
+      .eq("id", actionId)
+      .eq("user_id", qa1Id)
+      .eq("status", "proposed")
+      .select("id");
+    expect(claimed.error).toBeNull();
+    expect(claimed.data).toHaveLength(1);
+
+    const confirmed = await confirmAssistantAction(qa1Id, actionId, {
+      client: qa1,
+    });
+    expect(confirmed.error).toBe(ASSISTANT_ACTION_COPY.UNAVAILABLE);
+    expect(confirmed.action?.status).toBe("confirmed");
+    expect(confirmed.action?.result).toBeNull();
+    expect(confirmed.action?.error).toBeNull();
+
+    // A direct executor retry with the stored key is the same refusal.
+    const stored = await storedAction(actionId);
+    const retry = await executeAssistantAction(
+      qa1Id,
+      parseAssistantAction({ type: items[0].type, payload: items[0].payload })!,
+      {
+        conversationId,
+        messageId,
+        idempotencyKey: stored!.idempotency_key,
+        client: qa1,
+      },
+    );
+    expect(retry.ok).toBe(false);
+    if (!retry.ok) expect(retry.error).toBe(ASSISTANT_ACTION_COPY.UNAVAILABLE);
+
+    // Nothing was created and the row was never moved back to proposed.
+    const tasks = await service
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id)
+      .eq("title", title);
+    expect(tasks.count).toBe(0);
+    const after = await storedAction(actionId);
+    expect(after!.status).toBe("confirmed");
+    expect(after!.settled_at).toBeNull();
+  });
+
+  test("a succeeded row with an unreadable result answers UNCERTAIN, never a bare success", async () => {
+    /* T27-C review: `confirmAssistantAction`'s succeeded branch must not
+       report `error: null` with `result: null` — the card would show "Created"
+       with no row to name. An impossible state through the app (the executor
+       always stores the created row's facts), hand-written here. */
+    const title = `${PREFIX_B} unreadable outcome`;
+    const { items } = await registerFenced(
+      qa1Id,
+      fence({ type: "task.create", payload: { title } }),
+    );
+    const actionId = items[0].id;
+
+    const corrupt = await service
+      .from("assistant_actions")
+      .update({
+        status: "succeeded",
+        result: null,
+        error: null,
+        settled_at: new Date().toISOString(),
+      })
+      .eq("id", actionId)
+      .eq("user_id", qa1Id)
+      .select("id");
+    expect(corrupt.error).toBeNull();
+    expect(corrupt.data).toHaveLength(1);
+
+    const confirmed = await confirmAssistantAction(qa1Id, actionId, {
+      client: qa1,
+    });
+    expect(confirmed.error).toBe(ASSISTANT_ACTION_COPY.UNCERTAIN);
+    expect(confirmed.action?.status).toBe("succeeded");
+    expect(confirmed.action?.result).toBeNull();
+
+    // Nothing was executed and nothing was created by the read.
+    expect(
+      (
+        await service
+          .from("tasks")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", qa1Id)
+          .eq("title", title)
+      ).count,
+    ).toBe(0);
   });
 
   test("document links are owner-verified: owned sets source_document_id, foreign/missing fail with no row", async () => {

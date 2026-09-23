@@ -48,6 +48,15 @@ import {
 import type { Database, Json } from "@/lib/supabase/database.types";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import {
+  ASSISTANT_ACTION_COPY,
+  ASSISTANT_ACTION_OUTCOME_KINDS,
+  type AssistantActionItem,
+  type AssistantActionItemBase,
+  type AssistantActionMutationResult,
+  type AssistantActionOutcome,
+  type AssistantActionOutcomeKind,
+} from "./assistantValues";
 import { getDocument } from "./documents";
 import { createEvent } from "./events";
 import { readProfileTimeZone } from "./profileTime";
@@ -55,74 +64,22 @@ import { formatTaskDueDate } from "./taskDates";
 import { createTask } from "./tasks";
 
 // ---------------------------------------------------------------------------
-// Copy — the only strings that ever travel back to a caller
+// The display contract — client-safe, so it lives in `assistantValues.ts`
 // ---------------------------------------------------------------------------
+//
+// T27-C moved `ASSISTANT_ACTION_COPY`, the outcome/item/mutation types and the
+// display labels into `assistantValues.ts` (the repo's client-safe precedent),
+// because the confirmation card is a client component and this module imports
+// `node:crypto` and `next/headers`. Re-exported here so every existing server
+// consumer and spec keeps its import path.
 
-export const ASSISTANT_ACTION_COPY = {
-  NOT_FOUND: "That action no longer exists.",
-  INVALID: "That action couldn't be read, so nothing was created.",
-  REJECTED: "This action was rejected, so nothing was created.",
-  ALREADY_COMPLETED: "This action has already been completed.",
-  UNAVAILABLE: "This action couldn't be completed right now.",
-  DOCUMENT_NOT_FOUND:
-    "That document isn't in your workspace, so nothing was created.",
-  PRESENTATION_NOT_AVAILABLE:
-    "Creating presentations from the assistant isn't available yet, so nothing was created.",
-  FAILED: "That action couldn't be completed. Nothing was created.",
-} as const;
-
-// ---------------------------------------------------------------------------
-// The display contract
-// ---------------------------------------------------------------------------
-
-/** What a succeeded action created — the settled facts stored in `result`. */
-export const ASSISTANT_ACTION_OUTCOME_KINDS = [
-  "task",
-  "event",
-  "presentation",
-] as const;
-export type AssistantActionOutcomeKind =
-  (typeof ASSISTANT_ACTION_OUTCOME_KINDS)[number];
-
-export type AssistantActionOutcome = {
-  kind: AssistantActionOutcomeKind;
-  /** The created row's id. */
-  id: string;
-  /** The created row's title — the honest name for the confirmation surface. */
-  label: string;
-};
-
-type AssistantActionItemBase = {
-  id: string;
-  status: AssistantActionStatus;
-  /** The settled outcome, or null while proposed/confirmed/failed. */
-  result: AssistantActionOutcome | null;
-  /** Sanitized failure copy, or null. */
-  error: string | null;
-  messageId: string | null;
-  /** The honest one-line copy (`summarizeAssistantAction`) derived from `payload`. */
-  summary: string;
-  /** Profile-zone display strings, like every other service contract. */
-  createdLabel: string;
-  settledLabel: string | null;
-};
-
-/**
- * The log's display contract: the parsed, normalized payload is carried
- * alongside the settled state so the confirmation UI never re-parses raw
- * jsonb and the executor's values and the card's cannot drift.
- */
-export type AssistantActionItem = {
-  [K in AssistantActionType]: AssistantActionItemBase & {
-    type: K;
-    payload: Extract<AssistantAction, { type: K }>["payload"];
-  };
-}[AssistantActionType];
-
-export type AssistantActionMutationResult = {
-  error: string | null;
-  /** The settled/current row's contract; null only when no owned row exists. */
-  action: AssistantActionItem | null;
+export { ASSISTANT_ACTION_COPY };
+export type {
+  AssistantActionItem,
+  AssistantActionItemBase,
+  AssistantActionMutationResult,
+  AssistantActionOutcome,
+  AssistantActionOutcomeKind,
 };
 
 export type RegisterAssistantProposalsInput = {
@@ -530,6 +487,13 @@ export async function confirmAssistantAction(
   switch (item.status) {
     case "succeeded":
       // 27.13: the stored result is the answer; nothing runs again.
+      if (item.result === null) {
+        /* The row claims a write but its stored outcome is unreadable. The
+           executor answers UNCERTAIN for the same shape; the confirmation
+           surface must never present a bare "Created" with no row to name
+           (T27-C review). */
+        return { error: ASSISTANT_ACTION_COPY.UNCERTAIN, action: item };
+      }
       return { error: null, action: item };
     case "failed":
       return { error: item.error ?? ASSISTANT_ACTION_COPY.FAILED, action: item };
@@ -674,8 +638,10 @@ export async function executeAssistantAction(
   switch (row.status) {
     case "succeeded": {
       const stored = parseAssistantActionOutcome(row.result);
+      /* The row says a write succeeded; an unreadable stored result must
+         never be reported as "nothing was created". */
       return stored === null
-        ? { ok: false, error: ASSISTANT_ACTION_COPY.FAILED }
+        ? { ok: false, error: ASSISTANT_ACTION_COPY.UNCERTAIN }
         : { ok: true, result: stored };
     }
     case "failed":
@@ -720,7 +686,7 @@ export async function executeAssistantAction(
     if (after?.status === "succeeded") {
       const settledResult = parseAssistantActionOutcome(after.result);
       return settledResult === null
-        ? { ok: false, error: ASSISTANT_ACTION_COPY.FAILED }
+        ? { ok: false, error: ASSISTANT_ACTION_COPY.UNCERTAIN }
         : { ok: true, result: settledResult };
     }
     if (after?.status === "failed") {
@@ -733,7 +699,11 @@ export async function executeAssistantAction(
   try {
     outcome = await runAssistantAction(userId, action, context.client);
   } catch {
-    outcome = { ok: false, error: ASSISTANT_ACTION_COPY.FAILED };
+    /* T27-C review hand-off: a throw here can happen after the service wrote
+       its row (the write succeeded, the response did not), so this catch-all
+       must never claim "nothing was created". The UNCERTAIN copy is the
+       honest one and the settle-once row still prevents a second execution. */
+    outcome = { ok: false, error: ASSISTANT_ACTION_COPY.UNCERTAIN };
   }
 
   // Settle the claimed row. A failed settle write must not turn a created
@@ -781,6 +751,12 @@ export async function executeAssistantAction(
  * - `event.create` → `createEvent`, with the same owner-verified document link;
  * - `presentation.create` → an honest "not available yet" failure (T27-D wires
  *   the real path); nothing is enqueued and no row is created.
+ *
+ * T27-D follow-up (recorded): settle-once is enforced on the log row, not on
+ * the created rows — a task/event carries no `source_action_id`. Adding that
+ * column with a unique constraint on tasks/events is the schema-level half of
+ * 27.13 and belongs to T27-D (the executor already refuses to run a settled
+ * row, so this is defense in depth).
  */
 async function runAssistantAction(
   userId: string,

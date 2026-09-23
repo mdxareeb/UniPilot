@@ -61,12 +61,25 @@
  *    copy, a created conversation's composer focus waits for the selection
  *    commit, and a settle during a held create navigation never steals the
  *    caller's selection.
+ * 7. T27-C's confirmation UI (27.6/27.7/27.12): the stored proposals render as
+ *    confirmation cards under their assistant message and settle through the
+ *    real Server Actions — confirm creates a task that is really visible on
+ *    `/tasks`, the card reports the created outcome and a double-confirm never
+ *    creates a second row; reject writes nothing; a foreign document link
+ *    fails with the sanitized copy; a presentation proposal fails honestly as
+ *    not available; and a stubbed fenced turn registers through the real
+ *    Server Action (the live key) and confirms from the launcher panel.
  *
  * This project stays green with no provider configured.
  */
+import { randomUUID } from "node:crypto";
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { ASSISTANT_UNCONFIGURED_COPY } from "../../lib/ai/provider";
+import {
+  confirmAssistantAction,
+  registerAssistantProposals,
+} from "../../lib/data/assistantActionLog";
 import {
   applyAssistantFrame,
   createAssistantEntry,
@@ -74,11 +87,13 @@ import {
   parseSseFrames,
 } from "../../lib/data/assistantFrames";
 import {
+  ASSISTANT_ACTION_COPY,
   MESSAGE_CONTENT_MAX_LENGTH,
+  type AssistantActionItem,
   type AssistantSource,
   type AssistantStreamFrame,
 } from "../../lib/data/assistantValues";
-import { stubAssistantTurn } from "./assistantTurnStub";
+import { stubAssistantTurn, type AssistantTurnStub } from "./assistantTurnStub";
 
 /** The exact wire form the turn route emits (its private `frameToSse`). */
 function frameToSse(frame: AssistantStreamFrame): string {
@@ -472,6 +487,8 @@ const QA2 = "qa2.unipilot@unipilot.test";
 
 /** Every row this spec creates carries this prefix, so teardown is exact. */
 const PREFIX = "UI 19x";
+/** T27-C's rows (conversations/messages/tasks/documents) carry this one. */
+const PREFIX_C = "UI 27c";
 
 /** Seeds this spec keeps ahead of the account's real conversations. */
 const FUTURE_MINUTES = 10;
@@ -580,10 +597,16 @@ async function holdAssistantNavigation(
 
 test.describe("assistant conversation shell (live)", () => {
   let service: SupabaseClient;
+  let qa1: SupabaseClient;
+  let qa2: SupabaseClient;
   let qa1Id = "";
   let qa2Id = "";
   /** Conversations this spec created, by id; teardown deletes exactly these. */
   const createdConversationIds: string[] = [];
+  /** T27-C's rows, by id (the confirmation tests' real writes). */
+  const createdActionIds: string[] = [];
+  const createdTaskIds: string[] = [];
+  const createdDocumentIds: string[] = [];
 
   async function signIn(
     client: SupabaseClient,
@@ -639,6 +662,71 @@ test.describe("assistant conversation shell (live)", () => {
     expect(error, `seed ${role} message: ${error?.message}`).toBeNull();
   }
 
+  /* -------------------------------------------------------------------------
+     T27-C — the confirmation UI's real inputs
+     ------------------------------------------------------------------------- */
+
+  /** One fenced `unipilot-action` block, exactly as the provider contract emits. */
+  function fence(action: unknown): string {
+    return ["```unipilot-action", JSON.stringify(action), "```"].join("\n");
+  }
+
+  /** One stored assistant message carrying `content`; returns its id. */
+  async function seedFencedAssistantMessage(
+    conversationId: string,
+    content: string,
+  ): Promise<string> {
+    const { data, error } = await service
+      .from("messages")
+      .insert({ conversation_id: conversationId, role: "assistant", content })
+      .select("id")
+      .single();
+    expect(error, `seed fenced message: ${error?.message}`).toBeNull();
+    return (data as { id: string }).id;
+  }
+
+  /**
+   * Register `content` through the real log service (the same call the turn
+   * pipeline makes), keyed to the seeded message, and track the rows.
+   */
+  async function registerFencedFor(
+    conversationId: string,
+    messageId: string | null,
+    content: string,
+  ): Promise<AssistantActionItem[]> {
+    const result = await registerAssistantProposals(qa1Id, {
+      conversationId,
+      messageId,
+      content,
+    });
+    expect(result.status, "registration is real").toBe("ok");
+    const items = result.status === "ok" ? result.items : [];
+    createdActionIds.push(...items.map((item) => item.id));
+    return items;
+  }
+
+  /** The stored log row for one action id (service read). */
+  async function storedAction(actionId: string) {
+    const { data, error } = await service
+      .from("assistant_actions")
+      .select("id, status, result, error, settled_at")
+      .eq("id", actionId)
+      .maybeSingle();
+    expect(error).toBeNull();
+    return data;
+  }
+
+  /** How many tasks QA1 owns with exactly this title. */
+  async function taskCount(title: string): Promise<number> {
+    const { count, error } = await service
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id)
+      .eq("title", title);
+    expect(error).toBeNull();
+    return count ?? 0;
+  }
+
   test.beforeAll(async () => {
     if (!LOCAL_TARGET.test(url)) {
       throw new Error(
@@ -659,10 +747,10 @@ test.describe("assistant conversation shell (live)", () => {
     service = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const qa1 = createClient(url, anonKey, {
+    qa1 = createClient(url, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const qa2 = createClient(url, anonKey, {
+    qa2 = createClient(url, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
     qa1Id = await signIn(qa1, QA1, qa1Password);
@@ -698,6 +786,82 @@ test.describe("assistant conversation shell (live)", () => {
     expect(usageResidue.error).toBeNull();
     expect(usageResidue.data ?? [], "no usage residue").toHaveLength(0);
 
+    /* T27-C — the confirmation tests' real writes: created tasks/documents
+       and the log rows, id-scoped first, then an owner/prefix sweep as the
+       backstop for a row stranded before its id was read. `PREFIX_C` is
+       unique to this spec, so the sweeps cannot touch anything else. */
+    if (createdTaskIds.length > 0) {
+      const tasks = await service
+        .from("tasks")
+        .delete()
+        .in("id", createdTaskIds)
+        .select("id");
+      expect(tasks.error, `teardown tasks: ${tasks.error?.message}`).toBeNull();
+      createdTaskIds.length = 0;
+    }
+    if (createdDocumentIds.length > 0) {
+      const documents = await service
+        .from("documents")
+        .delete()
+        .in("id", createdDocumentIds)
+        .select("id");
+      expect(
+        documents.error,
+        `teardown documents: ${documents.error?.message}`,
+      ).toBeNull();
+      createdDocumentIds.length = 0;
+    }
+    if (createdActionIds.length > 0) {
+      const actions = await service
+        .from("assistant_actions")
+        .delete()
+        .in("id", createdActionIds)
+        .select("id");
+      expect(
+        actions.error,
+        `teardown actions: ${actions.error?.message}`,
+      ).toBeNull();
+      createdActionIds.length = 0;
+    }
+
+    const taskSweep = await service
+      .from("tasks")
+      .delete()
+      .eq("user_id", qa1Id)
+      .like("title", `${PREFIX_C}%`)
+      .select("id");
+    expect(
+      taskSweep.error,
+      `teardown task sweep: ${taskSweep.error?.message}`,
+    ).toBeNull();
+    const taskResidue = await service
+      .from("tasks")
+      .select("id")
+      .eq("user_id", qa1Id)
+      .like("title", `${PREFIX_C}%`);
+    expect(taskResidue.error).toBeNull();
+    expect(taskResidue.data ?? [], "no T27-C task residue").toHaveLength(0);
+
+    const documentSweep = await service
+      .from("documents")
+      .delete()
+      .in("user_id", [qa1Id, qa2Id])
+      .like("name", `${PREFIX_C}%`)
+      .select("id");
+    expect(
+      documentSweep.error,
+      `teardown document sweep: ${documentSweep.error?.message}`,
+    ).toBeNull();
+    const documentResidue = await service
+      .from("documents")
+      .select("id")
+      .in("user_id", [qa1Id, qa2Id])
+      .like("name", `${PREFIX_C}%`);
+    expect(documentResidue.error).toBeNull();
+    expect(documentResidue.data ?? [], "no T27-C document residue").toHaveLength(
+      0,
+    );
+
     if (createdConversationIds.length === 0) return;
     const ids = [...createdConversationIds];
     createdConversationIds.length = 0;
@@ -729,6 +893,13 @@ test.describe("assistant conversation shell (live)", () => {
     expect(messageResidue.error).toBeNull();
     expect(messageResidue.data ?? [], "no message residue").toHaveLength(0);
 
+    const actionResidue = await service
+      .from("assistant_actions")
+      .select("id")
+      .in("conversation_id", ids);
+    expect(actionResidue.error).toBeNull();
+    expect(actionResidue.data ?? [], "no action residue").toHaveLength(0);
+
     /* C6 residue hole: the create test and the panel's live send track their
        rows by URL id, but a failure before the URL surfaced could strand one.
        This owner-scoped, creation-window sweep catches exactly the rows a UI
@@ -743,7 +914,9 @@ test.describe("assistant conversation shell (live)", () => {
       .delete()
       .eq("user_id", qa1Id)
       .gte("created_at", testStartedAt)
-      .or(`title.eq."New conversation",title.like."${PREFIX}%"`)
+      .or(
+        `title.eq."New conversation",title.like."${PREFIX}%",title.like."${PREFIX_C}%"`,
+      )
       .select("id");
     expect(uiSweep.error, `teardown UI sweep: ${uiSweep.error?.message}`).toBeNull();
 
@@ -752,7 +925,9 @@ test.describe("assistant conversation shell (live)", () => {
       .select("id")
       .eq("user_id", qa1Id)
       .gte("created_at", testStartedAt)
-      .or(`title.eq."New conversation",title.like."${PREFIX}%"`);
+      .or(
+        `title.eq."New conversation",title.like."${PREFIX}%",title.like."${PREFIX_C}%"`,
+      );
     expect(uiResidue.error).toBeNull();
     expect(uiResidue.data ?? [], "no UI-created conversation residue").toHaveLength(
       0,
@@ -3158,6 +3333,510 @@ test.describe("assistant conversation shell (live)", () => {
       expect(errors, "the reduced-motion pass stays console-clean").toEqual([]);
     } finally {
       await context.close();
+    }
+  });
+
+  /* -------------------------------------------------------------------------
+     T27-C — the confirmation UI (27.6/27.7/27.12)
+     ------------------------------------------------------------------------- */
+
+  test("a stored proposal confirms into a real task and reports the created outcome", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "action confirm",
+      ahead(FUTURE_MINUTES),
+    );
+    const title = `${PREFIX_C} read chapter 4`;
+    const content = fence({
+      type: "task.create",
+      payload: {
+        title,
+        description: "Related notes: pages 20-34",
+        dueDate: "2026-09-30",
+        priority: "high",
+      },
+    });
+    const messageId = await seedFencedAssistantMessage(conversation, content);
+    const items = await registerFencedFor(conversation, messageId, content);
+    expect(items).toHaveLength(1);
+    const actionId = items[0].id;
+
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+
+    // The card renders inside the assistant bubble that proposed it, with the
+    // honest proposal copy ("Create …", never "Created …").
+    const card = page.locator(`[data-assistant-action="${actionId}"]`);
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute(
+      "data-assistant-action-status",
+      "proposed",
+    );
+    await expect(card.locator("[data-assistant-action-label]")).toHaveText(
+      "Task",
+    );
+    await expect(
+      card.locator("[data-assistant-action-summary]"),
+    ).toContainText(`Create task: ${title}`);
+    await expect(
+      page.locator(`[data-message-id="${messageId}"] [data-assistant-action]`),
+    ).toHaveCount(1);
+    await page.waitForTimeout(600);
+    await page.screenshot({
+      path: "screenshots/t27c-proposed.png",
+      fullPage: true,
+    });
+
+    // Confirm: the real Server Action runs and the card reports the created row.
+    await card.locator("[data-assistant-action-confirm]").click();
+    await expect(card).toHaveAttribute(
+      "data-assistant-action-status",
+      "succeeded",
+      { timeout: 20_000 },
+    );
+    await expect(card.locator("[data-assistant-action-created]")).toContainText(
+      title,
+    );
+    await expect(card.locator("[data-assistant-action-link]")).toHaveAttribute(
+      "href",
+      "/tasks",
+    );
+
+    // The log settled with the real task's facts and the task really exists.
+    const log = await storedAction(actionId);
+    expect(log!.status).toBe("succeeded");
+    expect(log!.error).toBeNull();
+    expect(log!.settled_at).not.toBeNull();
+    const result = log!.result as { kind: string; id: string; label: string };
+    expect(result.kind).toBe("task");
+    expect(result.label).toBe(title);
+    createdTaskIds.push(result.id);
+
+    await page.goto("/tasks");
+    const taskCard = page.locator(`[data-task-id="${result.id}"]`);
+    await expect(taskCard).toBeVisible();
+    await expect(taskCard).toContainText(title);
+
+    // 27.13: a second confirm returns the stored result; exactly one row.
+    const again = await confirmAssistantAction(qa1Id, actionId, { client: qa1 });
+    expect(again.error).toBeNull();
+    expect(again.action?.status).toBe("succeeded");
+    expect(again.action?.result).toEqual(log!.result);
+    expect(await taskCount(title)).toBe(1);
+
+    // A reload reads the settled card back from the log.
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+    const settled = page.locator(`[data-assistant-action="${actionId}"]`);
+    await expect(settled).toHaveAttribute(
+      "data-assistant-action-status",
+      "succeeded",
+    );
+    await expect(
+      settled.locator("[data-assistant-action-created]"),
+    ).toContainText(title);
+    await page.waitForTimeout(600);
+    await page.screenshot({
+      path: "screenshots/t27c-created.png",
+      fullPage: true,
+    });
+
+    expect(errors, "the confirmation flow stays console-clean").toEqual([]);
+  });
+
+  test("a stored proposal rejects without writing anything", async ({ page }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "action reject",
+      ahead(FUTURE_MINUTES),
+    );
+    const title = `${PREFIX_C} rejected task`;
+    const content = fence({ type: "task.create", payload: { title } });
+    const messageId = await seedFencedAssistantMessage(conversation, content);
+    const items = await registerFencedFor(conversation, messageId, content);
+    const actionId = items[0].id;
+
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+    const card = page.locator(`[data-assistant-action="${actionId}"]`);
+    await expect(card).toHaveAttribute(
+      "data-assistant-action-status",
+      "proposed",
+    );
+    await card.locator("[data-assistant-action-reject]").click();
+
+    await expect(card).toHaveAttribute(
+      "data-assistant-action-status",
+      "rejected",
+      { timeout: 20_000 },
+    );
+    await expect(card.locator("[data-assistant-action-rejected]")).toHaveText(
+      ASSISTANT_ACTION_COPY.REJECTED,
+    );
+    await expect(card.locator("[data-assistant-action-confirm]")).toHaveCount(0);
+
+    const log = await storedAction(actionId);
+    expect(log).toMatchObject({ status: "rejected", result: null, error: null });
+    expect(log!.settled_at).not.toBeNull();
+    expect(await taskCount(title)).toBe(0);
+
+    await page.waitForTimeout(600);
+    await page.screenshot({
+      path: "screenshots/t27c-rejected.png",
+      fullPage: true,
+    });
+    expect(errors, "the rejection flow stays console-clean").toEqual([]);
+  });
+
+  test("a linked foreign document fails with sanitized copy and writes nothing", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const foreignDocId = randomUUID();
+    const foreign = await service.from("documents").insert({
+      id: foreignDocId,
+      user_id: qa2Id,
+      name: `${PREFIX_C} foreign notes.pdf`,
+      mime_type: "application/pdf",
+      size_bytes: 1024,
+      status: "uploaded",
+    });
+    expect(
+      foreign.error,
+      `seed foreign document: ${foreign.error?.message}`,
+    ).toBeNull();
+    createdDocumentIds.push(foreignDocId);
+
+    const conversation = await seedConversation(
+      qa1Id,
+      "action foreign link",
+      ahead(FUTURE_MINUTES),
+    );
+    const title = `${PREFIX_C} foreign-linked task`;
+    const content = fence({
+      type: "task.create",
+      payload: { title, documentId: foreignDocId },
+    });
+    const messageId = await seedFencedAssistantMessage(conversation, content);
+    const items = await registerFencedFor(conversation, messageId, content);
+    const actionId = items[0].id;
+
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+    const card = page.locator(`[data-assistant-action="${actionId}"]`);
+    await card.locator("[data-assistant-action-confirm]").click();
+
+    await expect(card).toHaveAttribute(
+      "data-assistant-action-status",
+      "failed",
+      { timeout: 20_000 },
+    );
+    await expect(card.locator("[data-assistant-action-error]")).toHaveText(
+      ASSISTANT_ACTION_COPY.DOCUMENT_NOT_FOUND,
+    );
+    await expect(card.locator("[data-assistant-action-created]")).toHaveCount(0);
+
+    const log = await storedAction(actionId);
+    expect(log!.status).toBe("failed");
+    expect(log!.error).toBe(ASSISTANT_ACTION_COPY.DOCUMENT_NOT_FOUND);
+    expect(log!.result).toBeNull();
+    expect(await taskCount(title)).toBe(0);
+
+    await page.waitForTimeout(600);
+    await page.screenshot({
+      path: "screenshots/t27c-failed.png",
+      fullPage: true,
+    });
+    expect(errors, "the honest failure stays console-clean").toEqual([]);
+  });
+
+  test("a presentation proposal fails honestly as not available", async ({
+    page,
+  }) => {
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "action presentation",
+      ahead(FUTURE_MINUTES),
+    );
+    const title = `${PREFIX_C} deck idea`;
+    const prompt = `${PREFIX_C} explain photosynthesis for a first-year class`;
+    const content = fence({
+      type: "presentation.create",
+      payload: { title, prompt, slideCount: 8 },
+    });
+    const messageId = await seedFencedAssistantMessage(conversation, content);
+    const items = await registerFencedFor(conversation, messageId, content);
+    const actionId = items[0].id;
+
+    await page.goto(`/assistant?c=${conversation}`);
+    await waitForAssistantTree(page);
+    const card = page.locator(`[data-assistant-action="${actionId}"]`);
+    await expect(card.locator("[data-assistant-action-label]")).toHaveText(
+      "Presentation",
+    );
+    await card.locator("[data-assistant-action-confirm]").click();
+
+    await expect(card).toHaveAttribute(
+      "data-assistant-action-status",
+      "failed",
+      { timeout: 20_000 },
+    );
+    await expect(card.locator("[data-assistant-action-error]")).toHaveText(
+      ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE,
+    );
+
+    const log = await storedAction(actionId);
+    expect(log!.status).toBe("failed");
+    expect(log!.error).toBe(ASSISTANT_ACTION_COPY.PRESENTATION_NOT_AVAILABLE);
+
+    // T27-D wires the real path; nothing was generated and no deck exists.
+    const decks = await service
+      .from("presentations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", qa1Id)
+      .eq("prompt", prompt);
+    expect(decks.error).toBeNull();
+    expect(decks.count).toBe(0);
+    expect(errors, "the not-available failure stays console-clean").toEqual([]);
+  });
+
+  test("a stubbed fenced turn registers through the real action and confirms from the panel", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "stubbed action",
+      ahead(FUTURE_MINUTES),
+    );
+    const title = `${PREFIX_C} stubbed task`;
+    const content = `Here is what I can do.\n\n${fence({
+      type: "task.create",
+      payload: { title, dueDate: "2026-10-02" },
+    })}`;
+    /* The stub persists nothing server-side, so the client registration is
+       the only thing that turns this fenced delta into a real proposal; its
+       `done` carries no message id, so the key is the live one. */
+    const stub = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: conversation,
+          configured: true,
+        }),
+        frameToSse({ type: "delta", text: content }),
+        frameToSse({ type: "done", status: "complete", messageId: null }),
+      ],
+    });
+
+    try {
+      await page.goto("/tasks");
+      await page.getByRole("button", { name: /Ask UniPilot anything/i }).click();
+      const panel = page.locator("#unipilot-assistant-panel");
+      await expect(panel).toBeVisible();
+
+      await panel
+        .locator("[data-assistant-input]")
+        .fill(`${PREFIX_C} make a task`);
+      await panel.locator("[data-assistant-send]").click();
+
+      const bubble = panel.locator(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      await expect(bubble).toHaveAttribute("data-message-status", "complete", {
+        timeout: 20_000,
+      });
+
+      // The real registration returned the proposal; the panel renders it
+      // inside the live bubble (its local state is the only rendering here).
+      const card = bubble.locator("[data-assistant-action]");
+      await expect(card).toHaveCount(1, { timeout: 20_000 });
+      await expect(card).toHaveAttribute(
+        "data-assistant-action-status",
+        "proposed",
+      );
+      await expect(
+        card.locator("[data-assistant-action-summary]"),
+      ).toContainText(`Create task: ${title}`);
+
+      // The row is real and keyed to the live content (no message id).
+      const { data: row, error } = await service
+        .from("assistant_actions")
+        .select("id, message_id, status")
+        .eq("user_id", qa1Id)
+        .eq("conversation_id", conversation)
+        .limit(1)
+        .maybeSingle();
+      expect(error).toBeNull();
+      expect(row, "the live registration wrote a real row").not.toBeNull();
+      expect(row!.message_id).toBeNull();
+      expect(row!.status).toBe("proposed");
+      createdActionIds.push(row!.id);
+
+      // Confirm from the panel: the card settles against the real action.
+      await card.locator("[data-assistant-action-confirm]").click();
+      await expect(card).toHaveAttribute(
+        "data-assistant-action-status",
+        "succeeded",
+        { timeout: 20_000 },
+      );
+      await expect(card.locator("[data-assistant-action-created]")).toContainText(
+        title,
+      );
+
+      const log = await storedAction(row!.id);
+      expect(log!.status).toBe("succeeded");
+      const result = log!.result as { id: string };
+      createdTaskIds.push(result.id);
+      expect(await taskCount(title)).toBe(1);
+
+      expect(
+        errors,
+        "the stubbed registration flow stays console-clean",
+      ).toEqual([]);
+    } finally {
+      await stub.dispose();
+    }
+  });
+
+  test("a late registration from a previous turn never lands on the next turn", async ({
+    page,
+  }) => {
+    test.slow();
+    const errors = trackConsoleErrors(page);
+    const conversation = await seedConversation(
+      qa1Id,
+      "stale registration",
+      ahead(FUTURE_MINUTES),
+    );
+    const title = `${PREFIX_C} stale task`;
+    const firstContent = `First answer.\n\n${fence({
+      type: "task.create",
+      payload: { title },
+    })}`;
+
+    /* Hold the first registration's Server Action request until the second
+       turn has settled, so its result resolves afterwards. Without the turn
+       token in `useAssistantTurn`, that late result would write the first
+       turn's cards into the second turn's bubble. */
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    const handler = async (route: Route) => {
+      const request = route.request();
+      if (
+        request.method() !== "POST" ||
+        request.headers()["next-action"] === undefined
+      ) {
+        await route.fallback();
+        return;
+      }
+      if (!held) {
+        held = true;
+        await gate;
+      }
+      await route.fallback();
+    };
+    await page.route("**/tasks", handler);
+
+    let active: AssistantTurnStub | null = await stubAssistantTurn(page, {
+      chunks: [
+        frameToSse({
+          type: "start",
+          conversationId: conversation,
+          configured: true,
+        }),
+        frameToSse({ type: "delta", text: firstContent }),
+        frameToSse({ type: "done", status: "complete", messageId: null }),
+      ],
+    });
+
+    try {
+      await page.goto("/tasks");
+      await page.getByRole("button", { name: /Ask UniPilot anything/i }).click();
+      const panel = page.locator("#unipilot-assistant-panel");
+      await expect(panel).toBeVisible();
+
+      // First turn: settles with a proposal; its registration is held.
+      await panel.locator("[data-assistant-input]").fill(`${PREFIX_C} first`);
+      await panel.locator("[data-assistant-send]").click();
+      const bubble = panel.locator(
+        '[data-message-role="assistant"][data-message-local]',
+      );
+      await expect(bubble).toHaveAttribute("data-message-status", "complete", {
+        timeout: 20_000,
+      });
+      await expect.poll(() => held).toBe(true);
+      await expect(panel.locator("[data-assistant-composer]")).toHaveAttribute(
+        "aria-busy",
+        "false",
+      );
+
+      // Second turn, before the first registration resolves: a stream that
+      // proposes nothing.
+      await active.dispose();
+      active = await stubAssistantTurn(page, {
+        chunks: [
+          frameToSse({
+            type: "start",
+            conversationId: conversation,
+            configured: true,
+          }),
+          frameToSse({ type: "delta", text: "Second answer with no actions." }),
+          frameToSse({ type: "done", status: "complete", messageId: null }),
+        ],
+      });
+      await panel.locator("[data-assistant-input]").fill(`${PREFIX_C} second`);
+      await panel.locator("[data-assistant-send]").click();
+      await expect(bubble).toHaveAttribute("data-message-status", "complete", {
+        timeout: 20_000,
+      });
+      await expect(bubble.locator("[data-message-content]")).toHaveText(
+        "Second answer with no actions.",
+      );
+
+      // Release the stale registration and wait for its real response (the
+      // row it wrote proves it carried an action).
+      const staleResponse = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          response.request().headers()["next-action"] !== undefined,
+      );
+      release();
+      await staleResponse;
+      await expect
+        .poll(async () => {
+          const { data } = await service
+            .from("assistant_actions")
+            .select("id")
+            .eq("user_id", qa1Id)
+            .eq("conversation_id", conversation)
+            .limit(1);
+          return data?.[0]?.id ?? null;
+        })
+        .not.toBeNull();
+      // Give the client's settled state a beat to flush, then prove the new
+      // bubble owns no cards (the first turn's card must not appear under it).
+      await page.waitForTimeout(500);
+      await expect(bubble.locator("[data-assistant-action]")).toHaveCount(0);
+      await expect(panel.locator("[data-assistant-action]")).toHaveCount(0);
+
+      expect(errors, "the stale-registration flow stays console-clean").toEqual(
+        [],
+      );
+    } finally {
+      release();
+      await page.unroute("**/tasks", handler);
+      if (active !== null) await active.dispose();
     }
   });
 });

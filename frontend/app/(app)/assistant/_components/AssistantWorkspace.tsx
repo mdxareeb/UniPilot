@@ -25,7 +25,11 @@ import {
   deleteConversationAction,
   renameConversationAction,
 } from "@/lib/data/assistantActions";
-import type { MessageItem } from "@/lib/data/assistantValues";
+import type {
+  AssistantActionItem,
+  AssistantActionMutationResult,
+  MessageItem,
+} from "@/lib/data/assistantValues";
 import type { ConversationItem } from "@/lib/data/conversations";
 import { AssistantComposer } from "@/components/assistant/AssistantComposer";
 import { MessageList } from "@/components/assistant/MessageList";
@@ -43,6 +47,11 @@ type AssistantWorkspaceProps = {
   selected: ConversationItem | null;
   /** The selected conversation's messages, in stored order. */
   messages: MessageItem[];
+  /**
+   * The selected conversation's action log (T27-C), oldest first. Each
+   * assistant message renders the cards whose `messageId` names it.
+   */
+  actions: AssistantActionItem[];
   /** True when `?c=` named a conversation this account cannot read. */
   selectionUnavailable: boolean;
   /** True for a visitor without a session. */
@@ -98,6 +107,12 @@ type AssistantWorkspaceProps = {
  * with the server (`router.refresh()`, plus the URL moving to `?c=` when
  * `start` created a conversation) so the stored rows are the source of truth.
  *
+ * T27-C adds the confirmation cards: the page's owner-scoped action read
+ * arrives as `actions`, and each stored assistant bubble renders the proposals
+ * that name its message. A card settles through the real Server Actions; this
+ * shell then refreshes so the stored log and the created task/event become the
+ * authority again. The shell never executes an action itself (27.6).
+ *
  * C6 closes the two deferred C4 review findings here. The hook is given a
  * synchronous `selectionIntent` (the verb ref above plus the live URL) so a
  * settle that lands between a create/delete and its committed render compares
@@ -132,6 +147,7 @@ export function AssistantWorkspace({
   conversations,
   selected,
   messages,
+  actions,
   selectionUnavailable,
   guest,
   configured,
@@ -181,6 +197,14 @@ export function AssistantWorkspace({
     selectionIntent,
   });
   const showComposer = !guest && !selectionUnavailable;
+
+  /* T27-C — a confirmation card's settle re-reads the server truth: the log
+     row's settled status and, on success, the created task/event. The card
+     shows the returned row immediately; this refresh is what makes the
+     stored read the authority again afterwards. */
+  const onActionSettled = useCallback(() => {
+    router.refresh();
+  }, [router]);
 
   /* The local list the verbs mutate optimistically. The server render replaces
      it whenever a new one arrives (the documents-workspace idiom: derived
@@ -418,8 +442,10 @@ export function AssistantWorkspace({
               guest={guest}
               selected={selected}
               messages={messages}
+              actions={actions}
               selectionUnavailable={selectionUnavailable}
               pending={turn}
+              onActionSettled={onActionSettled}
               creating={creating}
               onCreate={() => void create()}
             />
@@ -442,10 +468,12 @@ export function AssistantWorkspace({
 
 type ConversationBodyProps = Pick<
   AssistantWorkspaceProps,
-  "guest" | "selected" | "messages" | "selectionUnavailable"
+  "guest" | "selected" | "messages" | "actions" | "selectionUnavailable"
 > & {
   /** The live turn this tab is receiving, or null. */
   pending: LocalTurn | null;
+  /** T27-C — a card's settle re-reads the server truth. */
+  onActionSettled: (result: AssistantActionMutationResult) => void;
   /** True while 19.2's create request is in flight. */
   creating: boolean;
   /** 19.2 — the empty state's real "New conversation" control. */
@@ -466,8 +494,10 @@ function ConversationBody({
   guest,
   selected,
   messages,
+  actions,
   selectionUnavailable,
   pending,
+  onActionSettled,
   creating,
   onCreate,
 }: ConversationBodyProps) {
@@ -540,5 +570,12 @@ function ConversationBody({
     );
   }
 
-  return <MessageList messages={messages} pending={pending} />;
+  return (
+    <MessageList
+      messages={messages}
+      actions={actions}
+      pending={pending}
+      onActionSettled={onActionSettled}
+    />
+  );
 }

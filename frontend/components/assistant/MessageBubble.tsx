@@ -1,8 +1,11 @@
 import { Badge } from "@/components/ui/Badge";
 import type {
+  AssistantActionItem,
+  AssistantActionMutationResult,
   AssistantSource,
   MessageItem,
 } from "@/lib/data/assistantValues";
+import { AssistantActionCard } from "./AssistantActionCard";
 import { AssistantAvatar } from "./AssistantAvatar";
 import { SourceReferences } from "./SourceReferences";
 
@@ -38,8 +41,22 @@ import { SourceReferences } from "./SourceReferences";
  *   arrived, never as an answer;
  * - sources (19.11) render through the shared `SourceReferences` for both
  *   halves.
+ *
+ * T27-C adds the confirmation cards: an assistant bubble renders the
+ * `AssistantActionCard`s for the proposals that name it (`messageId`), after
+ * the source references. Stored rows get theirs from the page's action read;
+ * the launcher panel's live turn gets the ones its registration returned.
  */
-export function MessageBubble({ message }: { message: MessageItem }) {
+export function MessageBubble({
+  message,
+  actions = [],
+  onActionSettled,
+}: {
+  message: MessageItem;
+  /** The confirmation cards to render inside this bubble, in order. */
+  actions?: AssistantActionItem[];
+  onActionSettled?: (result: AssistantActionMutationResult) => void;
+}) {
   if (message.role === "system") {
     return (
       <div
@@ -73,6 +90,8 @@ export function MessageBubble({ message }: { message: MessageItem }) {
       sources={message.sources}
       timestampLabel={message.createdLabel}
       messageId={message.id}
+      actions={actions}
+      onActionSettled={onActionSettled}
     />
   );
 }
@@ -158,6 +177,10 @@ type AssistantBubbleProps = {
   messageId?: string | null;
   /** True for the not-yet-stored streaming turn (19.10). */
   local?: boolean;
+  /** The confirmation cards for this message's proposals, in order. */
+  actions?: AssistantActionItem[];
+  /** Called after a card's confirm/reject call returns. */
+  onActionSettled?: (result: AssistantActionMutationResult) => void;
 };
 
 /** The assistant's turn, leading-aligned with 19.6's avatar. */
@@ -169,6 +192,8 @@ export function AssistantBubble({
   timestampLabel = null,
   messageId = null,
   local = false,
+  actions = [],
+  onActionSettled,
 }: AssistantBubbleProps) {
   const showFailure = failureCopy !== null && failureCopy !== content;
 
@@ -223,6 +248,21 @@ export function AssistantBubble({
           </p>
         ) : null}
         <SourceReferences sources={sources} />
+        {actions.length > 0 ? (
+          <ul
+            data-assistant-actions=""
+            className="flex min-w-0 list-none flex-col gap-2"
+          >
+            {actions.map((action) => (
+              <li key={action.id} className="min-w-0">
+                <AssistantActionCard
+                  action={action}
+                  onSettled={onActionSettled}
+                />
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {timestampLabel !== null ? (
           <p
             data-message-timestamp=""

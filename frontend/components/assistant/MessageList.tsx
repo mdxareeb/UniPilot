@@ -1,7 +1,11 @@
 "use client";
 
 import { MotionReveal } from "@/components/motion/MotionReveal";
-import type { MessageItem } from "@/lib/data/assistantValues";
+import type {
+  AssistantActionItem,
+  AssistantActionMutationResult,
+  MessageItem,
+} from "@/lib/data/assistantValues";
 import { AssistantBubble, MessageBubble, UserBubble } from "./MessageBubble";
 import type { LocalTurn } from "./useAssistantTurn";
 
@@ -36,15 +40,34 @@ import type { LocalTurn } from "./useAssistantTurn";
  * `AnimatePresence` exit either: the pending-to-stored handoff must be
  * instant, and an exit animation there would briefly double-render the same
  * text.
+ *
+ * T27-C: the stored proposals render inside the assistant bubble whose id
+ * they name (`action.messageId`); the launcher panel passes its live turn's
+ * registered proposals as `pendingActions`, which render inside the live
+ * bubble. An action that names no message here is simply not rendered on this
+ * surface — never guessed onto a bubble.
  */
 export function MessageList({
   messages,
   pending = null,
+  actions = [],
+  pendingActions = [],
+  onActionSettled,
 }: {
   /** The stored rows, in service order. */
   messages: MessageItem[];
   /** The live turn this tab is receiving, or null. */
   pending?: LocalTurn | null;
+  /**
+   * The conversation's stored proposals (T27-C). Each stored assistant message
+   * renders the cards whose `messageId` is its own; the list is printed in the
+   * service's order.
+   */
+  actions?: AssistantActionItem[];
+  /** The live turn's registered proposals (the launcher panel's local state). */
+  pendingActions?: AssistantActionItem[];
+  /** Called after a card's confirm/reject call returns. */
+  onActionSettled?: (result: AssistantActionMutationResult) => void;
 }) {
   const streaming = pending !== null && pending.entry.status === "streaming";
 
@@ -57,7 +80,15 @@ export function MessageList({
     >
       {messages.map((message) => (
         <MotionReveal as="li" key={message.id} className="min-w-0">
-          <MessageBubble message={message} />
+          <MessageBubble
+            message={message}
+            actions={
+              message.role === "assistant"
+                ? actions.filter((action) => action.messageId === message.id)
+                : []
+            }
+            onActionSettled={onActionSettled}
+          />
         </MotionReveal>
       ))}
       {pending !== null ? (
@@ -71,6 +102,8 @@ export function MessageList({
               status={pending.entry.status}
               sources={pending.entry.sources}
               failureCopy={pending.failureCopy}
+              actions={pendingActions}
+              onActionSettled={onActionSettled}
               local
             />
           </MotionReveal>

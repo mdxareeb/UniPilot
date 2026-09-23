@@ -8,7 +8,11 @@ import {
   providerStatus,
 } from "@/lib/ai/provider";
 import { ASSISTANT_COPY } from "@/lib/data/assistant";
-import type { MessageItem } from "@/lib/data/assistantValues";
+import { listAssistantActions } from "@/lib/data/assistantActionLog";
+import type {
+  AssistantActionItem,
+  MessageItem,
+} from "@/lib/data/assistantValues";
 import {
   listConversations,
   type ConversationItem,
@@ -46,6 +50,12 @@ export const metadata: Metadata = {
  * live in the client boundary; this page stays a server component and hands
  * that boundary only serializable data.
  *
+ * T27-C adds the 27.x action log read: the selected conversation's proposals
+ * load beside its messages through the same owner-scoped client, and each
+ * assistant bubble renders the confirmation cards whose `messageId` names it.
+ * The page never executes an action — only the cards' real Server Actions,
+ * after a user's Confirm/Reject, can (27.6).
+ *
  * A visitor without a session renders the same header with the sign-in action
  * and the real shell with its guest empty state, and no data call happens at
  * all (the anon role is revoked, so a guest query would fail by design).
@@ -64,6 +74,7 @@ export default async function AssistantPage({
   let conversations: ConversationItem[] = [];
   let selected: ConversationItem | null = null;
   let messages: MessageItem[] = [];
+  let actions: AssistantActionItem[] = [];
   let selectionUnavailable = false;
 
   if (user) {
@@ -77,7 +88,13 @@ export default async function AssistantPage({
     }
 
     if (selected !== null) {
-      messages = await listMessages(user.id, selected.id);
+      /* The action log's owner-scoped read runs beside the messages through
+         the same request client (RLS is the authority); each assistant bubble
+         then renders the proposals that name its message id. */
+      [messages, actions] = await Promise.all([
+        listMessages(user.id, selected.id),
+        listAssistantActions(user.id, selected.id),
+      ]);
     }
   }
 
@@ -87,6 +104,7 @@ export default async function AssistantPage({
         conversations={conversations}
         selected={selected}
         messages={messages}
+        actions={actions}
         selectionUnavailable={selectionUnavailable}
         guest={!user}
         configured={assistant.configured}

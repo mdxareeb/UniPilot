@@ -246,7 +246,7 @@ export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
   /* The shared turn hook. It reads no session and no database — it only
      streams the route once a send happens. `refreshOnSettle` is off because
      the panel has no server-rendered rows to reconcile. */
-  const { turn, busy, send, stop } = useAssistantTurn({
+  const { turn, busy, send, stop, proposals, settleProposal } = useAssistantTurn({
     conversationId,
     failedCopy,
     refreshOnSettle: false,
@@ -596,6 +596,8 @@ export function AssistantLauncher({ failedCopy }: { failedCopy: string }) {
               real conversation. */}
           <AssistantPanelChat
             turn={turn}
+            proposals={proposals}
+            onActionSettled={settleProposal}
             conversationId={conversationId}
             onNavigate={() => setOpenedFor(null)}
           />
