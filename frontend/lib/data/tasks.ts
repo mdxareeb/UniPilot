@@ -20,6 +20,7 @@
  * server half). A mutation that matched no row (another user's id, or a
  * already-deleted task) returns null / false instead of inventing a success.
  */
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/database.types";
 import { readProfileTimeZone } from "./profileTime";
@@ -36,6 +37,17 @@ import { zonedDateOnlyToInstant } from "./taskDates";
 const TASK_COLUMNS = "id, title, status, due_date, priority";
 
 type TaskUpdate = Database["public"]["Tables"]["tasks"]["Update"];
+
+/**
+ * 27.x — the caller-scoped Supabase client to run with. Page and Server
+ * Action callers omit it and get the request-scoped session client; the
+ * action executor (and the specs that drive it) pass the same session client
+ * they already hold, so one confirmed action runs against one client and RLS
+ * still sees the owner's session.
+ */
+export type TaskServiceOptions = {
+  client?: SupabaseClient<Database>;
+};
 
 /**
  * 21.2 Load â€” every task the caller owns, deterministically ordered:
@@ -86,8 +98,9 @@ export async function getTask(
 export async function createTask(
   userId: string,
   draft: TaskDraft,
+  options: TaskServiceOptions = {},
 ): Promise<TaskItem> {
-  const supabase = await createClient();
+  const supabase = options.client ?? (await createClient());
   const timeZone = await readProfileTimeZone(supabase, userId);
 
   const { data, error } = await supabase
@@ -102,6 +115,9 @@ export async function createTask(
           : zonedDateOnlyToInstant(draft.dueDate, timeZone),
       effort_minutes: draft.effortMinutes,
       priority: draft.priority,
+      // 27.5 (R2): provenance is set at creation; the caller has already
+      // verified the document belongs to this owner (or passed none).
+      source_document_id: draft.sourceDocumentId ?? null,
       status: "todo",
     })
     .select(TASK_COLUMNS)

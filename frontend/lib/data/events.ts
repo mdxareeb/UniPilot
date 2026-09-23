@@ -40,6 +40,15 @@ type EventRange = {
 
 type EventUpdate = Database["public"]["Tables"]["events"]["Update"];
 
+/**
+ * 27.x — the caller-scoped Supabase client to run with; see
+ * `TaskServiceOptions` in `tasks.ts`. Page and Action callers omit it and get
+ * the request-scoped session client.
+ */
+export type EventServiceOptions = {
+  client?: SupabaseClient<Database>;
+};
+
 /** The writable columns, shared by insert and update. */
 function toWritable(draft: EventDraft) {
   return {
@@ -162,14 +171,21 @@ export async function getEvent(
 export async function createEvent(
   userId: string,
   local: EventDraftLocal,
+  options: EventServiceOptions = {},
 ): Promise<EventItem> {
-  const supabase = await createClient();
+  const supabase = options.client ?? (await createClient());
   const timeZone = await readProfileTimeZone(supabase, userId);
   const draft = resolveEventDraft(local, timeZone);
 
   const { data, error } = await supabase
     .from("events")
-    .insert({ user_id: userId, ...toWritable(draft) })
+    .insert({
+      user_id: userId,
+      ...toWritable(draft),
+      // 27.5 (R2): provenance is set at creation only — an update must never
+      // clear or rewrite the link. The caller verified ownership first.
+      source_document_id: local.sourceDocumentId ?? null,
+    })
     .select(EVENT_COLUMNS)
     .single();
 

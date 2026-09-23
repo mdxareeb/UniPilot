@@ -115,6 +115,14 @@ export type TaskDraft = {
   dueDate: string | null;
   effortMinutes: number | null;
   priority: TaskPriority | null;
+  /**
+   * 27.5 (R2) — the workspace document this task came from, when the
+   * assistant named one. Optional: the form path never sends it, so the parser
+   * omits the key (rather than inventing `null`) when it is absent and every
+   * existing draft keeps its exact shape. Only `createTask` writes it; an
+   * update never rewrites provenance.
+   */
+  sourceDocumentId?: string | null;
 };
 
 /** Update patch: an absent field is left unchanged; null (or "") clears it. */
@@ -163,6 +171,24 @@ function readDueDate(value: unknown): Read<string | null> {
   if (!isRealDateOnly(candidate)) return { ok: false };
 
   return { ok: true, value: candidate };
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * 27.5 (R2) — the optional provenance document id. Absent/""/null mean "no
+ * link" and are returned as null so the caller can omit the key from a draft;
+ * anything that is not a uuid is rejected before a write.
+ */
+function readSourceDocumentId(value: unknown): Read<string | null> {
+  if (value === undefined || value === null || value === "") {
+    return { ok: true, value: null };
+  }
+  if (typeof value === "string" && UUID_PATTERN.test(value.trim())) {
+    return { ok: true, value: value.trim() };
+  }
+  return { ok: false };
 }
 
 /** Priority on a create draft: absent/""/"none" mean no priority. */
@@ -215,17 +241,30 @@ export function parseTaskDraft(input: unknown): TaskDraft | null {
   const dueDate = readDueDate(input.dueDate);
   const effort = readEffort(input.effortMinutes);
   const priority = readPriority(input.priority);
-  if (!description.ok || !dueDate.ok || !effort.ok || !priority.ok) {
+  const sourceDocumentId = readSourceDocumentId(input.sourceDocumentId);
+  if (
+    !description.ok ||
+    !dueDate.ok ||
+    !effort.ok ||
+    !priority.ok ||
+    !sourceDocumentId.ok
+  ) {
     return null;
   }
 
-  return {
+  const draft: TaskDraft = {
     title,
     description: description.value,
     dueDate: dueDate.value,
     effortMinutes: effort.value,
     priority: priority.value,
   };
+  // R2: the key exists only when a document was actually named, so a draft
+  // without provenance compares equal to the shape it had before 27.5.
+  if (sourceDocumentId.value !== null) {
+    draft.sourceDocumentId = sourceDocumentId.value;
+  }
+  return draft;
 }
 
 /**
@@ -300,9 +339,7 @@ export function parseTaskPriority(
 export function parseTaskId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const id = value.trim();
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-    ? id
-    : null;
+  return UUID_PATTERN.test(id) ? id : null;
 }
 
 /**

@@ -40,6 +40,15 @@ const DOCUMENT_COLUMNS =
 /** How many bytes the finalize sniff reads; every signature is ≤ 8. */
 const MAGIC_SNIFF_BYTES = 16;
 
+/**
+ * 27.x — the caller-scoped Supabase client to run with; see
+ * `TaskServiceOptions` in `tasks.ts`. Page and Action callers omit it and get
+ * the request-scoped session client.
+ */
+export type DocumentServiceOptions = {
+  client?: SupabaseClient<Database>;
+};
+
 /** What the free-tier guard measures (23.12). */
 export type DocumentUsage = {
   count: number;
@@ -68,8 +77,9 @@ export async function listDocuments(userId: string): Promise<DocumentItem[]> {
 export async function getDocument(
   userId: string,
   documentId: string,
+  options: DocumentServiceOptions = {},
 ): Promise<DocumentItem | null> {
-  const supabase = await createClient();
+  const supabase = options.client ?? (await createClient());
 
   const [timeZone, result] = await Promise.all([
     readProfileTimeZone(supabase, userId),

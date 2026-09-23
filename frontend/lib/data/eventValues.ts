@@ -84,6 +84,13 @@ export type EventDraftLocal = {
   location: string | null;
   description: string | null;
   subjectId: string | null;
+  /**
+   * 27.5 (R2) — the workspace document this event came from, when the
+   * assistant named one. Optional, like `TaskDraft.sourceDocumentId`: absent
+   * means no link and the parser omits the key, so existing drafts and the
+   * edit form's payload keep their exact shape. Only `createEvent` writes it.
+   */
+  sourceDocumentId?: string | null;
 };
 
 /** The validated draft resolved to UTC instants — what the service writes. */
@@ -208,6 +215,21 @@ function readSubjectId(value: unknown): Read<string | null> {
 }
 
 /**
+ * 27.5 (R2) — the optional provenance document id. Absent/""/null mean "no
+ * link" and are omitted from the parsed draft (never stored as an invented
+ * null); a non-uuid is rejected. Ownership is verified by the caller.
+ */
+function readSourceDocumentId(value: unknown): Read<string | null> {
+  if (value === undefined || value === null || value === "") {
+    return { ok: true, value: null };
+  }
+  if (typeof value === "string" && UUID_PATTERN.test(value.trim())) {
+    return { ok: true, value: value.trim() };
+  }
+  return { ok: false };
+}
+
+/**
  * Validates an untrusted event payload (22.3/22.4) into the local draft.
  * `null` rejects: the action answers with sanitized copy and nothing is
  * written. `endAt` must not precede `startAt` in the same shape family, so the
@@ -236,9 +258,17 @@ export function parseEventDraft(input: unknown): EventDraftLocal | null {
   const location = readText(input.location, EVENT_LOCATION_MAX_LENGTH);
   const description = readText(input.description, EVENT_DESCRIPTION_MAX_LENGTH);
   const subjectId = readSubjectId(input.subjectId);
-  if (!location.ok || !description.ok || !subjectId.ok) return null;
+  const sourceDocumentId = readSourceDocumentId(input.sourceDocumentId);
+  if (
+    !location.ok ||
+    !description.ok ||
+    !subjectId.ok ||
+    !sourceDocumentId.ok
+  ) {
+    return null;
+  }
 
-  return {
+  const draft: EventDraftLocal = {
     title,
     type: type.value,
     startAt,
@@ -248,6 +278,11 @@ export function parseEventDraft(input: unknown): EventDraftLocal | null {
     description: description.value,
     subjectId: subjectId.value,
   };
+  // R2: the key exists only when a document was actually named.
+  if (sourceDocumentId.value !== null) {
+    draft.sourceDocumentId = sourceDocumentId.value;
+  }
+  return draft;
 }
 
 /**

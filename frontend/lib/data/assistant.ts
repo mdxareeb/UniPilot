@@ -47,7 +47,9 @@ import {
   type AssistantSource,
   type AssistantStreamFrame,
   type MessageItem,
+  type MessageStatus,
 } from "./assistantValues";
+import { registerAssistantProposals } from "./assistantActionLog";
 
 /**
  * The SSE frame contract (26.8) moved to the client-safe vocabulary module
@@ -268,12 +270,46 @@ async function persistHonestAnswer(
   conversationId: string,
   content: string,
 ): Promise<MessageItem> {
-  return appendMessage(userId, {
+  return appendAssistantMessage(userId, {
     conversationId,
-    role: "assistant",
     content,
     status: "complete",
   });
+}
+
+/**
+ * 27.9/27.11 — persist an assistant message, then register the fenced actions
+ * it proposes. Registration is **best-effort by contract**: the answer is the
+ * user-visible product and is already saved, so a registration failure (a
+ * database hiccup, a foreign id) is reported and swallowed — it must never
+ * turn a delivered answer into a failed turn. It is not silently hidden
+ * either: the failure is logged with no raw database text.
+ *
+ * Registration only writes `proposed` rows; nothing here executes an action —
+ * only a user's confirmation can (27.6).
+ */
+async function appendAssistantMessage(
+  userId: string,
+  input: {
+    conversationId: string;
+    content: string;
+    status?: MessageStatus;
+    sources?: AssistantSource[];
+  },
+): Promise<MessageItem> {
+  const message = await appendMessage(userId, { ...input, role: "assistant" });
+
+  try {
+    await registerAssistantProposals(userId, {
+      conversationId: message.conversationId,
+      messageId: message.id,
+      content: message.content,
+    });
+  } catch {
+    console.error("assistant action registration failed");
+  }
+
+  return message;
 }
 
 /**
@@ -342,9 +378,8 @@ export async function runAssistantTurn(
 
   const { provider, status } = resolveChatProvider();
   if (provider === null || status.model === null) {
-    const assistantMessage = await appendMessage(userId, {
+    const assistantMessage = await appendAssistantMessage(userId, {
       conversationId,
-      role: "assistant",
       content: ASSISTANT_COPY.FAILED,
       status: "failed",
     });
@@ -366,9 +401,8 @@ export async function runAssistantTurn(
       }),
     );
     const text = result.text.trim();
-    const assistantMessage = await appendMessage(userId, {
+    const assistantMessage = await appendAssistantMessage(userId, {
       conversationId,
-      role: "assistant",
       content: text === "" ? ASSISTANT_COPY.FAILED : text,
       status: text === "" ? "failed" : "complete",
       sources: text === "" ? undefined : sources,
@@ -383,9 +417,8 @@ export async function runAssistantTurn(
       sources: assistantMessage.status === "complete" ? sources : [],
     };
   } catch {
-    const assistantMessage = await appendMessage(userId, {
+    const assistantMessage = await appendAssistantMessage(userId, {
       conversationId,
-      role: "assistant",
       content: ASSISTANT_COPY.FAILED,
       status: "failed",
     });
@@ -458,9 +491,8 @@ export async function* streamAssistantTurn(
 
   const { provider, status } = resolveChatProvider();
   if (provider === null || status.model === null) {
-    const message = await appendMessage(userId, {
+    const message = await appendAssistantMessage(userId, {
       conversationId,
-      role: "assistant",
       content: ASSISTANT_COPY.FAILED,
       status: "failed",
     });
@@ -489,9 +521,8 @@ export async function* streamAssistantTurn(
     const trimmed = text.trim();
     if (trimmed === "") throw new Error("The provider returned no text.");
 
-    const message = await appendMessage(userId, {
+    const message = await appendAssistantMessage(userId, {
       conversationId,
-      role: "assistant",
       content: text,
       status: "complete",
       sources,
@@ -500,9 +531,8 @@ export async function* streamAssistantTurn(
     yield { type: "sources", sources };
     yield { type: "done", status: "complete", messageId: message.id };
   } catch {
-    const message = await appendMessage(userId, {
+    const message = await appendAssistantMessage(userId, {
       conversationId,
-      role: "assistant",
       content: ASSISTANT_COPY.FAILED,
       status: "failed",
     });

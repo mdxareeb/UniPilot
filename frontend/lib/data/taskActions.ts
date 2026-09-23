@@ -45,6 +45,7 @@ import {
   setTaskStatus,
   updateTask,
 } from "./tasks";
+import { getDocument } from "./documents";
 
 export type TaskActionResult = {
   error: string | null;
@@ -89,6 +90,21 @@ export async function createTaskAction(
 
   const draft = parseTaskDraft(payload);
   if (draft === null) return { error: TASK_INVALID_INPUT_ERROR, task: null };
+
+  // 27.5 (R2): a provenance link is owner-verified before the write, so a
+  // forged or foreign document id can never be stored (the executor takes the
+  // same route through `getDocument`).
+  if (draft.sourceDocumentId != null) {
+    let source: Awaited<ReturnType<typeof getDocument>>;
+    try {
+      source = await getDocument(user.id, draft.sourceDocumentId);
+    } catch {
+      return { error: TASK_SAVE_ERROR, task: null };
+    }
+    if (source === null) {
+      return { error: TASK_INVALID_INPUT_ERROR, task: null };
+    }
+  }
 
   let task: TaskItem;
   try {

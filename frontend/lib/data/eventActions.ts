@@ -35,6 +35,7 @@ import {
   getEvent,
   updateEvent,
 } from "./events";
+import { getDocument } from "./documents";
 
 export type EventActionResult = {
   error: string | null;
@@ -88,6 +89,20 @@ export async function createEventAction(
 
   const draft = parseEventDraft(payload);
   if (draft === null) return { error: EVENT_INVALID_INPUT_ERROR, event: null };
+
+  // 27.5 (R2): the provenance link is owner-verified before the write — the
+  // executor takes the same route through `getDocument`.
+  if (draft.sourceDocumentId != null) {
+    let source: Awaited<ReturnType<typeof getDocument>>;
+    try {
+      source = await getDocument(user.id, draft.sourceDocumentId);
+    } catch {
+      return { error: EVENT_SAVE_ERROR, event: null };
+    }
+    if (source === null) {
+      return { error: EVENT_INVALID_INPUT_ERROR, event: null };
+    }
+  }
 
   let event: EventItem;
   try {
