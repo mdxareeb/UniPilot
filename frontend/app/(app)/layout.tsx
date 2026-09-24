@@ -98,6 +98,15 @@ export default function AppLayout({
           />
           <main className="flex min-w-0 flex-1 flex-col">
             <RouteTransition>{children}</RouteTransition>
+            {/* Reserve the fixed launcher's footprint (the 1rem bottom offset
+                plus the 3rem bar, plus a notched device's safe-area inset) so
+                the end of any page clears it. The bar is chrome over the
+                content, and without this a control in a page's last row can
+                sit under it and never receive the click. Non-interactive. */}
+            <div
+              aria-hidden="true"
+              className="h-[calc(4rem+env(safe-area-inset-bottom))] shrink-0"
+            />
           </main>
         </div>
         {/* Inside the dotted container so it shares that stacking context: at
