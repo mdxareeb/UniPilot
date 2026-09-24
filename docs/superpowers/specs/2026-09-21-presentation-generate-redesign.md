@@ -1,6 +1,14 @@
 # Presentation generate/setup — redesign + honest model chooser
 
-Date: 2026-09-21 · Status: **awaiting review at the T0 gate** (no code written).
+Date: 2026-09-21 · Status: **delivered 2026-09-24** (phase records: `d81375b`
+spec/plan, `bf62460` T1 adapter, `d225d5b` T2 hero/split, `575791e` T3 chooser
+wiring; T4 verification + docs in TASK.md `31.x` "Generate-redesign record
+(2026-09-24)" and `docs/integrations/presenton.md` §4.1 — focused suites jobs
+76/76, renderer 244/244, UI 160 passed + 4 skips with one other-owner red,
+typecheck/lint clean, full-suite run 685 passed / 2 failed / 9 skipped / 83
+did not run with T4-owned failures 0 and a dependency-skip gap, stored-session
+Chromium probe + MCP guest sweep green; the §2.6 `[!]` limits stand
+unchanged).
 Task IDs: TASK.md `31.1`/`31.2`/`31.4` chrome follow-up (extends the delivered
 generate/setup surface; adds no product capability beyond a service-managed
 model switch).

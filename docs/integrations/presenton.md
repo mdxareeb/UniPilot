@@ -22,6 +22,8 @@ redistributes or modifies its code.
 | `PRESENTON_URL` | Base URL of the self-hosted Presenton service (e.g. `http://localhost:5001`). Unset is the honest default: the tool reports it is not connected, enqueues nothing, and never fakes a deck. |
 | `PRESENTON_API_KEY` | Optional `sk-presenton-…` API key. Sent as `Authorization: Bearer …` on every UniPilot → Presenton request. Required whenever the Presenton instance has authentication enabled (the default for the web deployment). |
 | `PRESENTON_PUBLIC_URL` | Browser-reachable Presenton origin, used only by the fallback editor wrapper (§3.6; the iframe needs a URL the *browser* can resolve). Defaults to `PRESENTON_URL` when unset. |
+| `PRESENTON_MODEL` | Optional model id this deployment's engine is configured with. Display-only fallback for the tool page's model control (labelled "configured on the service"); never invented, never used as a write target by itself (§4.1). |
+| `PRESENTON_MODEL_OPTIONS` | Optional comma-separated model ids the operator declares available for switching. **Its presence is the opt-in** for the deployment-global model switch — without it the chooser stays read-only (§4.1). |
 | `PRESENTON_POLL_INTERVAL_MS` | Worker-only knob: how often the async task is polled (default 5000 ms, minimum 500 ms). |
 | `PRESENTON_POLL_TIMEOUT_MS` | Worker-only knob: how long one generation attempt may poll before the 29.1 runner retries it (default 600000 ms = 10 minutes, minimum 10 s). |
 
@@ -276,6 +278,59 @@ Slide images additionally need an image provider (`IMAGE_PROVIDER=pexels`
 `DISABLE_IMAGE_GENERATION=true` for text-only decks. Everything else
 (`CAN_CHANGE_KEYS`, `PRESENTATION_GENERATION_MODE`, auth rotation) is
 documented in Presenton's own README and never re-documented here.
+
+### 4.1 Model selection — the engine's mechanism and UniPilot's honest chooser
+
+The generate request has **no model field** (§3.1's
+`GeneratePresentationRequest`), so a per-deck/per-request model choice cannot
+be threaded through generation. The engine resolves the model with
+`get_model()` (`utils/llm_provider.py`) from its **process environment**
+(`GOOGLE_MODEL`, `OPENAI_MODEL`, …), which
+`UserConfigEnvUpdateMiddleware` re-syncs on every request from the engine's
+persisted settings store — the singleton `provider_settings` row
+(`id = 1`; `update_env_with_user_config()` mirrors it into `os.environ`,
+skipped when `CAN_CHANGE_KEYS=false`). The model is therefore one
+**deployment-wide, single-owner** setting: a change applies to every user and
+to every deck generated after it, while a deck already generating keeps the
+model it started with.
+
+The only write path is `PUT /api/v1/admin/provider-settings`
+(`api/v1/admin/router.py`), gated three ways: `require_settings_admin` (passes
+without auth only in the no-auth single-user runtime, `DISABLE_AUTH=true`;
+otherwise a browser JWT with `is_superuser`), `_ensure_settings_are_mutable`
+(`CAN_CHANGE_KEYS=false` refuses reads too), and `SessionAuthMiddleware`,
+which **refuses API-key principals with 403** on every `/api/v1/admin/` path
+before the handler runs. UniPilot authenticates with `PRESENTON_API_KEY`, so
+on any key-authenticated deployment the chooser is honestly read-only (the
+local engine of 2026-09-21/24 answers 403 to both the settings read and the
+write).
+
+UniPilot side (adapter `frontend/lib/integrations/presenton.ts`):
+
+- `listPresentationModels()` — probes `GET /api/v1/admin/provider-settings`
+  with a short timeout and extracts **only** `LLM` plus the mapped `*_MODEL`
+  field (`PRESENTON_MODEL_KEYS`), discarding the rest of the response body
+  immediately. The settings response carries provider keys; none is ever
+  returned, cached or logged (the adapter tests assert the key value and the
+  key field name never surface). 401/403 ⇒ `engineManaged:false` +
+  `"service-managed"`; transport/5xx ⇒ `"unreachable"`; 200 ⇒ the engine's
+  provider + model. It never throws for configuration/engine states.
+- `applyPresentationModel(value)` — writes exactly
+  `{ [providerModelKey]: value }` to the same route, and only for a value the
+  engine reported or the operator declared. A denied engine refuses
+  (`not-supported`) before any write; a 4xx maps to `rejected`, transport/5xx
+  to `unreachable`. The switch is never coupled to submission: a refused write
+  creates no `presentations` row and queues no deck.
+
+The two optional server-only declarations from §1 shape what the chooser can
+honestly show (`PRESENTON_MODEL` names the model in use when the engine
+cannot be read; `PRESENTON_MODEL_OPTIONS` is the opt-in for the switch):
+
+| Deployment | Chooser |
+| --- | --- |
+| Engine grants admin settings (no-auth single-user runtime **and** `CAN_CHANGE_KEYS` not `false`) **and** `PRESENTON_MODEL_OPTIONS` is declared | Live `Select`: shows the engine's provider + model and can switch it. The switch is deployment-global and applies to generations started after it. |
+| Engine denies settings access (today's local engine — 403) | Read-only chip: the operator-declared model, or "Model set on the presentation service." when none is declared, with the honest note; never a fake selectable list. |
+| UniPilot unconfigured (`PRESENTON_URL` unset) | The existing blocked state; no model UI. |
 
 ## 5. UniPilot-side wiring (what reads/writes what)
 

@@ -327,24 +327,37 @@ and the single-`<h1>` rule.
 
 **Spec:** §6, §7. **Depends on:** T1–T3 reviewed.
 
-- [ ] **Step 1: Full verification.** From the repo root with the local stack up
+**Executed order (2026-09-24):** `qa-presentation-jobs` → `qa-presentation-renderer`
+→ `qa-presentation-ui` (one project per invocation, sequential, `--no-deps`)
+→ `npm run typecheck` → `npm run lint` → `npm run test:scripts` →
+stored-session Chromium probe (`frontend/.playwright/generate-t4-evidence.mjs`)
+→ MCP guest sweep (dev server on :3100) → full `npm run test` once at the
+gate: **685 passed / 2 failed / 9 skipped / 83 did not run** — both reds are
+other-owner (the assistant launcher overlay at 375; the WhatsApp live-flag
+guest case) and the 83 are the dependency-skipped `chromium-authenticated`
+project (a coverage gap, not a green suite).
+T1–T3 checkboxes are left unticked deliberately (historical; their phase
+records are the reports/reviews in
+`.superpowers/sdd/2026-09-21-presentation-generate-redesign/`).
+
+- [x] **Step 1: Full verification.** From the repo root with the local stack up
       (no manual dev server): `npm run test` (full suite), `npm run typecheck`,
       `npm run lint`, `npm run test:scripts`. Record counts + skips.
-- [ ] **Step 2: Real-Chromium sweep.** Via the session's browser tools
+- [x] **Step 2: Real-Chromium sweep.** Via the session's browser tools
       (QA_SESSION.md login): `/tools/presentation` dark + light, 375/768/1280;
       reduced-motion emulation; keyboard-only pass through hero → prompt →
       model → chips → disclosures → split; console clean; no horizontal
       overflow at 320/375. Screenshots refreshed/added under
       `frontend/screenshots/` (`generate-redesign-*`).
-- [ ] **Step 3: TASK.md.** Extend the `31.x` section with a dated entry: what
+- [x] **Step 3: TASK.md.** Extend the `31.x` section with a dated entry: what
       shipped (hero, chips, split, chooser states), the verification counts,
       the screenshot names, and the `[!]` list verbatim from spec §2.6.
-- [ ] **Step 4: Integration doc.** `docs/integrations/presenton.md` gains a
+- [x] **Step 4: Integration doc.** `docs/integrations/presenton.md` gains a
       "Model selection" subsection: the request has no model field; the
       persisted singleton + env sync mechanism; the admin gate; the two new
       UniPilot env vars; the deployment-global limit; what the chooser does in
       each deployment mode (mirroring spec §2.5).
-- [ ] **Step 5: Spec status.** Mark the spec "delivered" with phase records and
+- [x] **Step 5: Spec status.** Mark the spec "delivered" with phase records and
       the final `[!]` state; commit everything with the T4 message (spec/plan
       may have been committed at T0 review; if not, include them here).
 

@@ -2527,6 +2527,71 @@ These can be post-launch and should be marked Planned until genuinely implemente
   retirement remains the founder's call. Record:
   `.superpowers/sdd/2026-09-16-native-presentation/phase-F-record.md`.
 
+  **Generate-redesign record (2026-09-24).** The `/tools/presentation`
+  generate/setup chrome was reshaped to the reference layout and the model
+  chooser was made honest about the engine's real mechanism (spec
+  `docs/superpowers/specs/2026-09-21-presentation-generate-redesign.md`,
+  plan `docs/superpowers/plans/2026-09-21-presentation-generate-redesign.md`;
+  commits `d81375b` spec/plan, `bf62460` T1, `d225d5b` T2, `575791e` T3).
+  Shipped: the honest model listing + service-managed selection adapter
+  (`listPresentationModels` / `applyPresentationModel` — the engine's own
+  settings report or the operator declaration, never a key and never an
+  invented id); the reference-shape generate hero (single `<h1>`, one glass
+  prompt card, real format/slides/template option controls) with the
+  Get-started/Templates split (real engine art, honest guest/empty states);
+  and the live model chooser wiring with honest states (interactive `Select`
+  only where the engine grants admin settings and `PRESENTON_MODEL_OPTIONS`
+  opts in; read-only chip + truthful note everywhere else; sanitized failure
+  notice; no phantom selection). The mechanism is documented in
+  `docs/integrations/presenton.md` §4.1 with the two new server-only vars.
+  Verification: `qa-presentation-jobs` **76/76**, `qa-presentation-renderer`
+  **244/244**, `qa-presentation-ui` **160 passed / 4 skipped** with the single
+  known other-owner red (the assistant launcher overlay at 375, below);
+  `npm run typecheck` and `npm run lint` clean; the real-Chromium T4 probe
+  (`frontend/.playwright/generate-t4-evidence.mjs`, stored QA session: single
+  `<h1>`, no overflow, the honest read-only chip, console clean, clean
+  reduced-motion pass) and the MCP guest sweep dark + light at 1280/768/375
+  with a keyboard-only tab walk. Screenshots (git-ignored,
+  `frontend/screenshots/`):
+  `generate-final-{dark,light}-{1280,768,375}.png`,
+  `generate-t4-auth-{dark-1280,light-1280,375}.png`,
+  `generate-t4-model-readonly-{dark,light}.png`.
+  Full-suite run: **685 passed / 2 failed / 9 skipped / 83 did not run**
+  (20.5m) — **T4-owned failures 0**; the two reds are other owners (the
+  assistant launcher overlay below, and the WhatsApp live-flag guest case
+  after it). The `83 did not run` is a **coverage gap**: the
+  `chromium-authenticated` project is dependency-skipped because it depends on
+  both failed projects (`playwright.config.ts`), so this run is **not** a
+  green full suite.
+  Recorded limits:
+  - `[!]` Per-request model selection is impossible with this engine: the
+    request schema (`GeneratePresentationRequest`) has no model field;
+    dependency: an engine feature.
+  - `[!]` The model switch is service-wide/single-owner: it changes the
+    deployment for every user and every deck generated after the change;
+    in-flight decks keep their model.
+  - `[!]` The switch works only where the engine grants admin settings
+    (`DISABLE_AUTH=true` single-user runtime and `CAN_CHANGE_KEYS` ≠ `false`);
+    API keys are refused (403) — today's local engine, hence the honest
+    read-only chooser.
+  - `[!]` The chooser is read-only unless `PRESENTON_MODEL_OPTIONS` is set
+    (presence = opt-in).
+  - `[!]` Model ids come only from the engine's own report or the operator
+    declaration — never invented.
+  - `[!]` The reference's Document/Carousel/Image/Beautify/Import chips are
+    dropped (no UniPilot feature maps to them) and the effort dropdown is not
+    shipped (no per-request equivalent).
+  Cross-feature open item (owner: the assistant session, not this work): at
+  375 px the assistant launcher bar intercepts pointer events
+  (`frontend/components/assistant/AssistantLauncher.tsx:415/436`; the app
+  shell reserves no bottom space), which blocks `presentations-ui.spec.ts`
+  "deck delete (Task F4) › never single-clicks…" at 375 — evidence in
+  `review-t2.md` §Cross-feature finding. The full-suite run's other red is a
+  WhatsApp/integrations state issue: the local git-ignored env carries
+  `UNIPILOT_WHATSAPP_LIVE=1` (verified), so `/integrations` mounts the live
+  panel for guests while `whatsapp-ui.spec.ts`'s flag-off guest case expects
+  none (owner: the WhatsApp session, not presentation).
+
 Priority:
 topic → slides must be reliable before uploaded-template recreation.
 
