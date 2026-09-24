@@ -1,15 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, useReducedMotion } from "motion/react";
-import { ChevronDown, Presentation as PresentationIcon } from "lucide-react";
+import { Presentation as PresentationIcon } from "lucide-react";
 import { useSignInPrompt } from "@/components/auth/SignInPromptProvider";
-import { SignInAction } from "@/components/auth/SignInAction";
 import { EASE_OUT } from "@/components/motion/presets";
 import { motionIndex } from "@/components/motion/stagger";
-import { Collapsible } from "@/components/motion/Collapsible";
 import { MotionNotice } from "@/components/motion/MotionNotice";
 import {
   MotionRevealGroup,
@@ -20,84 +17,25 @@ import { Button } from "@/components/ui/Button";
 import { ButtonLink } from "@/components/ui/ButtonLink";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Select } from "@/components/ui/Select";
-import { Textarea } from "@/components/ui/Textarea";
 import { createPresentationAction } from "@/lib/data/presentationActions";
 import { previewDocumentAction } from "@/lib/data/documentActions";
 import { PRESENTATION_SAVE_ERROR } from "@/lib/data/presentationErrors";
 import {
   isPresentationInFlight,
-  PRESENTATION_INSTRUCTIONS_MAX_LENGTH,
-  PRESENTATION_LANGUAGE_OPTIONS,
   PRESENTATION_MAX_SOURCES,
-  PRESENTATION_PROMPT_MAX_LENGTH,
-  PRESENTATION_TONES,
-  PRESENTATION_VERBOSITIES,
   type PresentationItem,
 } from "@/lib/data/presentationValues";
+import type { PresentationModels } from "@/lib/integrations/presenton";
+import { GenerateHero } from "./GenerateHero";
+import {
+  GetStartedTemplates,
+  type WorkspaceTemplate,
+} from "./GetStartedTemplates";
+
+export type { WorkspaceTemplate };
 
 /** The documents hub's refresh policy while work is in flight (18.x). */
 const POLL_MS = 4_000;
-
-const SLIDE_COUNT_OPTIONS = [
-  { value: "auto", label: "Auto" },
-  { value: "5", label: "5 slides" },
-  { value: "8", label: "8 slides" },
-  { value: "10", label: "10 slides" },
-  { value: "12", label: "12 slides" },
-  { value: "15", label: "15 slides" },
-  { value: "20", label: "20 slides" },
-];
-
-const FORMAT_OPTIONS = [
-  { value: "pptx", label: "PowerPoint (.pptx)" },
-  { value: "pdf", label: "PDF (.pdf)" },
-];
-
-/* Advanced options are built from the A2 vocabulary, so the control can never
-   offer a value the parser rejects. Language keeps "Auto" as its UI word; the
-   submit maps it to null, which is the draft's "detect from the prompt". */
-const LANGUAGE_OPTIONS = PRESENTATION_LANGUAGE_OPTIONS.map((value) => ({
-  value,
-  label: value,
-}));
-
-const TONE_LABELS: Record<(typeof PRESENTATION_TONES)[number], string> = {
-  default: "Default",
-  casual: "Casual",
-  professional: "Professional",
-  funny: "Funny",
-  educational: "Educational",
-  sales_pitch: "Sales pitch",
-};
-
-const TONE_OPTIONS = PRESENTATION_TONES.map((value) => ({
-  value,
-  label: TONE_LABELS[value],
-}));
-
-const VERBOSITY_LABELS: Record<
-  (typeof PRESENTATION_VERBOSITIES)[number],
-  string
-> = {
-  concise: "Concise",
-  standard: "Standard",
-  "text-heavy": "Text-heavy",
-};
-
-const VERBOSITY_OPTIONS = PRESENTATION_VERBOSITIES.map((value) => ({
-  value,
-  label: VERBOSITY_LABELS[value],
-}));
-
-/** The repo's `aria-pressed` pill (documents filters, calendar views). */
-function togglePillClasses(pressed: boolean): string {
-  return `min-w-0 rounded-pill border px-3 py-2 font-heading text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
-    pressed
-      ? "border-transparent bg-card font-semibold text-foreground shadow-subtle"
-      : "border-border text-muted-foreground hover:border-foreground hover:text-foreground"
-  }`;
-}
 
 type PresentationWorkspaceProps = {
   guest: boolean;
@@ -106,7 +44,11 @@ type PresentationWorkspaceProps = {
   /** The most recent request, whatever its state. */
   initialPresentation: PresentationItem | null;
   /** Presenton's built-in templates for the picker (empty → General only). */
-  templates: { id: string; name: string }[];
+  templates: WorkspaceTemplate[];
+  /** The template read threw: the split shows its honest unavailable note. */
+  templatesFailed: boolean;
+  /** The T1 model listing; display-only in T2 (spec §3.4). */
+  models: PresentationModels;
   /** The caller's PDF/DOCX documents that can be used as source material. */
   sourceDocuments: { id: string; name: string }[];
   /** Phase-2 editor link for the latest presentation, when it exists. */
@@ -116,35 +58,38 @@ type PresentationWorkspaceProps = {
 };
 
 /**
- * The presentation generator's client surface (Task 31.x).
+ * The presentation generator's client surface (Task 31.x; reshaped by the
+ * generate redesign T2, spec §5.1).
  *
- * Two movements: the request form (create a row + queue the
- * `presentation.generate` job through a Server Action) and the run panel —
- * real progress mirrored from the async task by the worker, then the result
- * card with download + the link into /documents. The form carries the whole
- * request draft (A2): a multi-select of the caller's PDF/DOCX documents, and
- * an advanced group whose controls map 1:1 onto the parser's vocabulary
- * ("Auto" language → null, instructions trimmed-or-null, two include
- * toggles). There is no fake deck: in an environment without a configured
- * Presenton service the page renders the honest blocked state and the form
- * never appears.
+ * This container owns all of the form's state and handlers, exactly as before:
+ * the request draft (`prompt`/`template`/`nSlides`/`format`/`sourceIds` and the
+ * advanced options), the submit through `createPresentationAction`, the
+ * download through `previewDocumentAction`, the `?template=` preselect, and
+ * the bounded `router.refresh()` poll while a request is in flight. It renders
+ * three route-private pieces:
  *
- * Async progress uses the documents hub's proven mechanism — while a request
- * is queued/running the server page is re-rendered on a bounded interval
- * (`router.refresh()`), and the refreshed prop replaces what this panel
- * shows. The worker owns the state; the client only reads it.
+ * - `GenerateHero` — the centered hero that replaces `PageHeader` on this
+ *   route (one `<h1>`, entrance slot 0) and the prompt card with its real
+ *   option controls (slot 1, `data-enter="scale"`), including the
+ *   display-only model control (`ModelControl`, T2);
+ * - the existing `RunPanel` (all four states and copy unchanged), centered
+ *   directly after the hero at entrance slot 2;
+ * - `GetStartedTemplates` — the Get-started/Templates split, a
+ *   `MotionRevealGroup` whose two cards are `MotionRevealItem
+ *   variant="scale"` members; its entry points reach the hero's prompt,
+ *   Sources panel and Template picker through the handles below.
  *
- * Motion reuses the global system: `PageHeader` owns slot 0 of the entrance
- * ladder, the form arrives at slot 1, the result card arrives through
- * `MotionRevealGroup` + `MotionRevealItem variant="scale"`, inline errors use
- * `MotionNotice`, and the determinate progress fill is the shared rail
- * mechanism (origin-left `scaleX` on Motion's curve).
+ * There is no fake deck: in an environment without a configured Presenton
+ * service the page renders the honest blocked state and the form never
+ * appears. `DecksList` stays the page's final section, outside this component.
  */
 export function PresentationWorkspace({
   guest,
   configured,
   initialPresentation,
   templates,
+  templatesFailed,
+  models,
   sourceDocuments,
   editHref,
   viewerHref,
@@ -152,6 +97,8 @@ export function PresentationWorkspace({
   const { requireAuth } = useSignInPrompt();
   const router = useRouter();
   const reduced = useReducedMotion() ?? false;
+  /** The hero's prompt box, for the split's "Describe your deck" entry point. */
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   /* E2 — "Use this template" lands on `?template=<id>`. This repo's tool hubs
      read query-driven client state with `useSearchParams()` in the client
@@ -201,14 +148,6 @@ export function PresentationWorkspace({
     const timer = window.setInterval(() => router.refresh(), POLL_MS);
     return () => window.clearInterval(timer);
   }, [guest, inFlight, router]);
-
-  const templateOptions = useMemo(
-    () =>
-      templates.length > 0
-        ? templates.map((item) => ({ value: item.id, label: item.name }))
-        : [{ value: "general", label: "General" }],
-    [templates],
-  );
 
   function toggleSource(id: string) {
     setSourceIds((current) => {
@@ -288,362 +227,73 @@ export function PresentationWorkspace({
   }
 
   return (
-    <div className="grid min-w-0 gap-6 lg:grid-cols-2">
-      <form
-        onSubmit={onSubmit}
-        data-enter="scale"
-        style={motionIndex(1)}
-      >
-        <Card className="flex h-full flex-col gap-5 bg-glass p-6 backdrop-blur-md md:p-7">
-          <header className="flex flex-col gap-1">
-            <h2 className="font-heading text-body-lg font-semibold text-foreground">
-              Describe the deck
-            </h2>
-            <p className="text-label-sm text-muted-foreground">
-              A topic and the shape you want. The deck is generated on your
-              own service and saved to Documents.
-            </p>
-          </header>
-
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="presentation-prompt"
-              className="text-label-sm font-medium text-foreground"
-            >
-              Topic or prompt
-            </label>
-            <Textarea
-              id="presentation-prompt"
-              name="prompt"
-              rows={5}
-              required={!guest}
-              maxLength={PRESENTATION_PROMPT_MAX_LENGTH}
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="e.g. Cellular respiration for a first-year biology seminar — cover glycolysis, the Krebs cycle and the electron transport chain."
-              aria-describedby="presentation-prompt-hint"
-            />
-            <p
-              id="presentation-prompt-hint"
-              className="text-label-sm text-muted-foreground"
-            >
-              What the deck is about, and anything it should cover.
-            </p>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="presentation-slides"
-                className="text-label-sm font-medium text-foreground"
-              >
-                Slides
-              </label>
-              <Select
-                id="presentation-slides"
-                value={nSlides}
-                onChange={setNSlides}
-                options={SLIDE_COUNT_OPTIONS}
-                aria-label="Number of slides"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="presentation-format"
-                className="text-label-sm font-medium text-foreground"
-              >
-                Format
-              </label>
-              <Select
-                id="presentation-format"
-                value={format}
-                onChange={setFormat}
-                options={FORMAT_OPTIONS}
-                aria-label="Export format"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <div className="flex min-w-0 items-center justify-between gap-3">
-              <label
-                htmlFor="presentation-template"
-                className="text-label-sm font-medium text-foreground"
-              >
-                Template
-              </label>
-              <WorkspaceAction href="/tools/presentation/templates">
-                Browse templates
-              </WorkspaceAction>
-            </div>
-            <Select
-              id="presentation-template"
-              value={template}
-              onChange={setTemplate}
-              options={templateOptions}
-              aria-label="Presentation template"
-            />
-            {templateMissing ? (
-              <p
-                data-template-preselect-miss=""
-                className="text-label-sm text-muted-foreground"
-              >
-                The requested template isn&rsquo;t in the service&rsquo;s list —
-                showing{" "}
-                {templateOptions.find((option) => option.value === template)
-                  ?.label ?? "the default"}
-                .
-              </p>
-            ) : null}
-          </div>
-
-          {/* Sources: the caller's PDF/DOCX documents, multi-select. Every
-              document is listed; the cap lives on selection only — at 8
-              selected the unchecked rows disable rather than disappear, so
-              the list never reflows under the pointer and a ticked source can
-              always be unticked. */}
-          <div>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              aria-expanded={sourcesOpen}
-              aria-controls="presentation-sources-panel"
-              onClick={() => setSourcesOpen((open) => !open)}
-            >
-              <span className="flex w-full min-w-0 items-center justify-between gap-3">
-                <span className="min-w-0 truncate">
-                  Sources{" "}
-                  <span className="font-normal text-muted-foreground">
-                    (optional)
-                  </span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  <span className="font-mono text-label-caps text-muted-foreground">
-                    {sourceIds.length}/{PRESENTATION_MAX_SOURCES}
-                  </span>
-                  <ChevronDown
-                    aria-hidden="true"
-                    className={`icon-turn size-4${sourcesOpen ? " rotate-180" : ""}`}
-                  />
-                </span>
-              </span>
-            </Button>
-            <Collapsible
-              open={sourcesOpen}
-              variant="scale"
-              id="presentation-sources-panel"
-            >
-              <div className="mt-3 flex flex-col gap-1 rounded-card border border-border bg-glass-subtle p-2">
-                {sourceDocuments.length === 0 ? (
-                  <p className="px-2 py-1.5 text-label-sm text-muted-foreground">
-                    Upload a PDF or DOCX in{" "}
-                    <Link
-                      href="/documents"
-                      className="underline underline-offset-2 hover:text-foreground"
-                    >
-                      Documents
-                    </Link>{" "}
-                    to use one as source material.
-                  </p>
-                ) : (
-                  <fieldset className="flex min-w-0 flex-col border-0 p-0">
-                    <legend className="sr-only">Source documents</legend>
-                    {sourceDocuments.map((document) => {
-                      const checked = sourceIds.includes(document.id);
-                      const disabled = !checked && atSourceCap;
-                      return (
-                        <label
-                          key={document.id}
-                          className={`flex min-w-0 items-center gap-2.5 rounded-base px-2 py-2 text-label-sm transition-colors ${
-                            disabled
-                              ? "cursor-not-allowed text-muted-foreground/50"
-                              : "cursor-pointer text-foreground hover:bg-muted/50"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={disabled}
-                            onChange={() => toggleSource(document.id)}
-                            className="size-4 shrink-0 rounded-xs border-border accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
-                          />
-                          <span className="min-w-0 truncate">
-                            {document.name}
-                          </span>
-                        </label>
-                      );
-                    })}
-                    {atSourceCap ? (
-                      <p className="px-2 pt-1.5 text-label-sm text-muted-foreground">
-                        Up to {PRESENTATION_MAX_SOURCES} documents per deck.
-                      </p>
-                    ) : null}
-                  </fieldset>
-                )}
-              </div>
-            </Collapsible>
-          </div>
-
-          {/* Advanced settings. Every control maps 1:1 into the draft: the
-              vocabularies come from A2, Auto becomes null (the parser's "no
-              explicit language"), instructions are trimmed-or-null, and the
-              two extras are the repo's aria-pressed toggles — title slide on
-              by default, matching the column default and today's decks. */}
-          <div>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              aria-expanded={advancedOpen}
-              aria-controls="presentation-advanced-panel"
-              onClick={() => setAdvancedOpen((open) => !open)}
-            >
-              <span className="flex w-full min-w-0 items-center justify-between gap-3">
-                <span>Advanced settings</span>
-                <ChevronDown
-                  aria-hidden="true"
-                  className={`icon-turn size-4${advancedOpen ? " rotate-180" : ""}`}
-                />
-              </span>
-            </Button>
-            <Collapsible
-              open={advancedOpen}
-              variant="scale"
-              id="presentation-advanced-panel"
-            >
-              <div className="mt-3 flex flex-col gap-4 rounded-card border border-border bg-glass-subtle p-4">
-                <div className="flex flex-col gap-1.5">
-                  <label
-                    htmlFor="presentation-language"
-                    className="text-label-sm font-medium text-foreground"
-                  >
-                    Language
-                  </label>
-                  <Select
-                    id="presentation-language"
-                    value={language}
-                    onChange={setLanguage}
-                    options={LANGUAGE_OPTIONS}
-                    aria-label="Presentation language"
-                  />
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor="presentation-tone"
-                      className="text-label-sm font-medium text-foreground"
-                    >
-                      Tone
-                    </label>
-                    <Select
-                      id="presentation-tone"
-                      value={tone}
-                      onChange={setTone}
-                      options={TONE_OPTIONS}
-                      aria-label="Presentation tone"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor="presentation-verbosity"
-                      className="text-label-sm font-medium text-foreground"
-                    >
-                      Verbosity
-                    </label>
-                    <Select
-                      id="presentation-verbosity"
-                      value={verbosity}
-                      onChange={setVerbosity}
-                      options={VERBOSITY_OPTIONS}
-                      aria-label="Presentation verbosity"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label
-                    htmlFor="presentation-instructions"
-                    className="text-label-sm font-medium text-foreground"
-                  >
-                    Instructions{" "}
-                    <span className="font-normal">(optional)</span>
-                  </label>
-                  <Textarea
-                    id="presentation-instructions"
-                    name="instructions"
-                    rows={3}
-                    maxLength={PRESENTATION_INSTRUCTIONS_MAX_LENGTH}
-                    value={instructions}
-                    onChange={(event) => setInstructions(event.target.value)}
-                    placeholder="e.g. Keep the language practical, emphasise the exam-relevant parts, and close with a recap."
-                  />
-                  <p className="text-label-sm text-muted-foreground">
-                    Extra direction for the whole deck.
-                  </p>
-                </div>
-
-                <div
-                  role="group"
-                  aria-label="Deck extras"
-                  className="flex min-w-0 flex-wrap items-center gap-1.5"
-                >
-                  <button
-                    type="button"
-                    aria-pressed={includeTableOfContents}
-                    onClick={() => setIncludeTableOfContents((on) => !on)}
-                    className={togglePillClasses(includeTableOfContents)}
-                  >
-                    Include table of contents
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={includeTitleSlide}
-                    onClick={() => setIncludeTitleSlide((on) => !on)}
-                    className={togglePillClasses(includeTitleSlide)}
-                  >
-                    Include title slide
-                  </button>
-                </div>
-              </div>
-            </Collapsible>
-          </div>
-
-          {error !== null ? (
-            <MotionNotice role="alert" className="text-label-sm text-destructive">
-              {error}
-            </MotionNotice>
-          ) : null}
-
-          <div className="mt-auto flex items-center gap-3">
-            {guest ? (
-              <SignInAction
-                aria-label="Sign in to generate presentations"
-                reason="Sign in to generate presentations."
-                guest
-              >
-                Sign in to generate
-              </SignInAction>
-            ) : (
-              <Button type="submit" disabled={submitting}>
-                {submitting ? "Starting…" : "Generate deck"}
-              </Button>
-            )}
-          </div>
-        </Card>
-      </form>
-
-      <RunPanel
+    <>
+      <GenerateHero
         guest={guest}
-        presentation={presentation}
-        editHref={editHref}
-        viewerHref={viewerHref}
-        downloadError={downloadError}
-        reduced={reduced}
-        onDownload={onDownload}
+        models={models}
+        templates={templates}
+        sourceDocuments={sourceDocuments}
+        prompt={prompt}
+        onPromptChange={setPrompt}
+        promptRef={promptRef}
+        template={template}
+        onTemplateChange={setTemplate}
+        templateMissing={templateMissing}
+        nSlides={nSlides}
+        onSlidesChange={setNSlides}
+        format={format}
+        onFormatChange={setFormat}
+        sourceIds={sourceIds}
+        onToggleSource={toggleSource}
+        atSourceCap={atSourceCap}
+        sourcesOpen={sourcesOpen}
+        onSourcesOpenChange={setSourcesOpen}
+        advancedOpen={advancedOpen}
+        onAdvancedOpenChange={setAdvancedOpen}
+        language={language}
+        onLanguageChange={setLanguage}
+        tone={tone}
+        onToneChange={setTone}
+        verbosity={verbosity}
+        onVerbosityChange={setVerbosity}
+        instructions={instructions}
+        onInstructionsChange={setInstructions}
+        includeTableOfContents={includeTableOfContents}
+        onToggleTableOfContents={() =>
+          setIncludeTableOfContents((on) => !on)
+        }
+        includeTitleSlide={includeTitleSlide}
+        onToggleTitleSlide={() => setIncludeTitleSlide((on) => !on)}
+        submitting={submitting}
+        error={error}
+        onSubmit={onSubmit}
       />
-    </div>
+
+      <div
+        data-enter="scale"
+        style={motionIndex(2)}
+        className="mx-auto w-full max-w-3xl"
+      >
+        <RunPanel
+          guest={guest}
+          presentation={presentation}
+          editHref={editHref}
+          viewerHref={viewerHref}
+          downloadError={downloadError}
+          reduced={reduced}
+          onDownload={onDownload}
+        />
+      </div>
+
+      <GetStartedTemplates
+        guest={guest}
+        templates={templates}
+        templatesFailed={templatesFailed}
+        onFocusPrompt={() => promptRef.current?.focus()}
+        onOpenSources={() => setSourcesOpen(true)}
+        onSelectTemplate={setTemplate}
+      />
+    </>
   );
 }
 

@@ -17,7 +17,7 @@
  */
 import { useState } from "react";
 import Link from "next/link";
-import { ImageOff, Layers, Presentation } from "lucide-react";
+import { Layers, Presentation } from "lucide-react";
 import {
   MotionRevealGroup,
   MotionRevealItem,
@@ -25,7 +25,7 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { templateAssetUrl } from "@/lib/presentation/assets";
+import { TemplateThumb } from "../../_components/TemplateThumb";
 
 /** One template as the browser needs it; a serializable slice of the adapter's item. */
 export type TemplateCard = {
@@ -48,42 +48,10 @@ type TemplatesBrowserProps = {
 type TemplateTab = "built-in" | "custom";
 
 /**
- * One card's art. The template asset route is session-gated, so a signed-in
- * reader sees the engine's own thumbnail; when the engine stored none, or the
- * bytes fail to load, the card shows a neutral placeholder — never a broken
- * image and never invented art.
+ * One card's art. The renderer is shared with the generator's Templates split
+ * (T2, generate redesign): `TemplateThumb` owns the engine-servable markup and
+ * the neutral placeholder, so both surfaces fall back identically.
  */
-function TemplateThumbnail({ template }: { template: TemplateCard }) {
-  const [failed, setFailed] = useState(false);
-  const src = templateAssetUrl(template.thumbnail);
-
-  return (
-    <span className="flex aspect-video w-full items-center justify-center overflow-hidden rounded-base border border-border bg-muted">
-      {src === null || failed ? (
-        <span
-          data-template-thumb-fallback={template.id}
-          className="flex items-center justify-center text-muted-foreground"
-        >
-          <ImageOff aria-hidden="true" className="size-5" />
-        </span>
-      ) : (
-        /* eslint-disable-next-line @next/next/no-img-element -- engine bytes
-           stream through the session-gated template-asset route; the optimizer
-           cannot carry the session and has nothing to optimize here. */
-        <img
-          data-template-thumb={template.id}
-          src={src}
-          alt=""
-          loading="lazy"
-          draggable={false}
-          onError={() => setFailed(true)}
-          className="size-full object-cover"
-        />
-      )}
-    </span>
-  );
-}
-
 function TemplateGrid({ templates }: { templates: TemplateCard[] }) {
   return (
     <MotionRevealGroup
@@ -103,7 +71,7 @@ function TemplateGrid({ templates }: { templates: TemplateCard[] }) {
             className="block h-full min-w-0 rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             <Card className="flex h-full min-w-0 flex-col gap-3 bg-glass p-3 backdrop-blur-md hover-lift hover:border-foreground">
-              <TemplateThumbnail template={template} />
+              <TemplateThumb template={template} />
               <span className="flex min-w-0 flex-col gap-1.5">
                 <span className="flex min-w-0 items-start justify-between gap-2">
                   <span className="min-w-0 truncate font-heading text-body-md font-semibold text-foreground">

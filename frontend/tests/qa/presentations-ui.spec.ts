@@ -2970,6 +2970,236 @@ test.describe("templates browser (live engine)", () => {
 });
 
 /**
+ * T2 (generate redesign) — the /tools/presentation generate/setup surface:
+ * the centered hero that replaces `PageHeader` (one `<h1>`, entrance slot 0),
+ * the prompt card's real option controls, the display-only model chip with its
+ * honest per-deployment state, and the Get-started/Templates split. The §5.3
+ * contracts are re-asserted here for the reshaped page: the template combobox
+ * plus `?template=` preselect and its honest miss note, and the guest posture
+ * (no template art, no decks list). The F1 decks-list cases below stay
+ * untouched.
+ *
+ * The T2 model control is display-only: the local engine denies its admin
+ * settings, so `data-model-state` is `unknown` unless the operator declared
+ * `PRESENTON_MODEL` (then `declared`) — the test asserts that state attribute,
+ * never env-dependent copy.
+ *
+ * The split's live cases use the same discovered browser template as the E2
+ * cases (its art is engine-servable) and skip with a recorded reason when the
+ * engine is unreachable or serves nothing — never a fabricated card.
+ */
+test.describe("generate redesign (T2)", () => {
+  test("renders the hero, the option controls and the split for a signed-in reader", async ({
+    page,
+  }) => {
+    test.skip(
+      engineUrl === "",
+      "PRESENTON_URL is not set; the page renders its unconfigured blocked state.",
+    );
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto("/tools/presentation");
+
+    const hero = page.locator("[data-generate-hero]");
+    await expect(hero).toBeVisible();
+    // The hero replaces PageHeader on this route: exactly one <h1>.
+    const heading = page.getByRole("heading", { level: 1 });
+    await expect(heading).toHaveCount(1);
+    await expect(heading).toHaveText("What do you want to present?");
+    await expect(
+      hero.getByText("Presentation generator", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Topic or prompt")).toBeVisible();
+
+    // The real format control: two aria-pressed pills that toggle.
+    const formatGroup = page.getByRole("group", { name: "Export format" });
+    await expect(formatGroup).toBeVisible();
+    const powerpoint = formatGroup.getByRole("button", { name: "PowerPoint" });
+    const pdf = formatGroup.getByRole("button", { name: "PDF" });
+    await expect(powerpoint).toHaveAttribute("aria-pressed", "true");
+    await expect(pdf).toHaveAttribute("aria-pressed", "false");
+    await pdf.click();
+    await expect(pdf).toHaveAttribute("aria-pressed", "true");
+    await expect(powerpoint).toHaveAttribute("aria-pressed", "false");
+    await powerpoint.click();
+    await expect(powerpoint).toHaveAttribute("aria-pressed", "true");
+
+    await expect(
+      page.getByRole("combobox", { name: "Number of slides" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Presentation template" }),
+    ).toBeVisible();
+
+    // Display-only and honest: the state attribute is the deployment fact.
+    // No selectable model list exists in T2.
+    const model = page.locator("[data-model-control]");
+    await expect(model).toBeVisible();
+    const declaredModel = (process.env.PRESENTON_MODEL ?? "").trim();
+    await expect(model).toHaveAttribute(
+      "data-model-state",
+      declaredModel === "" ? "unknown" : "declared",
+    );
+    await expect(
+      page.getByRole("combobox", { name: "Presentation model" }),
+    ).toHaveCount(0);
+
+    const split = page.locator("[data-generate-split]");
+    await expect(split).toBeVisible();
+    await expect(page.locator("[data-get-started]")).toBeVisible();
+    await expect(page.locator("[data-generate-templates]")).toBeVisible();
+    // Engine up → the Templates card links into the browser; a dead engine
+    // says so with the retry link instead (never an invented card).
+    if (await isEngineReachable()) {
+      await expect(
+        page.getByRole("link", { name: "Browse all templates" }),
+      ).toBeVisible();
+    } else {
+      await expect(page.getByRole("link", { name: "Try again" })).toBeVisible();
+    }
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
+      [],
+    );
+  });
+
+  test("keeps the ?template= preselect and the honest miss note", async ({
+    page,
+  }) => {
+    test.skip(
+      engineUrl === "",
+      "PRESENTON_URL is not set; the page renders its unconfigured blocked state.",
+    );
+    const live = requireLiveBrowserTemplate();
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto(
+      `/tools/presentation?template=${encodeURIComponent(live.id)}`,
+    );
+    const combobox = page.getByRole("combobox", {
+      name: "Presentation template",
+    });
+    await expect(combobox).toContainText(live.name);
+    await expect(page.locator("[data-template-preselect-miss]")).toHaveCount(0);
+
+    // A stale id is not silently swallowed: the picker falls back and the miss
+    // note says so.
+    await page.goto("/tools/presentation?template=qa-stale-template-id");
+    await expect(page.locator("[data-template-preselect-miss]")).toBeVisible();
+    await expect(combobox).not.toContainText("qa-stale-template-id");
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
+      [],
+    );
+  });
+
+  test("shows real template teasers with loaded art and picks one into the form", async ({
+    page,
+  }) => {
+    test.skip(
+      engineUrl === "",
+      "PRESENTON_URL is not set; the page renders its unconfigured blocked state.",
+    );
+    const live = requireLiveBrowserTemplate();
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto("/tools/presentation");
+
+    const teasers = page.locator("[data-template-teaser]");
+    await expect(teasers.first()).toBeVisible();
+    expect(await teasers.count()).toBeGreaterThan(0);
+    expect(await teasers.count()).toBeLessThanOrEqual(4);
+
+    // Art through the shared thumbnail component: the first teaser is a
+    // built-in (built-ins sort first), whose thumbnail discovery proved
+    // engine-servable — it must actually load in the browser.
+    const firstThumb = page
+      .locator("[data-generate-templates] [data-template-thumb]")
+      .first();
+    await expect(firstThumb).toBeVisible();
+    await expect
+      .poll(async () =>
+        firstThumb.evaluate((node) => (node as HTMLImageElement).naturalWidth),
+      )
+      .toBeGreaterThan(0);
+
+    // Clicking a teaser sets the picker — no navigation, no URL change.
+    const teaser = page.locator(`[data-template-teaser="${live.id}"]`);
+    if ((await teaser.count()) > 0) {
+      await teaser.click();
+      await expect(
+        page.getByRole("combobox", { name: "Presentation template" }),
+      ).toContainText(live.name);
+      await expect(page).toHaveURL(/\/tools\/presentation$/);
+    } else {
+      console.log(
+        `[qa-presentations-ui] split teaser click not exercised: template "${live.id}" is not among the four shown teasers.`,
+      );
+    }
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
+      [],
+    );
+  });
+
+  test.describe("guest", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
+    test("sees the hero with no template art, no decks list and the sign-in note", async ({
+      page,
+    }) => {
+      test.skip(
+        engineUrl === "",
+        "PRESENTON_URL is not set; the page renders its unconfigured blocked state.",
+      );
+
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      });
+      page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+      await page.goto("/tools/presentation");
+
+      await expect(page.locator("[data-generate-hero]")).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+      await expect(page.getByLabel("Topic or prompt")).toBeVisible();
+
+      // The asset route is session-gated: the split shows the honest sign-in
+      // note instead of inventing template cards or art.
+      await expect(page.locator("[data-template-thumb]")).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: "Sign in to browse templates" }),
+      ).toBeVisible();
+
+      // F1 contract: a guest never gets the history list.
+      await expect(page.locator("[data-decks-list]")).toHaveCount(0);
+      await expect(page.locator("[data-deck-row]")).toHaveCount(0);
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    });
+  });
+});
+
+/**
  * Task F1 — the tool page's "My decks" list (spec §9): owner-only rows with
  * the status word, template, slide count and created label, actions that
  * degrade honestly per row state, and Open landing on the viewer. Rows are
