@@ -87,6 +87,12 @@ function togglePillClasses(pressed: boolean): string {
 type GenerateHeroProps = {
   guest: boolean;
   models: PresentationModels;
+  /** The model switch's sanitized failure line, or null (T3). */
+  modelError: string | null;
+  /** True while the model apply is in flight; the `Select` is disabled then. */
+  modelApplying: boolean;
+  /** The chosen model value; the workspace calls the Server Action (T3). */
+  onModelChange: (value: string) => void;
   templates: WorkspaceTemplate[];
   sourceDocuments: { id: string; name: string }[];
   prompt: string;
@@ -132,11 +138,12 @@ type GenerateHeroProps = {
  * This replaces `PageHeader` on the route: the hero *is* the page title, so
  * it owns the page's single `<h1>` and entrance slot 0 (eyebrow, heading,
  * supporting line); the form is slot 1 (`data-enter="scale"`). The card is
- * the page's one glass surface: the prompt, the display-only model chip and
- * submit in the trailing row, then the real option controls (format chips,
- * Slides/Template `Select`s, the Sources and Advanced disclosures) and their
- * unchanged panels. The prompt's hint line and any inline error sit below the
- * card so the card itself stays a control surface.
+ * the page's one glass surface: the prompt, the model control (the live
+ * `Select` where the engine grants the switch, the read-only chip otherwise —
+ * T3) and submit in the trailing row, then the real option controls (format
+ * chips, Slides/Template `Select`s, the Sources and Advanced disclosures) and
+ * their unchanged panels. The prompt's hint line and any inline error sit
+ * below the card so the card itself stays a control surface.
  *
  * All state stays in `PresentationWorkspace`; this component renders it and
  * forwards input through the existing handlers unchanged.
@@ -144,6 +151,9 @@ type GenerateHeroProps = {
 export function GenerateHero({
   guest,
   models,
+  modelError,
+  modelApplying,
+  onModelChange,
   templates,
   sourceDocuments,
   prompt,
@@ -244,7 +254,12 @@ export function GenerateHero({
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <ModelControl models={models} />
+              <ModelControl
+                models={models}
+                error={modelError}
+                applying={modelApplying}
+                onApply={onModelChange}
+              />
               {guest ? (
                 <SignInAction
                   aria-label="Sign in to generate presentations"

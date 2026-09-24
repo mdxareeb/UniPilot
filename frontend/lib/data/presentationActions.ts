@@ -29,6 +29,7 @@ import { revalidatePath } from "next/cache";
 import { requireOnboardedUser } from "@/lib/onboarding/gate";
 import { isPresentonConfigured } from "@/lib/integrations/presentonConfig";
 import {
+  applyPresentationModel,
   deletePresentation,
   deletePresentationImage,
   generatePresentationImage,
@@ -42,6 +43,7 @@ import {
   searchPresentationImages,
   updatePresentation,
   updateSlide,
+  type PresentationModelApplyResult,
   type PresentonIcon,
   type PresentonImage,
   type PresentonImageKind,
@@ -70,6 +72,10 @@ import {
   PRESENTATION_DELETE_IN_FLIGHT_ERROR,
   PRESENTATION_DELETE_UNREACHABLE_ERROR,
   PRESENTATION_INVALID_INPUT_ERROR,
+  PRESENTATION_MODEL_NOT_DECLARED_ERROR,
+  PRESENTATION_MODEL_REJECTED_ERROR,
+  PRESENTATION_MODEL_SWITCH_UNAVAILABLE_ERROR,
+  PRESENTATION_MODEL_UNREACHABLE_ERROR,
   PRESENTATION_NOT_CONNECTED_ERROR,
   PRESENTATION_NOT_FOUND_ERROR,
   PRESENTATION_SAVE_ERROR,
@@ -77,6 +83,7 @@ import {
 import {
   isPresentationInFlight,
   isPresentationUuid,
+  parsePresentationModelSelection,
   parsePresentationRequest,
   type PresentationDraft,
 } from "./presentationValues";
@@ -124,6 +131,74 @@ export async function createPresentationAction(
 
   revalidatePath("/tools/presentation");
   return created;
+}
+
+// ---------------------------------------------------------------------------
+// T3 (generate redesign) — the model switch's Server Action
+//
+// The engine's model is one deployment-global setting (spec §2.2), so the
+// switch is a server-only write through the T1 adapter: the browser never
+// holds provider keys and never talks to Presenton. The gate runs first and
+// outside the try block like every action here, then the untrusted payload is
+// parsed, then the adapter's typed result is mapped to sanitized copy. A
+// failure changes nothing; a success re-reads the page so the control renders
+// the engine's own value. No engine text and no key material ever travels
+// back — the adapter's result carries only the applied model id and provider.
+// ---------------------------------------------------------------------------
+
+export type UpdatePresentationModelResult = {
+  error: string | null;
+  /** The applied model id on success; null on every failure. */
+  model: string | null;
+};
+
+/** Maps the adapter's refusal reasons to the model switch's sanitized copy. */
+function modelFailureCopy(
+  reason: Extract<PresentationModelApplyResult, { applied: false }>["reason"],
+): string {
+  switch (reason) {
+    case "not-configured":
+      return PRESENTATION_NOT_CONNECTED_ERROR;
+    case "not-declared":
+      return PRESENTATION_MODEL_NOT_DECLARED_ERROR;
+    case "not-supported":
+      return PRESENTATION_MODEL_SWITCH_UNAVAILABLE_ERROR;
+    case "unreachable":
+      return PRESENTATION_MODEL_UNREACHABLE_ERROR;
+    case "rejected":
+      return PRESENTATION_MODEL_REJECTED_ERROR;
+  }
+}
+
+/**
+ * Applies one operator-declared model id to this deployment's presentation
+ * service. The order mirrors `createPresentationAction`: session gate →
+ * configured check (an unconfigured engine answers the not-connected copy
+ * before parsing anything) → pure payload guard (an invalid or undeclared
+ * value answers the declared-list copy) → the T1 adapter, which re-checks the
+ * declaration and performs the single `PUT`. Only sanitized copy returns.
+ */
+export async function updatePresentationModelAction(
+  payload: unknown,
+): Promise<UpdatePresentationModelResult> {
+  await requireOnboardedUser("/tools/presentation");
+
+  if (!isPresentonConfigured()) {
+    return { error: PRESENTATION_NOT_CONNECTED_ERROR, model: null };
+  }
+
+  const model = parsePresentationModelSelection(payload);
+  if (model === null) {
+    return { error: PRESENTATION_MODEL_NOT_DECLARED_ERROR, model: null };
+  }
+
+  const result = await applyPresentationModel(model);
+  if (!result.applied) {
+    return { error: modelFailureCopy(result.reason), model: null };
+  }
+
+  revalidatePath("/tools/presentation");
+  return { error: null, model: result.model };
 }
 
 // ---------------------------------------------------------------------------

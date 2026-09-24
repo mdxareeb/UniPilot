@@ -3200,6 +3200,99 @@ test.describe("generate redesign (T2)", () => {
 });
 
 /**
+ * T3 (generate redesign) — the model control's honest read-only state on the
+ * local deployment. The local engine denies its admin settings (`GET
+ * /api/v1/admin/provider-settings` → 403, spec §2.4), so the switch is never
+ * granted here: the page must render the chip, never a `Select`, and must not
+ * carry an apply state. The interactive path cannot run against the Next
+ * server with an in-process stub, so it is proven separately in
+ * `frontend/.playwright/model-control-evidence.mjs` (stub engine + production
+ * server, spawn-time env only) — see `t3-report.md` for which half is covered
+ * where.
+ *
+ * The chip's text/state is asserted from the deployment's own declaration
+ * (`PRESENTON_MODEL`, unset here → "unknown"), never hard-coded to one env.
+ */
+test.describe("model control (T3)", () => {
+  test("a signed-in reader sees the honest read-only chip, never a select", async ({
+    page,
+  }) => {
+    test.skip(
+      engineUrl === "",
+      "PRESENTON_URL is not set; the page renders its unconfigured blocked state.",
+    );
+
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+    await page.goto("/tools/presentation");
+
+    const control = page.locator("[data-model-control]");
+    await expect(control).toBeVisible();
+    const declaredModel = (process.env.PRESENTON_MODEL ?? "").trim();
+    await expect(control).toHaveAttribute(
+      "data-model-state",
+      declaredModel === "" ? "unknown" : "declared",
+    );
+    await expect(control).toHaveText(
+      declaredModel === "" ? "Model set on the presentation service." : declaredModel,
+    );
+    // No switch is granted: no model combobox and no apply state on the chip.
+    await expect(
+      page.getByRole("combobox", { name: "Presentation model" }),
+    ).toHaveCount(0);
+    const applyState = await control.getAttribute("data-model-apply");
+    expect(
+      applyState === null || applyState === "idle",
+      `data-model-apply was ${applyState}`,
+    ).toBe(true);
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(" | ")}`).toEqual(
+      [],
+    );
+  });
+
+  test.describe("guest", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
+    test("sees the same read-only chip with no interactive affordance", async ({
+      page,
+    }) => {
+      test.skip(
+        engineUrl === "",
+        "PRESENTON_URL is not set; the page renders its unconfigured blocked state.",
+      );
+
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      });
+      page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+      await page.goto("/tools/presentation");
+
+      // Guests get the constant safe shape (page.tsx `GUEST_MODELS`): nothing
+      // is known and nothing is switchable, so the chip alone states the truth.
+      const control = page.locator("[data-model-control]");
+      await expect(control).toBeVisible();
+      await expect(control).toHaveAttribute("data-model-state", "unknown");
+      await expect(control).toHaveText("Model set on the presentation service.");
+      await expect(
+        page.getByRole("combobox", { name: "Presentation model" }),
+      ).toHaveCount(0);
+
+      expect(
+        consoleErrors,
+        `console errors: ${consoleErrors.join(" | ")}`,
+      ).toEqual([]);
+    });
+  });
+});
+
+/**
  * Task F1 — the tool page's "My decks" list (spec §9): owner-only rows with
  * the status word, template, slide count and created label, actions that
  * degrade honestly per row state, and Open landing on the viewer. Rows are

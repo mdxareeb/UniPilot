@@ -17,9 +17,15 @@ import { Button } from "@/components/ui/Button";
 import { ButtonLink } from "@/components/ui/ButtonLink";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { createPresentationAction } from "@/lib/data/presentationActions";
+import {
+  createPresentationAction,
+  updatePresentationModelAction,
+} from "@/lib/data/presentationActions";
 import { previewDocumentAction } from "@/lib/data/documentActions";
-import { PRESENTATION_SAVE_ERROR } from "@/lib/data/presentationErrors";
+import {
+  PRESENTATION_MODEL_UNREACHABLE_ERROR,
+  PRESENTATION_SAVE_ERROR,
+} from "@/lib/data/presentationErrors";
 import {
   isPresentationInFlight,
   PRESENTATION_MAX_SOURCES,
@@ -47,7 +53,7 @@ type PresentationWorkspaceProps = {
   templates: WorkspaceTemplate[];
   /** The template read threw: the split shows its honest unavailable note. */
   templatesFailed: boolean;
-  /** The T1 model listing; display-only in T2 (spec §3.4). */
+  /** The T1 model listing; the T3 control switches it where the engine grants it. */
   models: PresentationModels;
   /** The caller's PDF/DOCX documents that can be used as source material. */
   sourceDocuments: { id: string; name: string }[];
@@ -70,8 +76,8 @@ type PresentationWorkspaceProps = {
  *
  * - `GenerateHero` — the centered hero that replaces `PageHeader` on this
  *   route (one `<h1>`, entrance slot 0) and the prompt card with its real
- *   option controls (slot 1, `data-enter="scale"`), including the
- *   display-only model control (`ModelControl`, T2);
+ *   option controls (slot 1, `data-enter="scale"`), including the model
+ *   control (`ModelControl`, T2/T3) whose state/handler this container owns;
  * - the existing `RunPanel` (all four states and copy unchanged), centered
  *   directly after the hero at entrance slot 2;
  * - `GetStartedTemplates` — the Get-started/Templates split, a
@@ -135,6 +141,11 @@ export function PresentationWorkspace({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  /* T3 — the model switch's own state. The control's value is never local:
+     it renders `models.current` from the server props throughout, so an apply
+     can only ever move it by re-reading the server (no phantom selection). */
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelApplying, setModelApplying] = useState(false);
 
   const presentation = initialPresentation;
   const inFlight = presentation
@@ -197,6 +208,37 @@ export function PresentationWorkspace({
     // request; the poll above takes over while it is in flight.
   }
 
+  /**
+   * T3 — one model selection, through the Server Action. This is deliberately
+   * not coupled to `onSubmit`: selecting a model changes the deployment's
+   * presentation service immediately (the action's own write), and a later
+   * Generate never performs an admin write. The handler keeps no optimistic
+   * value — the `Select` reads `models.current` from the refreshed props — so
+   * a failure leaves the control on the server value and shows the sanitized
+   * line; a success re-reads the page (the action's `revalidatePath` plus this
+   * refresh) so the control shows what the engine actually stored.
+   */
+  async function onModelChange(value: string) {
+    if (!requireAuth("Sign in to change the presentation model.")) return;
+
+    setModelError(null);
+    setModelApplying(true);
+
+    let result: Awaited<ReturnType<typeof updatePresentationModelAction>>;
+    try {
+      result = await updatePresentationModelAction(value);
+    } catch {
+      result = { error: PRESENTATION_MODEL_UNREACHABLE_ERROR, model: null };
+    }
+
+    setModelApplying(false);
+    if (result.error !== null) {
+      setModelError(result.error);
+      return;
+    }
+    router.refresh();
+  }
+
   async function onDownload(documentId: string) {
     setDownloadError(null);
     let result: Awaited<ReturnType<typeof previewDocumentAction>>;
@@ -231,6 +273,9 @@ export function PresentationWorkspace({
       <GenerateHero
         guest={guest}
         models={models}
+        modelError={modelError}
+        modelApplying={modelApplying}
+        onModelChange={onModelChange}
         templates={templates}
         sourceDocuments={sourceDocuments}
         prompt={prompt}

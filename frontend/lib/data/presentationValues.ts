@@ -38,6 +38,8 @@ export const PRESENTATION_MIN_SLIDES = 5;
 export const PRESENTATION_MAX_SLIDES = 30;
 export const PRESENTATION_MAX_SOURCES = 8;
 export const PRESENTATION_INSTRUCTIONS_MAX_LENGTH = 2_000;
+/** T3 — the model-selection payload bound (the engine stores the id as text). */
+export const PRESENTATION_MODEL_MAX_LENGTH = 320;
 
 /** The stored language values; the UI adds "Auto", which maps to null. */
 export const PRESENTATION_LANGUAGE_VALUES = [
@@ -175,6 +177,24 @@ const UUID_PATTERN =
 
 export function isPresentationUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value.trim());
+}
+
+/**
+ * T3 (generate redesign) — the untrusted model-selection payload's pure guard.
+ * The Server Action parses the browser payload with this before anything else:
+ * a trimmed non-empty string of at most {@link PRESENTATION_MODEL_MAX_LENGTH}
+ * characters with no control characters (a model id is free text on the wire,
+ * but never a control sequence). Null rejects and the action answers the
+ * declared-list copy; nothing is written. The adapter still re-checks the
+ * value against the operator's declared catalogue before any fetch.
+ */
+export function parsePresentationModelSelection(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const value = input.trim();
+  if (value === "" || value.length > PRESENTATION_MODEL_MAX_LENGTH) return null;
+  // C0 controls and DEL/C1 are never part of a real model id.
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return null;
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

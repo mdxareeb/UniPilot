@@ -1410,6 +1410,62 @@ test.describe("model declaration readers (pure)", () => {
 });
 
 /**
+ * T3 (generate redesign) — the model-selection payload's pure guard, the
+ * Server Action's first check after the session/configured gates. It is
+ * exercised directly (no server import) so the exact accepted shape is pinned:
+ * a trimmed non-empty string of at most 320 characters with no control
+ * characters; everything else is rejected and answered with the declared-list
+ * copy before the adapter ever runs.
+ */
+test.describe("model selection guard (pure)", () => {
+  test("accepts a trimmed bounded model id", async () => {
+    const { parsePresentationModelSelection } = await import(
+      "../../lib/data/presentationValues"
+    );
+    expect(parsePresentationModelSelection("  models/gemini-a  ")).toBe(
+      "models/gemini-a",
+    );
+    expect(parsePresentationModelSelection("models/gemini-b")).toBe(
+      "models/gemini-b",
+    );
+    // The bound itself is inclusive: 320 characters pass, 321 do not.
+    const atBound = `models/${"x".repeat(320 - "models/".length)}`;
+    expect(atBound).toHaveLength(320);
+    expect(parsePresentationModelSelection(atBound)).toBe(atBound);
+    expect(parsePresentationModelSelection(`${atBound}x`)).toBeNull();
+  });
+
+  test("rejects empty, whitespace and non-string payloads", async () => {
+    const { parsePresentationModelSelection } = await import(
+      "../../lib/data/presentationValues"
+    );
+    for (const input of ["", "   ", "\t\n ", null, undefined, 42, {}, []]) {
+      expect(
+        parsePresentationModelSelection(input),
+        `payload ${JSON.stringify(input)} must be rejected`,
+      ).toBeNull();
+    }
+  });
+
+  test("rejects control characters anywhere in the value", async () => {
+    const { parsePresentationModelSelection } = await import(
+      "../../lib/data/presentationValues"
+    );
+    for (const input of [
+      "models/gemini-a\u0000",
+      "models/gemini-a\nb",
+      "models/gemini-a\u007f",
+      "models/\u009fgemini-a",
+    ]) {
+      expect(
+        parsePresentationModelSelection(input),
+        `payload ${JSON.stringify(input)} must be rejected`,
+      ).toBeNull();
+    }
+  });
+});
+
+/**
  * T1 (generate redesign) — the listing's honest states. The settings read
  * answers the whole engine config (provider keys included); these cases prove
  * that only the provider and the mapped model leave the adapter, that a denied

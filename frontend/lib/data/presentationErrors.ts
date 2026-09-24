@@ -43,3 +43,22 @@ export const PRESENTATION_DELETE_UNREACHABLE_ERROR =
 
 export const PRESENTATION_DELETE_IN_FLIGHT_ERROR =
   "This deck is still being generated or exported. Try again once it has finished.";
+
+/**
+ * T3 (generate redesign) — the model switch's sanitized copy. The switch is a
+ * deployment-global engine setting; every line below states the outcome
+ * without engine text, provider detail or key material. The unavailable line
+ * is the honest state when the engine denies its admin settings; the declared
+ * line is the pre-write refusal for a value this deployment never offered.
+ */
+export const PRESENTATION_MODEL_SWITCH_UNAVAILABLE_ERROR =
+  "Changing the model isn't available on this presentation service.";
+
+export const PRESENTATION_MODEL_NOT_DECLARED_ERROR =
+  "That model isn't one this deployment offers, so nothing was changed.";
+
+export const PRESENTATION_MODEL_UNREACHABLE_ERROR =
+  "The presentation service didn't answer, so the model wasn't changed. Try again in a moment.";
+
+export const PRESENTATION_MODEL_REJECTED_ERROR =
+  "The presentation service refused the model change, so the model wasn't changed.";
