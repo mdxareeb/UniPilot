@@ -170,16 +170,18 @@ suite passed **101/101 three consecutive times**, each run from a fresh
 single-run reconciliation log is `recon-green-2026-09-12.log`). Every observed
 failure was contention or dev-server churn, not product.
 
-If a second process does start anyway, the enforcement tool is
-`frontend/scripts/qa-single-writer.ps1` â€” start the suite, then point the guard
-at its PID; it terminates competing Playwright/dev-server processes for the
-duration while leaving the run's own process tree alone:
+If a second process does start anyway, `frontend/scripts/qa-single-writer.ps1`
+reports competing Playwright/dev-server processes for the duration while
+leaving the run's own process tree alone. It is **report-only by default**:
+terminating (`-Kill`) is opt-in, because the ancestry check cannot prove
+ownership when the root pid is stale, when the run is detached from the shell
+holding the guard, or when a guard from an earlier run overlaps a new one -
+and a mis-scoped guard must never kill the run it is meant to protect.
 
 ```powershell
 $p = Start-Process npm.cmd -ArgumentList run,test -PassThru
 powershell -NoProfile -File frontend/scripts/qa-single-writer.ps1 -RootPid $p.Id
 ```
-
 **If parallel sessions are genuinely needed**, do not share this tree or this
 stack; give each session its own git worktree with:
 - its own `backend/supabase/config.toml` (CLI-generated, git-ignored) with
