@@ -590,14 +590,22 @@ test.describe("integrations page states", () => {
     await page.waitForLoadState("networkidle");
     await expect(page.locator('[data-signed-in="false"]')).toBeAttached();
 
-    /* P6.1 — a guest never sees a live control: the flag-off render has no
-       panel at all, so there is nothing that could fetch or open Chrome. */
-    await expect(page.locator("[data-live-enabled]")).toHaveCount(0);
-    await expect(
-      page.getByRole("button", {
-        name: /link live whatsapp|scan this chat|disconnect/i,
-      }),
-    ).toHaveCount(0);
+    /* P6.1 — on the flag-off render a guest never sees a live control: the
+       panel is absent entirely, so there is nothing that could fetch or open
+       Chrome. On a live worker host (`UNIPILOT_WHATSAPP_LIVE=1`) the panel
+       renders for everyone and every control sits behind `requireAuth` (a
+       guest click opens the prompt and never fetches), so the no-panel
+       assertion only holds for the flag-off server. Guard it, like the
+       sibling flag-off case below, so the spec never asserts a state this
+       server cannot be in. */
+    if (!LIVE_ENABLED) {
+      await expect(page.locator("[data-live-enabled]")).toHaveCount(0);
+      await expect(
+        page.getByRole("button", {
+          name: /link live whatsapp|scan this chat|disconnect/i,
+        }),
+      ).toHaveCount(0);
+    }
 
     /* P7.2 — a guest never sees an active Google control either: connect and
        reconnect are the only Google actions that could ever render, and the
