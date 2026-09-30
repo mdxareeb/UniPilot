@@ -35,7 +35,12 @@ if (allowCleartext) {
 
 const config: ExpoConfig = {
   name: "UniPilot",
-  slug: "unipilot",
+  /* The EAS project the founder provisioned (id in `extra.eas`) carries the
+     slug "areeb"; the slug must match it to link and build. Display name,
+     package id and scheme remain UniPilot identifiers. Revisit: rename the
+     Expo project (dashboard) or create a product-named project, then update
+     this slug and `extra.eas.projectId` together. */
+  slug: "areeb",
   version: "0.1.0",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
