@@ -17,6 +17,7 @@ const allowCleartext = process.env.EXPO_PUBLIC_ALLOW_CLEARTEXT === "1";
 /** Expo plugins, in order; cleartext is appended only for dev/preview builds. */
 const plugins: NonNullable<ExpoConfig["plugins"]> = [
   "expo-router",
+  "expo-secure-store",
   [
     "expo-splash-screen",
     {
