@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "frontend",
-    "backend"
+    "backend",
+    "mobile-app"
   ],
   "scripts": {
     "dev": "node scripts/start-env.mjs",
@@ -20,6 +21,12 @@
     "db:types": "npm run db:types -w backend",
     "seed:qa": "npm run seed:qa -w backend",
     "worker": "npm run worker -w backend",
-    "worker:once": "npm run worker:once -w backend"
+    "worker:once": "npm run worker:once -w backend",
+    "mobile:start": "npm run start -w mobile-app",
+    "mobile:android": "npm run android -w mobile-app",
+    "mobile:lint": "npm run lint -w mobile-app",
+    "mobile:typecheck": "npm run typecheck -w mobile-app",
+    "mobile:test": "npm run test -w mobile-app",
+    "mobile:preview": "npm run build:preview -w mobile-app"
   }
 }

@@ -1,0 +1,506 @@
+# UniPilot Mobile — Phase 0 Plan (M0)
+
+**Status: approved 2026-09-30; founder decisions (a)–(h) applied (see §O and §P). Nothing has been scaffolded.**
+Written 2026-09-30 against `master` @ `a330534` (working tree dirty — see §0.4).
+Single deliverable of Phase 0 — this document. The implementation record is appended to
+§P after every phase gate.
+
+---
+
+## 0. Method, evidence, machine preflight
+
+### 0.1 What was read (sources of truth)
+
+| Source | Used for |
+| --- | --- |
+| `AGENTS.md`, `frontend/AGENTS.md` | monorepo layout, Motion rule, QA session contract, Next.js-16 warning |
+| `README.md` | root scripts, env invariant, WSL/Docker stack, one-command environment |
+| `TASK.md` §0 (global rules), §0.17, §17/§22 (calendar), §46 (integrations + 46.11–46.30 records), §56–57, R7/R15/R17/R20 | task discipline, guest policy, the real integration history and blockers |
+| `DESIGN.md` (incl. Task 3.13/3.14 amendments) | monochrome tokens, closed three-font set, radius/elevation/fill systems, backdrop stack |
+| `MOTION.md` | duration/ease/stagger tokens, primitive vocabulary, safety rules |
+| `AUTH_ARCHITECTURE.md` | Supabase Auth, PKCE/cookie posture, OAuth callback, redirect safety, guest browsing |
+| `QA_SESSION.md` | QA identities, one-writer rule, screenshots convention, WhatsApp QA chain, `[!]` blockers |
+| `backend/DATABASE.md`, `backend/supabase/MIGRATIONS.md` | 23-migration schema, RLS matrix, migration workflow/checklist |
+| `whatsapp/README.md` | Python service contract, worker-host requirements, privacy/retention |
+| `docs/integrations/presenton.md` | the service-over-HTTP integration pattern and honest-state posture |
+| `frontend/lib/data/{events,eventValues,taskDates,tasks,taskValues,integrations,integrationValues,integrationActions,jobs,profileTime}.ts` | the real domain/validation/mapping layers |
+| `frontend/app/api/**` (google callback, assistant turn, presentation routes) | existing route-handler patterns and auth |
+| `frontend/app/(app)/{calendar,integrations}/**`, `frontend/components/{app,motion,ui}/**`, `frontend/app/globals.css`, `frontend/app/layout.tsx`, `frontend/.env.example` | UI shell, tokens, fonts, motion vocabulary |
+| `backend/worker/{run,handlers,whatsappJobs,heartbeat}.mjs` | job protocol, retry/backoff, lease heartbeat |
+| `backend/supabase/migrations/20260912120000_whatsapp_integration.sql` etc. | the exact event-provenance + integration schema and RPC pattern |
+
+### 0.2 Repo facts this plan is grounded in (not generic)
+
+- Workspaces: root `package.json` = `["frontend","backend"]`, one root lockfile, Node 24.18 / npm 11.16 on this machine.
+- Frontend: Next 16.3.1, React 19.2.8, Tailwind v4, `motion` ^13.1.1, `@supabase/ssr` ^0.12.4, `@supabase/supabase-js` ^2.112.3, `lucide-react`.
+- 23 versioned migrations. `events.source ∈ {manual, whatsapp}` with unique `(user_id, source, source_ref)` and a trigger forcing `manual` for every non-service-role write (46.12).
+- Integration tables `integration_connections / integration_runs / integration_messages / integration_candidates`, owner-SELECT RLS, service-side writes only; `google_calendar_credentials` is deny-by-default (no grants to `anon`, `authenticated`, `service_role`) and reachable only through 8 service-role RPCs (`upsert/get/delete_google_credentials`, `rotate_google_token_key`, QR trio, `touch_job`).
+- `integration_candidates` is WhatsApp-shaped: `run_id` NOT NULL, `message_sender`/`message_text` NOT NULL, `provider_event_id`, terminal rejection via unique `(user_id, fingerprint)`.
+- Worker: `backend/worker/run.mjs` + `handlers.mjs`; kinds today `document.process`, `document.reindex`, `presentation.generate`, `presentation.export`, `whatsapp.connect|sync|push|disconnect`, `noop.test`. Claim→dispatch→settle with exponential backoff, `dead_letter`, 60 s `touch_job` lease heartbeat, ids-only payload rule, sanitized errors only.
+- Existing app-facing HTTP surface: `GET /api/integrations/google/callback` (cookie+state, redirects to `/integrations?google=…`), `POST /api/assistant/turn` (SSE, cookie session), `GET /api/presentation/**` (cookie session). Everything else in the web app is Server Actions — **not callable from the device**.
+- Pure, runtime-dependency-free modules suitable for reuse (type-only imports aside): `frontend/lib/data/taskDates.ts`, `eventValues.ts`, `integrationValues.ts`; types-only: `frontend/lib/supabase/database.types.ts`.
+- Google Calendar OAuth (per-user, for push) is **implemented** (P7.1/P7.2) but **`[!]` blocked E2E** because `GOOGLE_OAUTH_CLIENT_ID/SECRET` are unset (46.17). WhatsApp live mode is **`[!]` blocked** (single-tenant host + phone QR, 46.16). Neither is unblocked by this project.
+- Design: monochrome only; closed three-family set (Geist body / Geist Mono metadata / Bricolage Grotesque headings **and action labels**); 5-step radius scale (Frame 32/24 → Card 20/16 → Nested 12 → Control 8 → Pill); four elevation recipes; three fills (Glass/Solid/Inverted) with the rationing rule; fixed backdrop stack (base + ambient field + swappable motif); `font.spec.ts` enforces the font rules on the web.
+- Motion: `--ease-out` `cubic-bezier(0.23,1,0.32,1)`, durations 140/160/180/220/150/400/380/260/380/90/140/720 ms, staggers 40/60/80 ms; `presets.ts` is the authoritative TS mirror; reduced motion zeroes everything; **animation never controls content existence**.
+- QA: 33 Playwright specs; `npm run test` builds and owns a production server; QA1/QA2 identities; screenshots → `frontend/screenshots/` (git-ignored); one writer at a time.
+- Local Supabase runs in WSL2 (`kali-linux`) and, on this host, the API port was moved to **54937** because of a Windows `winnat` reservation.
+
+### 0.3 Machine preflight (this host, checked for this plan)
+
+| Tool | Found | Consequence |
+| --- | --- | --- |
+| Node 24.18.0 / npm 11.16.0 | ✅ | fine for Expo CLI + Metro |
+| `adb` at `C:\Android\platform-tools\adb.exe` | ✅ (PATH not guaranteed) | device/emulator control possible |
+| Android SDK / `sdkmanager` / `emulator.exe` / AVDs | ❌ none | **M1 gate item**: EAS Build is now primary (decision (g)); the local SDK+emulator path is the documented fallback |
+| JDK | Java 26 (Temurin) | Gradle/AGP for the pinned RN may not support 26 → install Temurin 17/21 and point `JAVA_HOME` at it for Android builds; verify in M1 |
+| Connected Android device | ❌ none | M1/M7 device evidence requires a **physical phone over adb** (decision (h)); no phone ⇒ M1 stops at preflight and reports honestly |
+| WSL2 Supabase stack | available per QA_SESSION.md (host-specific) | mobile dev points at `127.0.0.1:54937` behind `adb reverse`/emulator `10.0.2.2` |
+
+### 0.4 Working-tree note (honesty)
+
+The tree is **not clean** (`git status`: many modified docs/tests, `backend/.env.development.local.example` deleted, etc. — pre-existing, not ours). Rule for this project: before M1 starts, the existing work is either committed by its owner or explicitly parked; mobile commits are scoped per phase (`feat(mobile): …`) and never include unrelated paths. No phase pushes a red tree.
+
+---
+
+## A. Decision — framework
+
+**DECISION: React Native + Expo (TypeScript), in `mobile-app/`.**
+
+Why (grounded, not preference):
+
+1. **Language/type continuity.** The entire repo is TypeScript (frontend) / ESM JavaScript (worker). A native RN app can consume type-only artifacts from the web repo without modifying it — most importantly `frontend/lib/supabase/database.types.ts` — and the candidate pure modules in §A.3. Flutter would introduce a second language, a second type system, and a second domain model with zero mechanical reuse.
+2. **Supabase native support.** `@supabase/supabase-js` is the supported client for React Native (PKCE flow, custom storage adapter, deep-link session exchange). The repo already pins `@supabase/supabase-js` ^2.112.3 at both workspaces; the mobile app pins the same line, so contract drift is a version number, not a rewrite.
+3. **OAuth / deep links.** `expo-web-browser` (`openAuthSessionAsync`) + `expo-linking` + Android intent filters are the standard mechanism for both the provider OAuth round trip (our own callback → `unipilot://oauth/...`) and Supabase Auth PKCE (`unipilot://auth-callback`).
+4. **Team maintainability (R20 — single maintainer).** One package manager, one lockfile, one language, one validation vocabulary, one design-token source. EAS or local Gradle builds keep the release path documented, not bespoke.
+5. **Motion continuity.** Reanimated/Moti express the same primitives (bezier eases, durations, staggers) that `MOTION.md` and `presets.ts` already define; the mobile vocabulary is a port of an existing table, not a new animation system.
+
+Flutter is rejected on the record above (no concrete repo-grounded reason to prefer it exists; the default stands).
+
+### A.1 What cannot be reused — explicitly
+
+- **100% of the UI.** React DOM components, Tailwind classes, CSS custom properties, `next/font`, the `(app)` shell, `bg-dotted-grid`, `backdrop-blur` glass, Motion.dev DOM primitives, the `Modal`/`Popover` implementations — none of it runs on RN. The *tokens and rules* are reused (§E); the *code* is not.
+- **Server Actions.** `frontend/lib/data/*Actions.ts` are Next-only RPC entry points; a native app cannot invoke them. Every server capability the app needs must be (or become) an HTTP endpoint (§B, §D).
+- **The Playwright test suite.** Browser-only; it will never test this app. Mobile gets its own gates (§H).
+- Also not reusable: `@supabase/ssr` cookie clients, `proxy.ts` route protection, `getTrustedSiteOrigin()`'s `Host`-based logic (app endpoints use Bearer tokens and configured origins).
+
+### A.2 What is reused as read-only types/logic (verified candidates)
+
+| Artifact | Kind | Status |
+| --- | --- | --- |
+| `frontend/lib/supabase/database.types.ts` | types only | **Use** via tsconfig path (`@unipilot/db-types`). Never edited by mobile. |
+| `frontend/lib/data/taskDates.ts` | pure runtime (`Intl` only) | **Candidate** — M1 spike proves Metro/tsc resolution; else mirror with a parity note. |
+| `frontend/lib/data/eventValues.ts` | pure runtime (imports `./taskDates`; `Database` type-only) | same rule |
+| `frontend/lib/data/taskValues.ts`, `integrationValues.ts` | pure runtime | same rule |
+| `frontend/lib/auth/errors.ts` copy, `integrationErrors.ts` copy | constants | M3/M2 port the exact strings (copy on evidence, no drift-by-memory: paste from source, reference the file in a comment). |
+
+Rule: if the spike fails, the fallback is an explicit mirror module with a header naming the source file and a parity checklist in the phase record — never a silent divergence. No file under `frontend/` is modified for reuse.
+
+---
+
+## B. Architecture boundary
+
+The mobile app is a **client**. Two and only two channels:
+
+1. **Direct Supabase** (auth + RLS-scoped reads/writes) with the user's own JWT. RLS is authoritative; the app never holds the service role key.
+2. **The existing Next.js server** (`frontend/app/api/**`, existing or new) for anything needing provider secrets, OAuth exchanges, service-role writes, or long-running work (jobs).
+
+Bearer auth for app-facing endpoints: `Authorization: Bearer <supabase access token>`, verified server-side with `supabase.auth.getUser(token)` + the onboarding gate. No cookies, no Server Actions, no request-Host-derived origins.
+
+**Provider tokens never touch the device.** The app never calls Google/Microsoft APIs directly; it only sees connection status and calendar rows.
+
+**No guest mode — approved product decision (2026-09-30).** 0.17 exists for the web's public surfaces; the mobile app is sign-in-first by design: it requires a session from launch, and there is no guest browsing mode. This is a recorded product decision, not an omission; guest browsing remains a web-only concern.
+
+### B.1 Feature → channel map (exactly one of i / ii / iii)
+
+| Feature | Channel | Detail |
+| --- | --- | --- |
+| Sign up / sign in / sign out / session refresh | **(i)** | Supabase Auth SDK, PKCE, secure storage |
+| Profile read/update (name, timezone) | **(i)** | `profiles` owner SELECT/UPDATE RLS |
+| Onboarding state read | **(i)** | `profiles.onboarding_completed_at` |
+| Onboarding completion (**native, in M2**) | **(i)** | `complete_onboarding` RPC — `security invoker`, EXECUTE granted to `authenticated` (verified in the migration); the app reuses the same validation rules (one logic source) and offers an honest fallback deep link to the web only if the RPC fails |
+| Subjects list | **(i)** | `subjects` owner RLS |
+| Tasks list/create/update/delete | **(i)** | `tasks` owner RLS; DB CHECKs are the backstop |
+| Events list/create/update/delete | **(i)** | `events` owner RLS; provenance trigger keeps `source='manual'` for client writes |
+| Unified calendar read (all sources) | **(i)** | `events` + `subjects` owner RLS |
+| Provider connection status (Google/Microsoft/WhatsApp) | **(i)** | `integration_connections` owner SELECT |
+| Sync history / candidate queue | **(i)** | `integration_runs` / `integration_candidates` owner SELECT |
+| Google Calendar connect/disconnect | **(iii)** + (ii) | new `POST /api/integrations/google/start|disconnect`; **existing** `GET /api/integrations/google/callback` extended for app return (§D3) |
+| Microsoft connect/disconnect | **(iii)** | new `POST /api/integrations/microsoft/start|disconnect`, `GET /api/integrations/microsoft/callback` |
+| Trigger a provider sync/scan | **(iii)** | new `POST /api/integrations/sync` (throttled, enqueues ids-only jobs) |
+| WhatsApp export upload | (i) + (iii) | reserve/finalize/abort via new endpoints (service writes + job enqueue); the file itself uploads **directly to Storage** under the user's JWT (`whatsapp-exports` owner-folder RLS) |
+| WhatsApp candidate confirm/reject | **(iii)** | new endpoints over the existing service functions (`confirmCandidate`, `rejectCandidate`) |
+| WhatsApp live QR/status | **(iii)**, deferred | service-only QR RPC; self-host-gated; post-M7 |
+| Google Calendar push of an app event (M6) | **(iii)** | new `POST /api/integrations/google/push { eventId }` → ids-only job |
+| Assistant / presentation tools | **(ii)** existing, deferred | `/api/assistant/turn` (needs Bearer support → a listed web change if and when enabled); presentation routes are desktop-shaped, out of scope |
+| Documents list/upload | (i) direct read; upload deferred | `documents` owner RLS; Storage direct upload is a later milestone |
+| Anything billing/admin/usage | **(iii)** later | not in this project's scope |
+
+### B.2 Web-app changes this project is allowed to make (complete list)
+
+Everything else in `frontend/` stays untouched. Each listed change is behaviour-preserving or additive, and is verified by the existing Playwright suite.
+
+1. New route handlers under `frontend/app/api/integrations/**` (§D3).
+2. Extension of `GET /api/integrations/google/callback` to accept app-mode state rows and answer `302 → unipilot://…` instead of the `/integrations?…` redirect. The web path (cookie-bound state) keeps its exact behaviour.
+3. Small extraction of logic currently inline in `integrationActions.ts` into `frontend/lib/data/integrations.ts` service functions (disconnect-google, confirm+push, reject, reserve/finalize/abort) so actions and routes share one body.
+4. `frontend/lib/auth/apiAuth.ts` (new): Bearer verification + onboarding gate for route handlers.
+5. `frontend/lib/supabase/schema-contract.ts`: add the new tables/columns to the compile-time contract.
+6. `frontend/lib/supabase/database.types.ts`: regenerated by `db:types` (generated file, never hand-edited).
+7. Root/workspace docs: `README.md`, root `AGENTS.md`, `.gitignore`, root `package.json` scripts (§I).
+
+---
+
+## C. Calendar scope (the "now" milestone)
+
+One unified calendar screen reading **one** owner-scoped `events` set. Each row carries a visible provider marker derived from `(source, source_meta)` — never a fabricated status.
+
+| Source | Marker | Origin pipeline | Status today |
+| --- | --- | --- | --- |
+| `manual` | none (plain) | app/web user | live |
+| `whatsapp` | chat icon + "From WhatsApp" | export upload → `wa_service` extractor → `integration_candidates` → confirm/auto → `events` | live (export); live mode `[!]` blocked |
+| `google` | "Google Calendar" | Google Calendar API `events.list` on the stored OAuth credential (`calendar.events` scope already covers reads) | OAuth code exists; E2E `[!]` blocked (no client pair) |
+| `outlook` | "Outlook Calendar" | Microsoft Graph `/me/calendarView` | **new** (Azure registration required) |
+| `outlook` + `source_meta.onlineMeeting` | "Teams" | Graph `isOnlineMeeting`/`onlineMeeting` metadata on the same event | **new** (same pipeline) |
+| `gmail` | "Gmail" | Gmail API scan → heuristic detection → candidates → confirm/auto | **deferred past the first calendar milestone** (approved decision (f): `gmail.readonly` is a restricted scope requiring Google verification/CASA). The app renders the honest "Gmail isn't connected yet" state; the pipeline below stays specified so the Gmail milestone is additive. |
+
+### C.1 Data model
+
+- `events.source` CHECK is extended to `manual | whatsapp | google | outlook | gmail`; existing rows are untouched.
+- `events.source_meta jsonb` (new, nullable) carries provider metadata: `{ "onlineMeeting": true, "joinUrl": "…" }`, `{ "calendarId": "primary" }`, `{ "account": "…" }`. It is locked by the same provenance trigger: a non-service caller writes `NULL` (extended trigger, one migration).
+- Dedupe **within a provider**: `source_ref` is the provider's own stable id (Google/Graph event id) or the derived fingerprint for heuristic sources; the existing unique index `events_user_source_ref_key (user_id, source, source_ref)` + `on conflict … ignore duplicates` is the only dedupe mechanism. Re-sync = upsert; a re-detected candidate never duplicates an event (the WhatsApp proof from 46.22 is the reference behaviour).
+- Gmail fingerprint: mirror `wa_service`'s fingerprint approach — `sha256(sender|subject|normalized-date|normalized-title|start-time)` truncated to 32 hex, prefixed `gm-` so heuristic fingerprints can never collide with WhatsApp's bare 32-hex values (the candidates table's unique key is `(user_id, fingerprint)` — prefixes keep provider namespaces disjoint without a schema change).
+- Candidates are reused for the two heuristic sources only (WhatsApp, Gmail): `integration_candidates` gets a `provider` column (default `whatsapp`) and `integration_runs` gets `provider` + a shared `sync` mode (§D1). Outlook/Google never produce candidates — they are already calendar events, imported directly.
+- Sync state lives on the connection row: `sync_cursor text` (Google `syncToken` / Graph `deltaLink` / Gmail `historyId`), `last_synced_at timestamptz`. `last_error` already exists.
+- **Deletion reconciliation is out of scope** for M3–M4: import is upsert-only. A provider-side deleted event therefore lingers until a later reconciliation design (recorded in §J). No fake "removed" states.
+
+### C.2 Duplicates across providers (honest boundary)
+
+Two providers can hold the same real-world event (an Outlook invite mirrored into Google). Automatic cross-provider merging is **not** built: the app shows both rows, each honestly attributed. A later, optional "possible duplicate" heuristic (same start instant ±0, same normalized title) can badge overlaps without merging; recorded in §L, not in M3–M4.
+
+### C.3 States the calendar and each source must render
+
+- Calendar: loading skeleton, empty month ("Nothing on your calendar yet" + the one action that makes sense), error with retry (sanitized copy), and per-event markers.
+- Provider card/status in `More → Integrations` (M3/M5): `connected`, `not_connected`, `not_configured on this server`, `error`, `blocked: verification/host missing` — exact strings modelled on `GoogleCalendarPanel`'s state machine, with the app's equivalent of `data-google-status`.
+- Gmail: `not_configured`, `connected_without_gmail_scope` (the honest "reconnect to grant Gmail access" state), `blocked: Google verification`, `error`.
+- Never an invented event, sync, count, or progress.
+
+---
+
+## D. Server-side work this milestone requires (in the existing repo)
+
+### D1. Migrations (four files, one logical change each, per `MIGRATIONS.md`)
+
+1. `20XXXXXXXXXX_events_provider_sources.sql`
+   - `events.source` CHECK → `manual | whatsapp | google | outlook | gmail`.
+   - `events.source_meta jsonb` nullable + comment; extend `lock_event_provenance()` to reset `source_meta` for non-service callers.
+2. `20XXXXXXXXXX_integration_sync.sql`
+   - `integration_connections.provider` CHECK → `whatsapp | google | microsoft`.
+   - `integration_connections.sync_cursor text`, `last_synced_at timestamptz`.
+   - `integration_runs.provider text not null default 'whatsapp'` CHECK `whatsapp | google | microsoft`; `mode` vocabulary += `sync`; the input CHECK gets a third arm (`mode='sync'` ⇒ `storage_path is null and chat_name is null`).
+   - `integration_candidates.provider text not null default 'whatsapp'` CHECK; index `(user_id, provider, status)` added; existing `(user_id, status)` kept or replaced with a forward-only note.
+3. `20XXXXXXXXXX_microsoft_credentials.sql`
+   - `microsoft_calendar_credentials` mirroring `google_calendar_credentials`: `user_id` PK → `auth.users` cascade, `refresh_token_enc bytea not null`, `scope text`, `tenant text`, `account_ref text`, `connected_at`, `updated_at`; RLS enabled, **no policies, no grants to `anon`/`authenticated`/`service_role`**; RPCs `upsert_microsoft_credentials`, `get_microsoft_credentials`, `delete_microsoft_credentials` — `security definer`, `search_path=''`, EXECUTE revoked from `public`/`anon`/`authenticated` then granted to `service_role` only (the 29.1 default-grant trap), rollback note at the end.
+4. `20XXXXXXXXXX_oauth_states.sql`
+   - `oauth_states` service-only table: `state_hash text PK`, `user_id → auth.users` cascade, `provider text` CHECK `google | microsoft`, `return_scheme text` CHECK `unipilot`, `expires_at timestamptz not null`, `consumed_at timestamptz`, `created_at`; RLS enabled, no policies, zero API-role grants; index on `expires_at`; comment recording the single-use contract.
+
+Gate for every migration: `npm run db:reset` clean, `npm run db:lint` clean, `npm run db:types` regenerated and committed, `npm run db:check-types` matches, `schema-contract.ts` extended (so a future regeneration that loses a new column fails `tsc`). No generator key in the client; `UNIPILOT_INTEGRATIONS_KEY` continues to gate the pgcrypto RPCs.
+
+### D2. Worker job kinds
+
+Registered in `backend/worker/handlers.mjs`, implemented in one new module family:
+
+| Kind | Payload (ids only) | Handler behaviour |
+| --- | --- | --- |
+| `google.sync` | `{ connectionId }` | refresh access token from `google_calendar_credentials`; `events.list` (time window −30 d…+365 d, `singleEvents=true`); upsert `events` with `source='google'`, `source_ref=<event id>`, `source_meta={calendarId}`; store `syncToken`/`last_synced_at`; update connection status/`last_error` |
+| `microsoft.sync` | `{ connectionId }` | refresh from `microsoft_calendar_credentials`; Graph `GET /me/calendarView` (same window, `Prefer: outlook.timezone="UTC"`); upsert `source='outlook'` (+ `source_meta.onlineMeeting` when the event carries it); store `deltaLink` |
+| `gmail.scan` | `{ connectionId }` | **deferred past the first calendar milestone** (decision (f)) — specified here so the Gmail milestone is purely additive. refresh token; `users.messages.list` with the recorded `q` filter and `historyId` cursor; heuristic detection (date/time phrases + academic keywords, mirroring `wa_service`'s extractor discipline); insert `integration_candidates` rows (`provider='gmail'`, `gm-<hash>` fingerprint, `run_id` of the `sync` run) |
+
+Rules carried over verbatim: payloads ids-only; `touch_job` heartbeat for long scans; 401/403 → non-retryable + connection `error` with sanitized copy; 429/5xx/timeout → retryable with the runner's backoff; provider response bodies never logged or surfaced; no token, body or message text in logs; jobs carried by the same `jobs` table/lease protocol (no second runner).
+
+### D3. App-facing HTTP endpoints (`frontend/app/api/**`) 
+
+All Bearer-authenticated (`Authorization: Bearer <access token>`), all returning JSON with sanitized error strings, all calling the same service functions the web actions call.
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/api/integrations/oauth/start` | POST | Body `{ provider: "google" \| "microsoft" }`. Creates a single-use state row (random 32-byte token, SHA-256 stored, TTL 10 min, `return_scheme='unipilot'`), returns the provider consent URL. No cookie required (native has no session cookie). |
+| `/api/integrations/google/callback` | GET | **Existing, extended**: if `state` matches an unconsumed `oauth_states` row → token exchange, `upsert_google_credentials`, connection `connected`, best-effort `backfillGooglePushes`, then `302 → unipilot://oauth/google?status=connected`. The cookie-bound web path is unchanged. |
+| `/api/integrations/microsoft/callback` | GET | Same shape for Microsoft: code exchange with client id/secret, `upsert_microsoft_credentials`, connection `connected`, `302 → unipilot://oauth/microsoft?status=…`. |
+| `/api/integrations/{google,microsoft}/disconnect` | POST | Clears credentials through the service RPC + marks the connection `disconnected` (extracted from the existing action bodies). |
+| `/api/integrations/sync` | POST | Body `{ provider: "google" \| "microsoft" }` (Gmail rides the `google` connection in its later milestone). Server-side throttle (per user+provider, ≥ 5 min between runs, recorded as a constant — the foreground-refresh / "Sync now" guard); reserves an `integration_runs` row (`mode='sync'`, `provider`) and enqueues the ids-only job; answers `{ accepted: true \| false, reason: "throttled" \| "active" \| "not_connected" }`. |
+| `/api/integrations/whatsapp/runs` | POST | Export reserve — same guard/contract as `createExportRunAction`. |
+| `/api/integrations/whatsapp/runs/{id}/finalize` | POST | Verify object + enqueue `whatsapp.sync`. |
+| `/api/integrations/whatsapp/runs/{id}/abort` | POST | Discard object + row. |
+| `/api/integrations/whatsapp/candidates/{id}/confirm` \| `/reject` | POST | Existing service pair; confirm enqueues `whatsapp.push` only when Google is connected (unchanged rule). |
+| `/api/integrations/google/push` | POST | M6: ids-only push of one owned app event. |
+
+Not built now: a general mobile "assistant" endpoint (the existing SSE route stays cookie-only until a later task converts it to Bearer; listed in §B.2 as a future web change).
+
+### D4. Subscribe/watch vs scheduled polling — decision
+
+**Decision (approved 2026-09-30, decision (e)): foreground refresh + an explicit "Sync now" in M4/M5 — no aggressive background polling. Webhooks deferred.**
+
+- M4/M5 ship: a refresh on app foreground (server-side throttle ≥ 5 min per user+provider, the `sync` endpoint's guard) and a visible "Sync now" affordance with the same guard. Any background cadence (a 30–60-minute platform-scheduler wake) lands **after** M5 and must ship throttling-aware (provider quota) and battery-aware (OS scheduler, no wake-locks, back-off after failures).
+- Graph change notifications and Gmail `users.watch` both require a public HTTPS endpoint, subscription lifecycle management (create/renew ≤ 4230 min, validate notification URLs, handle expiry), plus, for Gmail, a GCP project + Pub/Sub topic + IAM. On this repo's local-only environment (WSL2, no public ingress) none of that is buildable *or verifiable* today, and shipping unverifiable plumbing would violate §0.9.
+- Polling tradeoff, stated plainly: freshness is bounded by the foreground trigger / explicit sync, and each poll costs provider quota. The worker already provides retry/backoff/leases, and per-user throttling bounds API usage (the same discipline as D13's 1-active/20-per-day guard).
+- Deferred, with the seam already designed: connection `sync_cursor` and the ids-only job kinds make a future `POST /api/webhooks/{microsoft,gmail}` a pure additive step (verify notification → enqueue the same sync/scan job), and the mobile app needs no change because it always reads the same `events` rows. Recorded in §L.
+
+### D5. Rate limits and guards
+
+- Sync runs reuse the `integration_runs` history + a per-user+provider minimum interval; a second request while one is `queued`/`running` answers `active` (mirrors `WHATSAPP_ACTIVE_RUN_LIMIT`).
+- Provider quotas: Graph 429 + `Retry-After` honoured by the retryable path; Google quota errors map to the same retryable class; a hard provider error marks the connection `error` with sanitized copy and stops further enqueues until a manual reconnect (no silent loop).
+- Gmail scan caps (when the Gmail milestone lands) mirror the WhatsApp posture: message cap per run and candidate cap per run, both constants in the mobile/server contract copy.
+
+---
+
+## E. Design language — token mapping web → native
+
+Source of truth stays `frontend/app/globals.css` + `DESIGN.md`. Mobile mirrors it in `mobile-app/src/theme/tokens.ts`; no new colour, no new font, no new radius, no new duration. Dark is the default, same as the web; the app also supports light.
+
+### E.1 Colour
+
+| Web token | Light | Dark | Native name | Notes |
+| --- | --- | --- | --- | --- |
+| `--background` | `#f4f4f5` | `#131316` | `background` | the base floor under the backdrop |
+| `--foreground` | `#1a1c1c` | `#f0f1f1` | `foreground` | |
+| `--primary` / `--primary-foreground` | `#000000` / `#ffffff` | `#ffffff` / `#131315` | `primary` / `onPrimary` | black/white inversion, no brand colour |
+| `--card` | `#ffffff` | `#1d1d21` | `card` | solid fill |
+| `--muted` | `#f3f3f4` | `#1b1b1f` | `muted` | |
+| `--muted-foreground` | `#4c4546` | `#9e9899` | `mutedForeground` | metadata/secondary text |
+| `--border` | `#e5e5e5` | `#2e2e33` | `border` | 1px hairlines only |
+| `--surface-glass` | `muted @ 60%` | `muted @ 70%` | `glass` | + blur (§E.4) |
+| `--surface-inverted` / `-foreground` / `--border-inverted` / `-nested` | `#1a1c1c` / `#f0f1f1` / `#3a3a3a` / `#2e2e2f` | `#f0f1f1` / `#131315` / `#d0d1d1` / `#dcdedf` | `inverted*` | rationed: ≤1 dominant + ≤1 group per view |
+| `--scrim` | `rgba(0,0,0,.4)` | `rgba(0,0,0,.55)` | `scrim` | modal backdrops only |
+| `--destructive` | `#ba1a1a` | `#e5484d` | `destructive` | the one functional colour, as shipped on web |
+| `--surface-cta` | `#1d1d21` | `#1d1d21` | `cta` | theme-stable charcoal |
+| motif (`--motif-color/-scale/-spacing`) | `#d4d4d4`, 1px, 32px | `#3c3c41`, 1px, 32px | `motif*` | see backdrop note |
+
+Backdrop on native: a fixed three-layer stack is reproduced with (1) a base `View`, (2) one very-low-contrast neutral luminance field (linear gradient, ±1.5% lightness — the same narrow permission as `DESIGN.md` §3.13), (3) the dot motif painted as a repeating SVG/Canvas pattern at `--motif-spacing`. No `backdrop-filter`; glass surfaces use `expo-blur` where supported and fall back to the translucent fill alone — the web's own honest-degradation rule.
+
+### E.2 Typography
+
+| Role (unchanged rules) | Family | Web | Native |
+| --- | --- | --- | --- |
+| Major headings + all action labels (buttons, chips, segmented controls) | **Bricolage Grotesque** | `--font-heading` | `heading` |
+| Body UI, fields, navigation links | **Geist** | `--font-sans` | `body` |
+| Metadata, eyebrows, timestamps, monospace labels | **Geist Mono** | `--font-mono` | `mono` |
+
+Scale (same numbers; RN converts `em` tracking to points: `letterSpacingPx = em × fontSize`):
+
+| Token | Size / weight / lineHeight / tracking web | Native tracking |
+| --- | --- | --- |
+| display | 72 / 700 / 1.1 / −0.04em | −2.88 |
+| headline-lg | 48 / 700 / 1.2 / −0.03em | −1.44 |
+| headline-lg-mobile | 32 / 700 / 1.2 / −0.02em | −0.64 |
+| headline-md | 24 / 600 / 1.3 / −0.01em | −0.24 |
+| body-lg | 18 / 400 / 1.6 / 0 | 0 |
+| body-md | 16 / 400 / 1.6 / 0 | 0 |
+| label-caps | 12 / 600 / 1.0 / 0.1em | 1.2 |
+| label-sm | 13 / 500 / 1.4 / 0 | 0 |
+
+Sourcing and licences: Geist + Geist Mono (SIL OFL 1.1, `vercel/geist-font`) and Bricolage Grotesque (SIL OFL 1.1). The web ships Bricolage as a variable TTF at `frontend/public/fonts/BricolageGrotesque-VariableFont_opsz,wdth,wght.ttf`; mobile vendors its own copies under `mobile-app/assets/fonts/` (Geist/Mono TTFs taken from the pinned upstream release) with the OFL licence files and a `PROVENANCE.md` recording source URL + SHA-256 per file. Loading via `expo-font`; if variable-face weight selection misbehaves on the pinned RN/Android versions, the M1 spike falls back to static instances of exactly the weights the scale uses (400/500/600/700/800) — no new family, no synthesised weights.
+
+### E.3 Spacing, radius, elevation
+
+| Web | Value | Native |
+| --- | --- | --- |
+| spacing unit | 4px | `space[1] = 4` … step scale |
+| mobile margin | 20px | `layout.margin = 20` |
+| Frame / Card at ≤375px | 32→24px / 20→16px | `radius.frame = 24`, `radius.card = 16` (responsive token step, not per-component) |
+| Nested / Control / Pill | 12 / 8 / ∞ | same |
+| Raised | `0 4px 16px rgba(0,0,0,.06)` | `shadows.raised` |
+| Floating | `0 8px 32px rgba(0,0,0,.08)` | `shadows.floating` |
+| Overlay | `0 12px 40px rgba(0,0,0,.12)` | `shadows.overlay` |
+| Flush | none | `shadows.flush` |
+
+Native shadows are expressed as RN `boxShadow` strings (New Architecture) with the exact recipes; the M1 spike verifies Android rendering and records the fallback (platform `shadow*`/`elevation` approximation) if not. One elevation per surface; no tinted or heavy shadows; nested surfaces separate by fill + radius step, never shadow.
+
+### E.4 Motion vocabulary (native)
+
+| Web primitive | Native mechanism | Values |
+| --- | --- | --- |
+| `presets.ts` tokens | `src/motion/presets.ts` mirror | `EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1)`; `EASE_DRAWER = bezier(0.32, 0.72, 0, 1)`; durations 140/160/180/220/150/400/380/260/380/90/140/720 ms; staggers 40/60/80 ms — byte-identical numbers |
+| `[data-enter]` entrance ladder | Reanimated entering + `Animated.View` with the same slot convention (header slot 0, sections 1..n, `motionIndex`) | rise/scale/left/right variants, 60 ms slot stagger |
+| `MotionPopover` | Moti/Reanimated popover variants | fade + 8px directional translate + `scale(0.97)`; open 220 / close 150; origin-aware |
+| `MotionMenu` (drawer) | same, parent drop + child stagger 40 ms | |
+| `MotionListItem` | Reanimated layout + fade/slide | 6px in; 150 ms out |
+| `MotionNotice` | enter-only, no delay, `accessibilityLiveRegion`/`role` equivalent | 180 ms |
+| `MotionSelectionRing` | animated fill/indicator on the selected surface (no `layoutId` clone semantics on native) | `softSpring`-equivalent spring |
+| `MotionBar` | `scaleX` from origin-left clip | 720 ms |
+| `press-feedback` / `icon-turn` | `Pressable` scale 0.97 @140 ms; chevron rotation @160 ms | |
+| `RouteTransition` | Expo Router screen enter | opacity + 6px rise, 220 ms, enter-only |
+
+Rules (unchanged from `MOTION.md`): motion never controls content existence — content is always structurally rendered and only opacity/transform animate; reduced motion via `AccessibilityInfo.isReduceMotionEnabled()` + Reanimated's reduce-motion config zeroes every duration and removes translate/scale while keeping state changes instant; no `width/height/margin/padding/top/left` animation; no page-specific animation systems — every new animation extends `presets.ts` or this table first. Verification: M1 includes a motion spike that records the exact primitive mapping against the pinned Reanimated/Moti versions before any screen motion is written.
+
+---
+
+## F. Auth
+
+- **Supabase Auth in the app**, `flowType: 'pkce'`, `detectSessionInUrl: false`, `autoRefreshToken: true`, `persistSession: true`.
+- **Session storage: `expo-secure-store` only** (Android Keystore / iOS Keychain). Never AsyncStorage for tokens. Because session JSON can exceed a single secure-store entry limit on some devices, the M2 implementation uses the standard chunked storage adapter (split + reconstruct), and M2's test proves sign-out and re-login across an app restart with the store inspected for no plaintext leftovers.
+- **Deep links**: app scheme `unipilot`.
+  - Supabase Auth PKCE callback: `unipilot://auth-callback` (Google sign-in and, later, email confirmation). Requires the redirect to be allow-listed: locally in `backend/supabase/config.toml` `additional_redirect_urls` (machine-local, git-ignored) + restart; on the hosted project it would be a dashboard change — **not performed** by this project (documented for later).
+  - Provider OAuth (calendar): `unipilot://oauth/google` / `unipilot://oauth/microsoft`, reached only from **our own** callback endpoint (§D3) after the server-side token exchange. The provider consoles register the *server* redirect URI, never the deep link.
+- **Email/password**: direct `signInWithPassword`; sign-up in-app deferred (the app can point a completion email at the web `/auth/confirm`); password reset deferred to the backlog.
+- **Session lifecycle**: start/stop auto-refresh with `AppState`; cold-start reads the stored session and validates with `getUser()`; a 401 anywhere clears the session and returns to sign-in.
+- **Google identity vs Google Calendar are two different grants.** Supabase Auth Google (openid/email/profile) and the Calendar OAuth (calendar.events) remain separate connections with separate scopes; the app's UI never conflates "signed in with Google" with "Google Calendar connected".
+- **Never on the device**: service role key, provider client secrets, refresh/access tokens for calendar providers, QR payloads. Logs and analytics carry ids only; screenshots must not show tokens (§H).
+- RLS stays authoritative: every direct read/write is owner-scoped by policy; the app's client-side gates (onboarding, sign-in) are UX, not enforcement.
+
+---
+
+## G. Build & release
+
+- **Expo config (CNG)**: `app.json`/`app.config.ts` is the source of truth. Android package id **`com.unipilot.app`**; `scheme: unipilot` — **provisional (decision (a), 2026-09-30)**: the identifiers stay UniPilot unless the founder confirms the alternative `app.woid.mobile` / `woid://`. The package id must be finalised **before the first EAS build** (it is the app's distribution identity) and every `unipilot://` below reads as "the app scheme". `versionCode` starts at 1; `userInterfaceStyle: automatic` with dark as the default to mirror the web; intent filters for the scheme; cleartext HTTP enabled **only in dev/preview profiles** (needed for local Supabase/Next over `http://`; production stays HTTPS-only).
+- **Native project generation**: `expo prebuild` (Continuous Native Generation). `mobile-app/android/` is generated and git-ignored; nothing hand-edited there.
+- **Build paths (decision (g), approved 2026-09-30): EAS Build is the primary APK path** while this host lacks an Android SDK; **local Gradle stays the documented fallback.**
+  1. **EAS Build (primary)** — an Expo account/project (external dependency, §N) and `eas build -p android --profile preview` with `buildType: apk`, producing an installable, standalone **preview APK**. This is the M1 artifact.
+  2. **Local Gradle (fallback)** — `npx expo run:android --variant release`, producing a standalone APK (requires the Android SDK + a Gradle-supported JDK). Signing: a dedicated **upload keystore** generated once (`keytool`), stored git-ignored at `mobile-app/android/keystore/` with its passwords in `mobile-app/.env` (never committed), wired through `gradle.properties`. `assembleDebug` exists for fast iteration but is not the deliverable.
+- **Expected artifact**: the EAS `preview` APK (the build URL + the downloaded file — proposed local path `mobile-app/build/mobile-preview.apk`, git-ignored — recorded in the phase record). Local-Gradle fallback artifact: `mobile-app/android/app/build/outputs/apk/release/app-release.apk`.
+- **Debug vs release, plainly**:
+  - a **debug APK** is debug-signed, installable via `adb install`, but not distributable, not Play-uploadable, and (plain `assembleDebug`) expects a Metro dev server;
+  - the **EAS `preview` APK** is debug-signed by EAS and standalone-installable via `adb install` — the M1 artifact and the device-QA vehicle; it is explicitly **not** a Play-uploadable release;
+  - a **locally built release APK** signed with the project keystore remains the documented fallback deliverable; the **Play Store** needs an AAB and an upload key registered with Google — out of scope. Sideloading is the distribution model for this project.
+- **M1 preflight (first work item, decision (h))**: (1) create/log in to the Expo account and link the project; (2) run the first EAS `preview` build; (3) verify a **physical Android phone** with `adb devices` and install the APK there — Expo Go / a dev build may serve while developing, but a phone is required for the milestone's device evidence. **If no phone is available, M1 stops at preflight and reports honestly**; no screenshots, install or flow verification are claimed. The local-Gradle path (Android SDK cmdline tools + platform + build-tools, an AVD, and a Gradle-supported JDK — Java 26 on this host is suspect; Temurin 17/21 if needed) is pursued only if EAS fails or the founder asks.
+
+---
+
+## H. QA
+
+- **Unit + component tests (replaces Playwright's role at the logic level)**: Jest + `@testing-library/react-native` for pure logic (date/validation reuse, token parity, fetch clients with mocked HTTP), component states (empty/loading/error/blocked), and the auth storage adapter. Provider API clients are tested against mocked HTTP payloads only — clearly labelled mocks, never presented as live-provider evidence (the same discipline as the pytest-mocked Google push).
+- **Device flows (replaces Playwright's role at the interaction level)**: **Maestro** (YAML flows, runs against a **physical Android phone over adb** (decision (h)); an emulator is acceptable only if one is provisioned; screenshots per step; tolerant of RN without Detox's build complexity). Flows for M2–M7: sign-in → calendar renders; provider card states; sign-out; the milestone's critical path. If Maestro cannot be installed on this host, the fallback is scripted `adb` interaction + `adb exec-out screencap`, stated as such.
+- **Evidence**: screenshots captured on the physical phone over adb (decision (h); an emulator only if provisioned) under **`mobile-app/screenshots/`** (git-ignored, mirroring the web's `frontend/screenshots/` convention), named `<phase>-<flow>-<state>.png`. No screenshot may contain a token, password, QR payload, or raw chat export; the QA password rule from `QA_SESSION.md` applies unchanged.
+- **Honest statement, restated where it matters**: `npm run test` (Playwright) tests the web app only; **it does not test this app and its green result is not evidence about the mobile app**. Mobile's own gate is `mobile:typecheck`, `mobile:lint`, `mobile:test`, a successful APK build, and the phase's device flow. The web suite still runs on every phase gate for the touched server code (the new endpoints and migrations are inside its blast radius).
+- **Phase gate (all must be green before the next phase starts)**: mobile typecheck + lint + unit/component tests; APK builds; the phase's device flow exercised and screenshotted; the web suite still green; `db:lint`/`db:check-types` green when migrations changed; `plan.md` §P record written.
+
+---
+
+## I. Monorepo integration
+
+- **Workspaces**: root `package.json` gains `"mobile-app"` in `workspaces`. One lockfile stays the rule; `npm install` at the root installs all three. Expected lockfile change: **additions only** — the phase gate checks the diff and fails the phase if any existing package version moves.
+- **Metro + hoisting** (`mobile-app/metro.config.js`): the standard monorepo config —
+  `watchFolders: [monorepoRoot]`,
+  `resolver.nodeModulesPaths: [projectRoot/node_modules, monorepoRoot/node_modules]`,
+  `resolver.disableHierarchicalLookup: true`,
+  asset extensions cover fonts.
+  `expo-doctor` runs at every phase gate. Known risk: RN's React version and the frontend's pinned `19.2.8` will nest (`mobile-app/node_modules/react`), not collide; `npm ls react react-native` output is recorded in the M1 phase record and re-checked when Expo is upgraded. If hoisting proves unstable, the documented fallback is keeping `mobile-app` out of `workspaces` with its own lockfile — a decision recorded in §P, not taken silently.
+- **Scripts (root)**: `mobile:start`, `mobile:android`, `mobile:apk`, `mobile:lint`, `mobile:typecheck`, `mobile:test`. The root `test` script stays exactly `npm run test -w frontend` — the web suite's meaning never changes.
+- **`.gitignore` additions**: `mobile-app/node_modules/`, `mobile-app/.expo/`, `mobile-app/android/` (generated), `mobile-app/.env*` (templates excepted, same two-file discipline as the rest of the repo), `mobile-app/screenshots/`, `mobile-app/test-results/`, keystore files.
+- **Docs**: `README.md` gains the `mobile-app/` layout row + the mobile scripts; root `AGENTS.md` gains the mobile workspace paragraph (motion rule, gate, screenshot convention, and the "Playwright does not test the app" statement). `mobile-app/README.md` (new) documents setup, env, build and QA. The design/token mirror gets `mobile-app/src/theme/README.md` listing the web as authoritative.
+- **What must not change**: `frontend`'s scripts, `playwright.config.ts`, the two env files' semantics, and the root `db:*`/`worker` scripts.
+- **Env files**: `mobile-app/.env.example` tracked (`EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`, `EXPO_PUBLIC_API_BASE_URL`, optional `EXPO_PUBLIC_USE_ADB_REVERSE`); real values in `mobile-app/.env` (git-ignored). Server-side new vars documented in `frontend/.env.example`: `MICROSOFT_OAUTH_CLIENT_ID`, `MICROSOFT_OAUTH_CLIENT_SECRET`, `MICROSOFT_OAUTH_TENANT` (default `common`). The local-network facts are documented in `mobile-app/README.md`: emulator → `10.0.2.2`, device → `adb reverse tcp:3000 tcp:3000` (+ the same for the Supabase port), WSL2 stack caveat included.
+
+---
+
+## J. Honest limits (this project, this environment)
+
+1. **Gmail detection is heuristic — and deferred** (decision (f)): it does not block the first calendar milestone. When it lands, "event-like email" is a keyword/date rule over subject+snippet (modelled on but separate from the WhatsApp extractor); false positives and misses are expected, which is why Gmail always funnels through review candidates (or the user's explicit automatic mode) — never straight to the calendar.
+2. **External approvals, unavoidable**: Microsoft Azure app registration (+ tenant consent for some organisations); Google OAuth client for Calendar (already missing — 46.17 stays `[!]`); Gmail's restricted scope requires Google verification + a CASA security assessment for anything beyond Testing/test users. Until each exists, the corresponding feature renders its truthful blocked state ("Not configured on this server" / "Verification pending") and no E2E run is claimed.
+3. **Google Calendar `[!]` status does not change** because of this project: the OAuth client pair is still unset in `frontend/.env`; the app can display and manage the connection state, but the live round trip remains blocked at the same exact dependency recorded in TASK.md 46.17.
+4. **Polling, not push** (§D4): bounded freshness and quota cost; webhooks deferred.
+5. **Import is upsert-only** for M3–M4: provider-side deletions don't propagate; edits to provider-sourced rows aren't written back (read-only import direction). The two-way decision (TASK 46.10) stays open and is the M6 design input for the app→Google direction.
+6. **No cross-provider dedupe** (§C.2).
+7. **Device/build reality on this host**: no Android SDK, no emulator, no connected device, and Java 26 may be unsupported by the pinned Gradle. Resolved as far as the build goes by making **EAS Build the primary path** (decision (g)); device verification still requires a **physical phone over adb** (decision (h)). If no phone can be provided, M1 stops at preflight and reports honestly, and M7's device claims are `[!]` with the exact missing dependency, per §0.13 — never fabricated.
+8. **Deferred by design**: iOS, Play Store release, push notifications, offline write queue, native onboarding flow, assistant/tools/documents surfaces, live WhatsApp mode on mobile, watch/webhook subscriptions, cross-provider merge, native password reset.
+9. **The web suite's green is not mobile evidence** (§H), and the mobile suite's green is not web evidence; each phase gate runs both.
+10. **No hosted Supabase writes, ever**, and no QR payload, token, or raw export in any artifact (§0.14, `whatsapp/README.md`).
+
+---
+
+## K. Phases (each ends with a review gate; one writer; a green gate before the next starts)
+
+| Phase | Deliverable | Exit evidence |
+| --- | --- | --- |
+| **M0 — this plan** | `mobile-app/plan.md` | founder approval; no code |
+| **M1 — app skeleton + tokens + APK** | EAS account + project, Expo app in the workspace, Metro/monorepo config verified, token/type/font mirror, motion spike, tab shell (`Calendar` default · `Tasks` · `More`) with honest placeholder states, M1 preflight, first **EAS preview APK installed on the phone** | `expo-doctor` clean; mobile typecheck/lint/tests; APK build URL + `adb install` proof on the phone; lockfile diff has no version churn; `npm ls react` recorded; web typecheck/build still green. **No phone ⇒ stop at preflight and report honestly.** |
+| **M2 — auth + profile + onboarding (native)** | PKCE sign-in (email/password + Google), secure session storage with chunking, **native onboarding reusing `complete_onboarding` and the same validation rules** (web fallback deep link only if the RPC fails), profile read/update (name, timezone), sign-out | device flow: sign-in → restart → still signed in → sign-out; a fresh identity completes onboarding natively and the web sees the same rows; no plaintext token in store; screenshots; unit tests for the storage adapter; web suite green |
+| **M3 — unified calendar (read-only)** | month/week calendar bound to `events` with source markers, real empty/error states, provider status cards with blocked states, **Gmail's honest "isn't connected yet" state** | device flow with real local rows (manual + WhatsApp); markers verified; blocked provider states verified honestly; `npm run test` green |
+| **M4 — provider sync (server-side)** | 4 migrations applied locally, `google.sync` + `microsoft.sync` worker kinds registered, sync endpoints, **foreground refresh + explicit "Sync now"** with cursors, types regenerated (`gmail.scan` stays specified but deferred) | `db:reset`/`db:lint`/`db:check-types` green; worker tests for retry/backoff/dead-letter + 401/429 mapping with mocked HTTP; app shows real imported rows where credentials exist, honest blocks where not |
+| **M5 — create/edit + confirmation** | native event create/edit/delete with the web's validation vocabulary, source markers on provider rows, "possible duplicate" badge if cheap, review/automatic mode handling where candidates exist (WhatsApp) | device flow: create → edit → delete; WhatsApp candidate confirm/reject regression stays green; no fabricated counts; screenshots |
+| **M6 — Google Calendar push from the app** | push endpoint + `google.push` job, one-way semantics and copy identical to the web's `GOOGLE_ONE_WAY_NOTE`, honest state when unconnected/unconfigured | mocked-HTTP worker tests; device flow shows the truthful state; live E2E only if the OAuth client exists (else `[!]` with the exact dependency) |
+| **M7 — build + device verification** | final EAS APK, full pass across the calendar with each provider connected **or** honestly blocked, screenshots, `plan.md` §P record | every claim in the record has a screenshot or a test output behind it; anything missing is `[!]` with the exact missing dependency |
+| **Gmail milestone (post-M7, unscheduled)** | `gmail.scan` worker kind + Gmail scope request/consent state + the candidates review queue, behind Google verification/CASA; until then the app keeps the honest "Gmail isn't connected yet" state | only runs when the external dependency exists; mocked-HTTP tests until then; no fabricated connection |
+
+Ordering note: M3 (UI) precedes M4 (sync) deliberately — the read surface and its honest states are verified against real local rows first, and M4 then fills the same surface with provider rows without a UI rewrite.
+
+---
+
+## L. Future features (to be specified by the founder)
+
+Placeholder section. The architectural seams already in place for later tools and features:
+
+- **Provider adapters.** One server-side module per provider exposing `start/refresh/scan/cursor` against `integration_connections` + credentials tables; a new provider is a new module + a CHECK value + a card, never a new pattern.
+- **Source registry.** `source` vocabulary + `source_meta` jsonb + marker mapping in one mobile module (`src/features/calendar/sources.ts`), so a new source is one entry.
+- **Jobs.** Any new long-running tool is a `handlers.mjs` entry with an ids-only payload and the existing retry/lease protocol.
+- **Endpoints.** The Bearer API prefix (`/api/integrations/**`) and `apiAuth.ts` are the template for any future mobile-facing server capability (assistant Bearer upgrade, documents, tools, notifications).
+- **Notifications seam.** `notifications` table + jobs exist; a push-notification transport (Expo Notifications or FCM) is additive and requires an external credential — record when specified.
+- **Offline queue seam.** Direct Supabase writes go through one mobile data layer (`src/data/**`), so a later outbox/retry layer wraps that module without touching screens.
+- Candidate backlog items to be specified: the **Gmail milestone** (post-M7; `gmail.scan` + the candidates review queue, blocked on Google verification/CASA), **background sync cadence** (30–60 min platform-scheduler wake, throttling- and battery-aware), iOS build, password reset, document upload, assistant on mobile, live WhatsApp from mobile, webhook subscriptions, cross-provider duplicate heuristics, Calendar two-way sync, widget/deep-link entries, Play Store release.
+
+---
+
+## M. Environment variables
+
+| File | Variable | Kind |
+| --- | --- | --- |
+| `mobile-app/.env.example` | `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` | public by design; RLS is the guard |
+| | `EXPO_PUBLIC_API_BASE_URL` (Next server origin as reachable from the device) | public |
+| `frontend/.env.example` (appenditions documented, values unset) | `MICROSOFT_OAUTH_CLIENT_ID`, `MICROSOFT_OAUTH_CLIENT_SECRET`, `MICROSOFT_OAUTH_TENANT` | server-only |
+| `backend/.env.example` | the same Microsoft pair (the worker refreshes Microsoft tokens) + no new secrets beyond what exists | server-only |
+| Local Supabase | `additional_redirect_urls` += `unipilot://**` | machine-local config, git-ignored |
+| Existing | `GOOGLE_OAUTH_CLIENT_ID/SECRET` (still unset → Google blocked), `UNIPILOT_INTEGRATIONS_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | unchanged |
+
+No secret is ever placed in an `EXPO_PUBLIC_*` variable — the same rule as `NEXT_PUBLIC_*`.
+
+---
+
+## N. External dependencies & approvals (blockers with exact owners)
+
+| Dependency | Needed for | Status today |
+| --- | --- | --- |
+| **Physical Android phone (over adb)** | installing the EAS APK + device QA (decision (h)) | ❌ none detected on this host; **if none can be provided, M1 stops at preflight and reports honestly** |
+| **Expo account / EAS project** | **primary APK build path (decision (g))** | to be created in M1 |
+| Android SDK + AVD + Gradle-supported JDK | local-Gradle fallback only | ❌ not present; pursued only if EAS fails or is not desired |
+| Azure app registration + tenant consent | Microsoft calendar/Teams sync | ❌ must be created by the founder; app shows the honest blocked state until then |
+| Google Cloud OAuth client (`GOOGLE_OAUTH_CLIENT_ID/SECRET`) | Google Calendar read/push | ❌ already recorded as `[!]` in TASK.md 46.17 |
+| Google verification + CASA (restricted Gmail scope) | Gmail scan beyond Test users | ❌ external approval; the feature is **deferred (decision (f))** and does not block M3–M5 |
+| Supabase hosted project config (redirect allow-list) | production app | not touched by this project; documented for later |
+| Supabase local `config.toml` redirect allow-list (`unipilot://**`) | M2 deep links locally | machine-local edit + stack restart |
+
+---
+
+## O. Open questions for the M0 review gate
+
+Resolved at the M0 gate (2026-09-30):
+
+1. **Package id / scheme — provisional.** UniPilot identifiers are kept (`com.unipilot.app`, `unipilot://`) unless the founder confirms the alternative `app.woid.mobile` / `woid://`. The package id must be finalised before the first EAS build (it is the app's distribution identity).
+2. **Tab IA — approved:** `Calendar` (default) · `Tasks` · `More`; More holds Integrations, Settings and later tools.
+3. **No guest mode — approved** as a product decision (sign-in from launch; guest browsing stays a web-only concern).
+4. **Native onboarding — approved for M2**, reusing `complete_onboarding` and the same validation rules; a web deep link only as the honest RPC-failure fallback.
+5. **Polling — resolved:** foreground refresh + explicit "Sync now" in M4/M5; a 30–60-minute platform-scheduler cadence after that, throttling- and battery-aware.
+6. **Gmail — resolved:** out of the first calendar milestone; stays specified behind the verification/CASA dependency and renders the honest not-connected state.
+7. **EAS — resolved:** account created and EAS Build is the primary APK path; local Gradle documented as fallback; the M1 artifact is a preview APK.
+8. **Web edits (§B.2) — remains open** at the founder's convenience; nothing in M1 depends on it (the first server endpoints arrive in M4).
+
+Operational question for M1: **is a physical Android phone available for adb install/QA?** No phone ⇒ M1 stops at preflight with an honest report (decision (h)).
+
+---
+
+## P. Phase record (append-only; one entry per phase gate)
+
+> **M0 — 2026-09-30.** Plan written against `a330534`. Repo read: AGENTS/README/TASK/DESIGN/MOTION/AUTH_ARCHITECTURE/QA_SESSION/DATABASE/MIGRATIONS/presenton; code: data layer, integrations, worker, migrations, route handlers, design tokens. Machine preflight: Node 24.18 / npm 11.16 / Java 26 / `adb` present; **no Android SDK, emulator, AVD or device**; WSL2 stack API port moved 54321 → 54937 on this host (Windows `winnat` reservation, noted in `QA_SESSION.md`). No implementation performed. Awaiting approval.
+
+> **M0 gate — approved 2026-09-30.** Founder decisions (a)–(h) applied to this document: identifiers kept as `com.unipilot.app` / `unipilot://` **provisional** (the `app.woid.mobile` / `woid://` alternative stays available until the first EAS build); tab IA `Calendar` · `Tasks` · `More` approved; no-guest posture approved as a product decision; onboarding native in M2 via `complete_onboarding`; polling = foreground refresh + "Sync now" with the background cadence deferred; Gmail deferred past the first calendar milestone (verification/CASA) with an honest not-connected state; EAS Build is the primary APK path (preview APK = M1 artifact; local Gradle fallback); device verification on a physical phone over adb — **no phone ⇒ M1 stops at preflight and reports honestly**. No implementation performed; M1 awaits the explicit "go".
+
+> **M1 preflight — 2026-09-30 — STOPPED (preconditions unmet).**
+> `npx eas-cli whoami` → **`Not logged in`** (no authenticated Expo account; the CLI was fetched into the npx cache only to run the check — no credentials touched). `adb devices` → **empty** (no physical Android phone detected; USB debugging/authorisation unverifiable without a device). `git status` → 47 pre-existing modified/deleted paths left untouched; the only new path is `mobile-app/` (this plan). Per the M1 gate: **no scaffolding, no APK, no device claims.** Resumes when (1) the founder logs in to their own Expo account (`npx eas-cli login`) and (2) a physical Android phone is connected with USB debugging enabled and this machine authorised (`C:\Android\platform-tools\adb.exe devices` lists it).
+
+*(M1–M7 entries to follow, each with: date, writer, what shipped, exact evidence paths, what was verified on device, what is `[!]` and why, web-suite result, migration/type gate results, and any deviation from this plan with its reason.)*
+
+---
+
+## Q. References
+
+- `AGENTS.md` (root), `frontend/AGENTS.md`, `README.md`, `TASK.md` §0/§17/§22/§46, `DESIGN.md`, `MOTION.md`, `AUTH_ARCHITECTURE.md`, `QA_SESSION.md`
+- `backend/DATABASE.md`, `backend/supabase/MIGRATIONS.md`, `backend/worker/*.mjs`
+- `frontend/lib/data/*`, `frontend/lib/supabase/{database.types,schema-contract,service}.ts`, `frontend/app/api/**`, `frontend/app/(app)/{calendar,integrations}/**`, `frontend/app/globals.css`
+- `whatsapp/README.md`, `docs/integrations/presenton.md`
