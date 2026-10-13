@@ -4,11 +4,13 @@ The native Android client for UniPilot (React Native + Expo + TypeScript).
 The single source of truth for its scope, decisions and rules is
 [`plan.md`](./plan.md) — read it before changing anything here.
 
-## Status (M1)
+## Status (M2a)
 
-App skeleton + native design tokens + the first EAS preview APK. No auth, no
-data reads, no provider sync — every surface renders an honest empty or
-"not built yet" state. Auth lands in M2, the unified calendar in M3.
+Email/password auth against the LOCAL Supabase, sessions in
+`expo-secure-store`, the owner-scoped profile read and sign-out are live and
+device-verified (see `plan.md` §P). No data surfaces yet: the calendar/tasks
+screens render their honest empty states; M2b adds PKCE +
+`unipilot://auth-callback` deep links, M3 the unified calendar.
 
 ## Layout
 
@@ -60,27 +62,68 @@ live in one**; RLS is the authority.
 - `frontend/lib/supabase/database.types.ts` is consumed **type-only** as
   `@unipilot/db-types` (read-only; never edited from here).
 
-## Building the APK (EAS)
+## Building the APK
+
+Two proven paths. **Local is the default** (no queue); EAS is the fallback.
+
+### Local build (PROVEN 2026-10-01 — use this recipe verbatim)
+
+The main checkout lives under OneDrive, where `assembleRelease` fails with
+`ninja: error: manifest 'build.ninja' still dirty after 100 tries` (the CMake
+re-run loop; see `plan.md` §P). Build from a short, non-OneDrive worktree:
 
 ```powershell
-npx eas-cli login            # the founder's own Expo account
-npm run mobile:preview       # from the repo root → EAS preview APK
+# one-time setup
+git worktree add --detach C:\dev\up-mobile HEAD
+cd C:\dev\up-mobile; npm install
+
+# every build
+cd C:\dev\up-mobile\mobile-app
+$env:JAVA_HOME='C:\Android\jdk-17'
+$env:ANDROID_HOME='C:\Android\Sdk'; $env:ANDROID_SDK_ROOT='C:\Android\Sdk'
+npx expo prebuild --platform android --no-install    # only when native config changed
+cd android
+C:\Android\gradle-9.3.1\bin\gradle.bat assembleRelease --no-watch-fs
+# → app/build/outputs/apk/release/app-release.apk
 ```
 
-- Signing lives in `credentials.json` + `credentials/` (both git-ignored,
-  never committed); EAS uses them for the preview APK.
-- Install on a device over adb:
-  `C:\Android\platform-tools\adb.exe install -r <downloaded.apk>`
-- The artifact is a **preview APK** (debug-signed, standalone-installable,
-  not Play-uploadable). A store release needs a bundle + upload key — out of
+Requirements (all outside the repo): JDK 17.0.20.1 at `C:\Android\jdk-17`;
+SDK at `C:\Android\Sdk` (platform 36, build-tools 36.0.0, **CMake 3.30.5
+only** — 3.22.1 was uninstalled because the failing ninja came from it —,
+NDK 27.1.12297006); Gradle 9.3.1 extracted at `C:\Android\gradle-9.3.1`
+(the wrapper's own CDN download fails on this network). To move the worktree
+to a newer commit: `git -C C:\dev\up-mobile checkout --detach <sha>` and
+re-run `npm install` if dependencies moved. **Signing:** the RN template's
+release default — this machine's Android *debug keystore* — which differs
+from the EAS key, so installing a local build over an EAS build requires
+uninstalling the app first.
+
+### EAS build (queue path)
+
+```powershell
+npx eas-cli login                                                    # the founder's own Expo account
+npx eas-cli build -p android --profile preview --non-interactive --no-wait       # configured (local Supabase pair baked)
+npx eas-cli build -p android --profile preview-noenv --non-interactive --no-wait  # no-env variant (unconfigured-state checks)
+```
+
+- The `preview` profile bakes the **public** local Supabase pair (eas.json
+  env) so the APK reaches the local stack through `adb reverse`;
+  `preview-noenv` bakes nothing (honest unconfigured state).
+- Signing: the project keystore in `credentials.json` + `credentials/`
+  (git-ignored, never committed).
+- Install: `C:\Android\platform-tools\adb.exe install -r <downloaded.apk>`.
+- Both artifacts are preview APKs (internal distribution, not
+  Play-uploadable). A store release needs a bundle + upload key — out of
   scope (see `plan.md` §G).
 
-## Device connectivity (for later milestones)
+## Device connectivity (local stack)
 
-- Physical device: `adb reverse tcp:3000 tcp:3000` (Next server) and
-  `adb reverse tcp:54937 tcp:54937` (the local Supabase API on this host).
+- After **every replug**: `adb devices` (authorise the prompt if it appears),
+  then re-establish the tunnel:
+  `C:\Android\platform-tools\adb.exe reverse tcp:54937 tcp:54937`
+  (the app's env points at `http://127.0.0.1:54937`).
+- The Next server (later milestones): `adb reverse tcp:3000 tcp:3000`.
 - Emulator: use `10.0.2.2` instead of `127.0.0.1`.
-- M1 makes no network calls, so neither is required to run this milestone.
 
 ## QA
 
