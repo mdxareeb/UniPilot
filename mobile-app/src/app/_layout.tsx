@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Stack } from "expo-router";
+import { Stack, useRootNavigationState, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { useFonts } from "expo-font";
@@ -49,13 +49,30 @@ export default function RootLayout() {
 
 function ThemedShell() {
   const theme = useTheme();
-  const { status } = useAuth();
+  const { status, profile } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+  const rootNavigationKey = useRootNavigationState()?.key;
 
   useEffect(() => {
     SystemUI.setBackgroundColorAsync(theme.colors.background).catch(() => {
       // Cosmetic only (kills the white frame behind the root view).
     });
   }, [theme.colors.background]);
+
+  /* The onboarding gate (M2b): a signed-in account with the completion marker
+     NULL belongs in setup, and a completed one does not. Runs only after the
+     navigator is mounted and the profile read settled, so no route flashes. */
+  useEffect(() => {
+    if (status !== "signed_in" || profile === null) return;
+    if (!rootNavigationKey) return;
+    const onOnboarding = segments[0] === "onboarding";
+    if (!profile.onboardingComplete && !onOnboarding) {
+      router.replace("/onboarding");
+    } else if (profile.onboardingComplete && onOnboarding) {
+      router.replace("/");
+    }
+  }, [profile, rootNavigationKey, router, segments, status]);
 
   /* The session restore is a brief, honest state of its own: the backdrop is
      real, the message is real, and neither group is mounted until the
@@ -83,10 +100,14 @@ function ThemedShell() {
         <Stack.Protected guard={status === "signed_in"}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="specimen" />
+          <Stack.Screen name="onboarding" />
         </Stack.Protected>
         <Stack.Protected guard={status !== "signed_in"}>
           <Stack.Screen name="(auth)" />
         </Stack.Protected>
+        {/* The OAuth landing must exist in both auth states: a cold-start
+            deep link arrives before the session verdict does. */}
+        <Stack.Screen name="auth-callback" />
       </Stack>
     </>
   );

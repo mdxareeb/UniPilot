@@ -15,6 +15,9 @@ export const AUTH_COPY = {
   RATE_LIMIT: "Too many attempts right now. Wait a moment and try again.",
   MISSING_FIELDS: "Enter your email and password.",
   GENERIC: "Sign-in failed. Try again.",
+  GOOGLE_CANCELLED: "Google sign-in was cancelled.",
+  GOOGLE_DENIED: "Google didn't complete the sign-in. Try again.",
+  GOOGLE_FAILED: "Google sign-in couldn't be completed. Try again.",
   SIGNOUT_FAILED: "Sign-out failed. Try again.",
   PROFILE_FAILED: "Your profile couldn't be loaded.",
 } as const;

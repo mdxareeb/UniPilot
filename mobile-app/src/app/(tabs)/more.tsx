@@ -96,8 +96,8 @@ export default function MoreScreen() {
         {profile !== null && !profile.onboardingComplete ? (
           <View style={{ marginTop: theme.spacing.sm }}>
             <Notice>
-              Setup isn&apos;t finished for this account. Native onboarding
-              arrives in M2b.
+              Setup isn&apos;t finished for this account. Finish it to unlock
+              the workspace.
             </Notice>
           </View>
         ) : null}
@@ -111,6 +111,16 @@ export default function MoreScreen() {
           padding={0}
           style={{ overflow: "hidden" }}
         >
+          {profile !== null && !profile.onboardingComplete ? (
+            <>
+              <ListRow
+                title="Finish setup"
+                subtitle="Profile answers and subjects"
+                onPress={() => router.push("/onboarding")}
+              />
+              <Divider />
+            </>
+          ) : null}
           <ListRow
             title="Design specimen"
             subtitle="Native tokens, controls and states"

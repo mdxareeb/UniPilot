@@ -12,6 +12,12 @@ import type { Session, User } from "@supabase/supabase-js";
 
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { AUTH_COPY, signInErrorMessage } from "./authErrors";
+import {
+  exchangeAuthCode,
+  parseAuthCallbackUrl,
+  startGoogleSignIn,
+  type OAuthResult,
+} from "./oauth";
 
 /** The owner-scoped profile projection the app renders (M2a). */
 export type ProfileItem = {
@@ -28,6 +34,10 @@ type AuthContextValue = {
   profile: ProfileItem | null;
   profileError: string | null;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** Google OAuth through the in-app browser (PKCE + the app deep link). */
+  signInWithGoogle: () => Promise<OAuthResult>;
+  /** Process a deep-linked callback URL (cold or warm app start). */
+  completeAuthCallback: (url: string) => Promise<OAuthResult>;
   signOut: () => Promise<{ error: string | null }>;
   refreshProfile: () => Promise<void>;
 };
@@ -139,6 +149,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error ? AUTH_COPY.SIGNOUT_FAILED : null };
   }, []);
 
+  const signInWithGoogle = useCallback(async () => startGoogleSignIn(), []);
+
+  const completeAuthCallback = useCallback(
+    async (url: string): Promise<OAuthResult> => {
+      const { code, error } = parseAuthCallbackUrl(url);
+      if (error !== null) {
+        return { status: "error", error: AUTH_COPY.GOOGLE_DENIED };
+      }
+      if (code === null) {
+        return { status: "error", error: AUTH_COPY.GOOGLE_FAILED };
+      }
+      return exchangeAuthCode(code);
+    },
+    [],
+  );
+
   const refreshProfile = useCallback(async () => {
     await readProfile(user);
   }, [readProfile, user]);
@@ -150,10 +176,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile,
       profileError,
       signIn,
+      signInWithGoogle,
+      completeAuthCallback,
       signOut,
       refreshProfile,
     }),
-    [status, user, profile, profileError, signIn, signOut, refreshProfile],
+    [
+      status,
+      user,
+      profile,
+      profileError,
+      signIn,
+      signInWithGoogle,
+      completeAuthCallback,
+      signOut,
+      refreshProfile,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

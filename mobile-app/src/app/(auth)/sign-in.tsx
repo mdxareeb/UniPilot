@@ -5,6 +5,8 @@ import { AUTH_COPY } from "@/auth/authErrors";
 import { useAuth } from "@/auth/AuthProvider";
 import { AppText } from "@/components/AppText";
 import { Button } from "@/components/Button";
+import { Divider } from "@/components/Divider";
+import { GoogleMark } from "@/components/GoogleMark";
 import { Input } from "@/components/Input";
 import { Notice } from "@/components/Notice";
 import { Surface } from "@/components/Surface";
@@ -12,35 +14,54 @@ import { Screen } from "@/components/Screen";
 import { MotionEnter } from "@/motion/MotionEnter";
 import { useTheme } from "@/theme/ThemeProvider";
 
+type Notice_ = { text: string; tone: "info" | "error" };
+
 /**
- * Sign-in (M2a) — the app's first screen by design: there is no guest mode
- * (approved product decision). Email + password against the LOCAL Supabase;
- * every failure renders the sanitized copy, and an unconfigured build renders
- * the honest state instead of a form that could never work.
+ * Sign-in (M2a email/password + M2b Google OAuth) — the app's first screen by
+ * design: there is no guest mode (approved product decision). Every failure
+ * renders sanitized copy; a cancelled Google sheet renders the honest
+ * cancellation line, not an error and not a spinner.
  */
 export default function SignInScreen() {
   const theme = useTheme();
-  const { signIn, status } = useAuth();
+  const { signIn, signInWithGoogle, status } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice_ | null>(null);
 
   const unconfigured = status === "unconfigured";
 
   const submit = useCallback(async () => {
     if (busy || unconfigured) return;
     if (email.trim() === "" || password === "") {
-      setError(AUTH_COPY.MISSING_FIELDS);
+      setNotice({ text: AUTH_COPY.MISSING_FIELDS, tone: "error" });
       return;
     }
-    setError(null);
+    setNotice(null);
     setBusy(true);
     const result = await signIn(email, password);
     setBusy(false);
-    if (result.error !== null) setError(result.error);
+    if (result.error !== null) {
+      setNotice({ text: result.error, tone: "error" });
+    }
     // On success the root guard swaps to the app; nothing else to do here.
   }, [busy, email, password, signIn, unconfigured]);
+
+  const google = useCallback(async () => {
+    if (busy || unconfigured) return;
+    setNotice(null);
+    setBusy(true);
+    const result = await signInWithGoogle();
+    setBusy(false);
+    if (result.status === "cancelled") {
+      setNotice({ text: AUTH_COPY.GOOGLE_CANCELLED, tone: "info" });
+      return;
+    }
+    if (result.status === "error") {
+      setNotice({ text: result.error, tone: "error" });
+    }
+  }, [busy, signInWithGoogle, unconfigured]);
 
   return (
     <Screen scroll={false} contentStyle={{ justifyContent: "center" }}>
@@ -99,14 +120,37 @@ export default function SignInScreen() {
                 disabled={busy}
                 style={{ alignSelf: "stretch" }}
               />
+
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: theme.spacing.sm,
+                }}
+              >
+                <Divider style={{ flex: 1 }} />
+                <AppText variant="caps" color={theme.colors.mutedForeground}>
+                  or
+                </AppText>
+                <Divider style={{ flex: 1 }} />
+              </View>
+
+              <Button
+                label="Continue with Google"
+                variant="outline"
+                leading={<GoogleMark size={18} />}
+                onPress={() => void google()}
+                disabled={busy}
+                style={{ alignSelf: "stretch" }}
+              />
             </>
           )}
         </Surface>
       </MotionEnter>
 
-      {error !== null ? (
+      {notice !== null ? (
         <View style={{ marginTop: theme.spacing.lg }}>
-          <Notice tone="error">{error}</Notice>
+          <Notice tone={notice.tone}>{notice.text}</Notice>
         </View>
       ) : null}
 
@@ -116,7 +160,7 @@ export default function SignInScreen() {
           color={theme.colors.mutedForeground}
           style={{ textAlign: "center" }}
         >
-          Local Supabase · adb reverse 54937 · M2a
+          Local Supabase · adb reverse 54937 · M2
         </AppText>
       </MotionEnter>
     </Screen>

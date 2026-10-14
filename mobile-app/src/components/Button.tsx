@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Pressable,
+  View,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
@@ -19,6 +20,8 @@ type ButtonProps = {
   variant?: ButtonVariant;
   size?: ButtonSize;
   disabled?: boolean;
+  /** A decorative glyph rendered before the label (e.g. a brand mark). */
+  leading?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
 };
@@ -36,6 +39,7 @@ export function Button({
   variant = "primary",
   size = "md",
   disabled = false,
+  leading,
   style,
   accessibilityLabel,
 }: ButtonProps) {
@@ -102,9 +106,19 @@ export function Button({
           disabled ? { opacity: 0.5 } : null,
         ]}
       >
-        <AppText variant="label" color={colors.text}>
-          {label}
-        </AppText>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: theme.spacing.sm,
+          }}
+        >
+          {leading ? <View>{leading}</View> : null}
+          <AppText variant="label" color={colors.text}>
+            {label}
+          </AppText>
+        </View>
       </Pressable>
     </Animated.View>
   );
