@@ -98,6 +98,18 @@ release default — this machine's Android *debug keystore* — which differs
 from the EAS key, so installing a local build over an EAS build requires
 uninstalling the app first.
 
+Recorded identity of the proven artifact (2026-10-13): `app-release.apk`
+contains the bundled JS (`assets/index.android.bundle`, ~5.3 MB) and **all
+four ABIs** (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`); it was **not
+installed on a device**. Installing it over an EAS build fails with a
+signature mismatch (debug vs EAS key) and would require uninstalling the app —
+**do not uninstall without the founder's decision**.
+
+Delta vs the two failed runs — path (`C:\dev\up-mobile` worktree vs the
+OneDrive checkout), fresh cache (no stale `.cxx`), cmake/3.22.1 uninstalled
+(only 3.30.5 visible), `--no-watch-fs` — was **not isolated**: the build
+**succeeded once, cause not confirmed**. Keep the whole recipe.
+
 ### EAS build (queue path)
 
 ```powershell
