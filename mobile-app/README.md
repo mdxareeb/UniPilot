@@ -93,10 +93,37 @@ only** — 3.22.1 was uninstalled because the failing ninja came from it —,
 NDK 27.1.12297006); Gradle 9.3.1 extracted at `C:\Android\gradle-9.3.1`
 (the wrapper's own CDN download fails on this network). To move the worktree
 to a newer commit: `git -C C:\dev\up-mobile checkout --detach <sha>` and
-re-run `npm install` if dependencies moved. **Signing:** the RN template's
-release default — this machine's Android *debug keystore* — which differs
-from the EAS key, so installing a local build over an EAS build requires
-uninstalling the app first.
+re-run `npm install` if dependencies moved. **Signing (proven mechanics, 2026-10-14):** the generated
+`android/app/build.gradle` is patched in the worktree to add a `release`
+signing config driven by environment variables; `assembleRelease` uses it when
+the env is present (debug keystore fallback otherwise). Populate the env from
+the git-ignored `credentials.json` before building — never printed, never
+committed:
+
+```powershell
+$main='C:\Users\moham\OneDrive\Desktop\Projects\unipilot\unipilot'
+$cred=Get-Content "$main\mobile-app\credentials.json" -Raw | ConvertFrom-Json
+$env:UNIPILOT_KEYSTORE_PATH="$main\mobile-app\" + ($cred.android.keystore.keystorePath -replace '/','\')
+$env:UNIPILOT_KEYSTORE_PASSWORD=$cred.android.keystore.keystorePassword
+$env:UNIPILOT_KEY_ALIAS=$cred.android.keystore.keyAlias
+$env:UNIPILOT_KEY_PASSWORD=$cred.android.keystore.keyPassword
+```
+
+Gradle patch (re-apply after any `expo prebuild` — the file is CNG-generated):
+add inside `signingConfigs` a conditional `release { storeFile
+file(System.getenv("UNIPILOT_KEYSTORE_PATH")) … }` block, and in the `release`
+buildType replace `signingConfig signingConfigs.debug` with
+`signingConfig System.getenv("UNIPILOT_KEYSTORE_PATH") != null ?
+signingConfigs.release : signingConfigs.debug`. The full blocks are in the
+M2b phase record (§P).
+
+**Keystore caveat (measured):** the EAS cloud builds sign with an
+**EAS-managed** keystore (signer SHA-256 `bc51cd50…`), NOT the
+`credentials.json` keystore (`e8c27b15…`, CN=UniPilot Preview — verified on the
+2026-10-14 local build). A local build can only `adb install -r` over the EAS
+app when signed by the SAME key: either download the managed keystore from
+expo.dev (Project → Credentials → Android) and point `UNIPILOT_KEYSTORE_PATH`
+at it, or uninstall the EAS app once — by explicit founder decision only.
 
 Recorded identity of the proven artifact (2026-10-13): `app-release.apk`
 contains the bundled JS (`assets/index.android.bundle`, ~5.3 MB) and **all
