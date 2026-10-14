@@ -13,6 +13,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { AUTH_COPY, signInErrorMessage } from "./authErrors";
 import {
+  describeUrlParamNames,
   exchangeAuthCode,
   parseAuthCallbackUrl,
   startGoogleSignIn,
@@ -153,6 +154,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const completeAuthCallback = useCallback(
     async (url: string): Promise<OAuthResult> => {
+      // TEMPORARY DIAGNOSTIC (Leg A): parameter names only, never values.
+      console.log(
+        `[UNIPILOT_AUTH_DEBUG] deep link params=${describeUrlParamNames(url)}`,
+      );
       const { code, error, flowId } = parseAuthCallbackUrl(url);
       if (error !== null) {
         return { status: "error", error: AUTH_COPY.GOOGLE_DENIED };

@@ -6,6 +6,19 @@ import { AUTH_COPY } from "./authErrors";
 /** The app scheme's OAuth landing (registered in the local GoTrue allow-list). */
 export const AUTH_CALLBACK_URL = "unipilot://auth-callback";
 
+/**
+ * TEMPORARY DIAGNOSTIC (Leg A) — the received URL's parameter NAMES only.
+ * Never returns or logs a value (no code, no state, no flow id).
+ */
+export function describeUrlParamNames(url: string): string {
+  try {
+    const names = Array.from(new URL(url).searchParams.keys()).sort();
+    return names.length > 0 ? names.join(",") : "(none)";
+  } catch {
+    return "(unparseable)";
+  }
+}
+
 export type OAuthResult =
   | { status: "signed_in" }
   | { status: "cancelled" }
@@ -95,10 +108,15 @@ export async function startGoogleSignIn(): Promise<OAuthResult> {
     AUTH_CALLBACK_URL,
   );
 
+  // TEMPORARY DIAGNOSTIC (Leg A): type + parameter names only, never values.
   if (session.type !== "success") {
+    console.log(`[UNIPILOT_AUTH_DEBUG] browser session type=${session.type}`);
     // "cancel" and "dismiss" are the user's choice, not a failure.
     return { status: "cancelled" };
   }
+  console.log(
+    `[UNIPILOT_AUTH_DEBUG] browser session type=success url params=${describeUrlParamNames(session.url)}`,
+  );
 
   const { code, error: urlError, flowId } = parseAuthCallbackUrl(session.url);
   if (urlError !== null) {

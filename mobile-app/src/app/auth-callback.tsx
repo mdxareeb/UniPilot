@@ -31,6 +31,14 @@ export default function AuthCallbackScreen() {
   const [state, setState] = useState<"working" | "failed">("working");
   const [message, setMessage] = useState<string | null>(null);
 
+  /* TEMPORARY DIAGNOSTIC (Leg A): the received parameter NAMES only — never
+     values (no code/state/flow id). Remove together with the oauth.ts helper. */
+  const paramNames =
+    Object.keys(params)
+      .sort()
+      .join(",") || "(none)";
+  console.log(`[UNIPILOT_AUTH_DEBUG] route params=${paramNames}`);
+
   const run = useCallback(async () => {
     const query = new URLSearchParams();
     if (typeof params.code === "string") query.set("code", params.code);
@@ -109,6 +117,17 @@ export default function AuthCallbackScreen() {
             </>
           )}
         </Surface>
+      </MotionEnter>
+
+      {/* TEMPORARY DIAGNOSTIC (Leg A): parameter NAMES only, never values. */}
+      <MotionEnter index={2} style={{ marginTop: theme.spacing.lg }}>
+        <AppText
+          variant="mono"
+          color={theme.colors.mutedForeground}
+          style={{ textAlign: "center" }}
+        >
+          {`callback params: ${paramNames}`}
+        </AppText>
       </MotionEnter>
     </Screen>
   );
