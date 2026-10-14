@@ -66,7 +66,7 @@ live in one**; RLS is the authority.
 
 Two proven paths. **Local is the default** (no queue); EAS is the fallback.
 
-### Local build (PROVEN 2026-10-01 — use this recipe verbatim)
+### Local build (PROVEN 2026-10-13 — use this recipe verbatim)
 
 The main checkout lives under OneDrive, where `assembleRelease` fails with
 `ninja: error: manifest 'build.ninja' still dirty after 100 tries` (the CMake
