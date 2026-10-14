@@ -153,14 +153,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const completeAuthCallback = useCallback(
     async (url: string): Promise<OAuthResult> => {
-      const { code, error } = parseAuthCallbackUrl(url);
+      const { code, error, flowId } = parseAuthCallbackUrl(url);
       if (error !== null) {
         return { status: "error", error: AUTH_COPY.GOOGLE_DENIED };
       }
       if (code === null) {
         return { status: "error", error: AUTH_COPY.GOOGLE_FAILED };
       }
-      return exchangeAuthCode(code);
+      return exchangeAuthCode(code, flowId);
     },
     [],
   );

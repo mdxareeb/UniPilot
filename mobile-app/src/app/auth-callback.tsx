@@ -25,6 +25,7 @@ export default function AuthCallbackScreen() {
     code?: string;
     error?: string;
     error_description?: string;
+    sb_flow_id?: string;
   }>();
 
   const [state, setState] = useState<"working" | "failed">("working");
@@ -36,6 +37,9 @@ export default function AuthCallbackScreen() {
     if (typeof params.error === "string") query.set("error", params.error);
     if (typeof params.error_description === "string") {
       query.set("error_description", params.error_description);
+    }
+    if (typeof params.sb_flow_id === "string") {
+      query.set("sb_flow_id", params.sb_flow_id);
     }
 
     const result: OAuthResult = await completeAuthCallback(
@@ -52,7 +56,14 @@ export default function AuthCallbackScreen() {
         ? AUTH_COPY.GOOGLE_CANCELLED
         : result.error,
     );
-  }, [completeAuthCallback, params.code, params.error, params.error_description, router]);
+  }, [
+    completeAuthCallback,
+    params.code,
+    params.error,
+    params.error_description,
+    params.sb_flow_id,
+    router,
+  ]);
 
   useEffect(() => {
     /* Processing an inbound deep link is an effect by nature: the exchange must

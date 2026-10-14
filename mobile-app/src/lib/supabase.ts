@@ -39,6 +39,11 @@ export const supabase: SupabaseClient<Database> | null = isSupabaseConfigured
         persistSession: true,
         detectSessionInUrl: false,
         flowType: "pkce",
+        // React Native has no window.location, so the PKCE flow id cannot be
+        // read from the callback location the way it is on web: the library
+        // must append it to the redirect (`sb_flow_id`) for the app to pass it
+        // back on exchange. See the M2b record for the failure this fixes.
+        experimental: { appendPkceFlowIdToRedirects: true },
       },
     })
   : null;

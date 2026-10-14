@@ -15,6 +15,8 @@ export type OAuthResult =
 export function parseAuthCallbackUrl(url: string): {
   code: string | null;
   error: string | null;
+  /** The PKCE flow id (`sb_flow_id`) when the library appended one. */
+  flowId: string | null;
 } {
   try {
     const parsed = new URL(url);
@@ -22,26 +24,36 @@ export function parseAuthCallbackUrl(url: string): {
     const error =
       parsed.searchParams.get("error_description") ??
       parsed.searchParams.get("error");
+    const flowId = parsed.searchParams.get("sb_flow_id");
     return {
       code: code !== null && code.trim() !== "" ? code.trim() : null,
       error: error !== null && error.trim() !== "" ? error.trim() : null,
+      flowId: flowId !== null && flowId.trim() !== "" ? flowId.trim() : null,
     };
   } catch {
-    return { code: null, error: null };
+    return { code: null, error: null, flowId: null };
   }
 }
 
 /**
  * Exchange a PKCE code for a session. The code verifier was stored (encrypted,
- * chunked) when `signInWithOAuth` started the flow, so this works in the same
- * process and on a cold start alike.
+ * chunked) when `signInWithOAuth` started the flow; on React Native the flow
+ * id must travel explicitly — it was appended to the redirect as `sb_flow_id`
+ * and is passed back here, because there is no `window.location` to read it
+ * from (the M2b failure this fixes).
  */
-export async function exchangeAuthCode(code: string): Promise<OAuthResult> {
+export async function exchangeAuthCode(
+  code: string,
+  flowId: string | null = null,
+): Promise<OAuthResult> {
   if (supabase === null) {
     return { status: "error", error: AUTH_COPY.UNCONFIGURED };
   }
   try {
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    const { error } = await supabase.auth.exchangeCodeForSession(
+      code,
+      flowId !== null ? { flowId } : undefined,
+    );
     if (error) return { status: "error", error: AUTH_COPY.GOOGLE_FAILED };
     return { status: "signed_in" };
   } catch {
@@ -88,12 +100,12 @@ export async function startGoogleSignIn(): Promise<OAuthResult> {
     return { status: "cancelled" };
   }
 
-  const { code, error: urlError } = parseAuthCallbackUrl(session.url);
+  const { code, error: urlError, flowId } = parseAuthCallbackUrl(session.url);
   if (urlError !== null) {
     return { status: "error", error: AUTH_COPY.GOOGLE_DENIED };
   }
   if (code === null) {
     return { status: "error", error: AUTH_COPY.GOOGLE_FAILED };
   }
-  return exchangeAuthCode(code);
+  return exchangeAuthCode(code, flowId);
 }

@@ -93,20 +93,27 @@ only** — 3.22.1 was uninstalled because the failing ninja came from it —,
 NDK 27.1.12297006); Gradle 9.3.1 extracted at `C:\Android\gradle-9.3.1`
 (the wrapper's own CDN download fails on this network). To move the worktree
 to a newer commit: `git -C C:\dev\up-mobile checkout --detach <sha>` and
-re-run `npm install` if dependencies moved. **Signing (proven mechanics, 2026-10-14):** the generated
-`android/app/build.gradle` is patched in the worktree to add a `release`
-signing config driven by environment variables; `assembleRelease` uses it when
-the env is present (debug keystore fallback otherwise). Populate the env from
-the git-ignored `credentials.json` before building — never printed, never
-committed:
+re-run `npm install` if dependencies moved. **Signing — the permanent identity (2026-10-14):** the app's signing key is
+the EAS-managed keystore, now adopted for local builds too: **EAS and local
+builds sign identically** (cert SHA-256 `bc51cd50…`), so a local APK installs
+in place over the EAS app (`adb install -r`, no uninstall). This is the app's
+**permanent signing identity — the Play Store key**: back it up in **two**
+places; never commit it, never paste it into a chat or tool call, and never
+print it or its passwords. Files (both OUTSIDE the repo, by design):
+
+- keystore: `C:\Android\keystores\unipilot-eas.jks`
+- credentials: `C:\Android\keystores\unipilot-eas.properties`
+  (`keystorePassword`, `keyAlias`, `keyPassword`)
+
+Populate the build env from that properties file (values never printed):
 
 ```powershell
-$main='C:\Users\moham\OneDrive\Desktop\Projects\unipilot\unipilot'
-$cred=Get-Content "$main\mobile-app\credentials.json" -Raw | ConvertFrom-Json
-$env:UNIPILOT_KEYSTORE_PATH="$main\mobile-app\" + ($cred.android.keystore.keystorePath -replace '/','\')
-$env:UNIPILOT_KEYSTORE_PASSWORD=$cred.android.keystore.keystorePassword
-$env:UNIPILOT_KEY_ALIAS=$cred.android.keystore.keyAlias
-$env:UNIPILOT_KEY_PASSWORD=$cred.android.keystore.keyPassword
+$props = @{}
+Get-Content 'C:\Android\keystores\unipilot-eas.properties' | Where-Object { $_ -match '^\s*[A-Za-z]+\s*=\s*\S' } | ForEach-Object { $kv = $_.Split('=',2); $props[$kv[0].Trim()] = $kv[1].Trim() }
+$env:UNIPILOT_KEYSTORE_PATH     = 'C:\Android\keystores\unipilot-eas.jks'
+$env:UNIPILOT_KEYSTORE_PASSWORD = $props['keystorePassword']
+$env:UNIPILOT_KEY_ALIAS         = $props['keyAlias']
+$env:UNIPILOT_KEY_PASSWORD      = $props['keyPassword']
 ```
 
 Gradle patch (re-apply after any `expo prebuild` — the file is CNG-generated):
@@ -117,13 +124,9 @@ buildType replace `signingConfig signingConfigs.debug` with
 signingConfigs.release : signingConfigs.debug`. The full blocks are in the
 M2b phase record (§P).
 
-**Keystore caveat (measured):** the EAS cloud builds sign with an
-**EAS-managed** keystore (signer SHA-256 `bc51cd50…`), NOT the
-`credentials.json` keystore (`e8c27b15…`, CN=UniPilot Preview — verified on the
-2026-10-14 local build). A local build can only `adb install -r` over the EAS
-app when signed by the SAME key: either download the managed keystore from
-expo.dev (Project → Credentials → Android) and point `UNIPILOT_KEYSTORE_PATH`
-at it, or uninstall the EAS app once — by explicit founder decision only.
+Unused: the earlier `mobile-app/credentials/` keystore (`e8c27b15…`,
+CN=UniPilot Preview) is no longer any build's identity — kept only as history
+and still git-ignored.
 
 Recorded identity of the proven artifact (2026-10-13): `app-release.apk`
 contains the bundled JS (`assets/index.android.bundle`, ~5.3 MB) and **all
