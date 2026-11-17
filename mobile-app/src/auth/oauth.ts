@@ -6,19 +6,6 @@ import { AUTH_COPY } from "./authErrors";
 /** The app scheme's OAuth landing (registered in the local GoTrue allow-list). */
 export const AUTH_CALLBACK_URL = "unipilot://auth-callback";
 
-/**
- * TEMPORARY DIAGNOSTIC (Leg A) — the received URL's parameter NAMES only.
- * Never returns or logs a value (no code, no state, no flow id).
- */
-export function describeUrlParamNames(url: string): string {
-  try {
-    const names = Array.from(new URL(url).searchParams.keys()).sort();
-    return names.length > 0 ? names.join(",") : "(none)";
-  } catch {
-    return "(unparseable)";
-  }
-}
-
 export type OAuthResult =
   | { status: "signed_in" }
   | { status: "cancelled" }
@@ -48,16 +35,71 @@ export function parseAuthCallbackUrl(url: string): {
   }
 }
 
+/** The route params a `/auth-callback` URL carries, or null when the URL is
+ * not the app's OAuth landing. Used by the root layout's cold-start handler:
+ * on Android the router can miss the launch URL (its `getInitialURL` races a
+ * 150 ms timeout and the URL is consumed as the launch intent, so no later
+ * `url` event follows), while expo-linking's native module still holds it. */
+export function authCallbackParams(
+  url: string | null | undefined,
+): Record<string, string> | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    const landing = new URL(AUTH_CALLBACK_URL);
+    if (
+      parsed.protocol !== landing.protocol ||
+      parsed.hostname !== landing.hostname
+    ) {
+      return null;
+    }
+    const params: Record<string, string> = {};
+    for (const key of ["code", "error", "error_description", "sb_flow_id"]) {
+      const value = parsed.searchParams.get(key);
+      if (value !== null && value.trim() !== "") params[key] = value;
+    }
+    return Object.keys(params).length > 0 ? params : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Exchange a PKCE code for a session. The code verifier was stored (encrypted,
  * chunked) when `signInWithOAuth` started the flow; on React Native the flow
  * id must travel explicitly — it was appended to the redirect as `sb_flow_id`
  * and is passed back here, because there is no `window.location` to read it
  * from (the M2b failure this fixes).
+ *
+ * Single-flight (M2b defect, 2026-11-16): one callback URL can reach the app
+ * twice — the `auth-callback` route (which can also re-mount) and the in-app
+ * browser result. Submitting the same code twice raced GoTrue into minting two
+ * sessions. Every submission of the same code now shares one `/token` call and
+ * one result; a different code always starts a fresh exchange, and a failure is
+ * not cached (a re-delivery may retry).
  */
-export async function exchangeAuthCode(
+let pendingExchange: { code: string; promise: Promise<OAuthResult> } | null = null;
+
+export function exchangeAuthCode(
   code: string,
   flowId: string | null = null,
+): Promise<OAuthResult> {
+  if (pendingExchange !== null && pendingExchange.code === code) {
+    return pendingExchange.promise;
+  }
+  const promise = performExchange(code, flowId).then((result) => {
+    if (result.status !== "signed_in" && pendingExchange?.code === code) {
+      pendingExchange = null;
+    }
+    return result;
+  });
+  pendingExchange = { code, promise };
+  return promise;
+}
+
+async function performExchange(
+  code: string,
+  flowId: string | null,
 ): Promise<OAuthResult> {
   if (supabase === null) {
     return { status: "error", error: AUTH_COPY.UNCONFIGURED };
@@ -108,15 +150,10 @@ export async function startGoogleSignIn(): Promise<OAuthResult> {
     AUTH_CALLBACK_URL,
   );
 
-  // TEMPORARY DIAGNOSTIC (Leg A): type + parameter names only, never values.
   if (session.type !== "success") {
-    console.log(`[UNIPILOT_AUTH_DEBUG] browser session type=${session.type}`);
     // "cancel" and "dismiss" are the user's choice, not a failure.
     return { status: "cancelled" };
   }
-  console.log(
-    `[UNIPILOT_AUTH_DEBUG] browser session type=success url params=${describeUrlParamNames(session.url)}`,
-  );
 
   const { code, error: urlError, flowId } = parseAuthCallbackUrl(session.url);
   if (urlError !== null) {

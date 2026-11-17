@@ -66,7 +66,7 @@ live in one**; RLS is the authority.
 
 Two proven paths. **Local is the default** (no queue); EAS is the fallback.
 
-### Local build (PROVEN 2026-10-13 — use this recipe verbatim)
+### Local build (PROVEN 2026-10-13; cleartext fix 2026-11-16 — use this recipe verbatim)
 
 The main checkout lives under OneDrive, where `assembleRelease` fails with
 `ninja: error: manifest 'build.ninja' still dirty after 100 tries` (the CMake
@@ -81,11 +81,25 @@ cd C:\dev\up-mobile; npm install
 cd C:\dev\up-mobile\mobile-app
 $env:JAVA_HOME='C:\Android\jdk-17'
 $env:ANDROID_HOME='C:\Android\Sdk'; $env:ANDROID_SDK_ROOT='C:\Android\Sdk'
+$env:EXPO_PUBLIC_ALLOW_CLEARTEXT='1'                # REQUIRED: local stack is http://
 npx expo prebuild --platform android --no-install    # only when native config changed
 cd android
 C:\Android\gradle-9.3.1\bin\gradle.bat assembleRelease --no-watch-fs
 # → app/build/outputs/apk/release/app-release.apk
 ```
+
+**Cleartext is mandatory for local builds (M2b root cause, 2026-11-16).** The
+local stack is `http://127.0.0.1:54937`, and since Android 9 (API 28) a release
+APK denies cleartext unless it opts in. `EXPO_PUBLIC_ALLOW_CLEARTEXT=1` makes
+`app.config.ts` add the `expo-build-properties` option; it is baked into the
+**manifest at prebuild time**, not into the JS bundle — export it before
+`expo prebuild` and re-run prebuild whenever the native config changes.
+Verify before installing: `aapt2 dump xmltree --file AndroidManifest.xml
+app-release.apk | Select-String usesCleartextTraffic` must show `=true`.
+Without it the app renders normally but every Supabase call dies before a
+socket opens (no server log, generic auth failure) — exactly the 2026-10-14
+"fixed build" false negative. EAS `preview` already sets the variable
+(`eas.json`); `production` must not.
 
 Requirements (all outside the repo): JDK 17.0.20.1 at `C:\Android\jdk-17`;
 SDK at `C:\Android\Sdk` (platform 36, build-tools 36.0.0, **CMake 3.30.5
@@ -131,9 +145,12 @@ and still git-ignored.
 Recorded identity of the proven artifact (2026-10-13): `app-release.apk`
 contains the bundled JS (`assets/index.android.bundle`, ~5.3 MB) and **all
 four ABIs** (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`); it was **not
-installed on a device**. Installing it over an EAS build fails with a
-signature mismatch (debug vs EAS key) and would require uninstalling the app —
-**do not uninstall without the founder's decision**.
+installed on a device** at the time. The 2026-10-13 note that installing it
+over an EAS build fails with a signature mismatch (debug vs EAS key) is
+**superseded** by the 2026-10-14 adoption of the EAS keystore for local builds:
+today's local APK carries the permanent identity (`bc51cd50…`) and installs in
+place with `adb install -r` — **still never uninstall the app without the
+founder's decision.**
 
 Delta vs the two failed runs — path (`C:\dev\up-mobile` worktree vs the
 OneDrive checkout), fresh cache (no stale `.cxx`), cmake/3.22.1 uninstalled

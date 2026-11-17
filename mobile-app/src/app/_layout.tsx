@@ -1,14 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Stack, useRootNavigationState, useRouter, useSegments } from "expo-router";
+import * as Linking from "expo-linking";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { useFonts } from "expo-font";
 import * as SystemUI from "expo-system-ui";
 
 import { AuthProvider, useAuth } from "@/auth/AuthProvider";
+import { authCallbackParams } from "@/auth/oauth";
 import { AppText } from "@/components/AppText";
 import { Backdrop } from "@/components/Backdrop";
 import { fontAssets } from "@/theme/fonts";
@@ -53,6 +55,7 @@ function ThemedShell() {
   const segments = useSegments();
   const router = useRouter();
   const rootNavigationKey = useRootNavigationState()?.key;
+  const coldStartChecked = useRef(false);
 
   useEffect(() => {
     SystemUI.setBackgroundColorAsync(theme.colors.background).catch(() => {
@@ -73,6 +76,24 @@ function ThemedShell() {
       router.replace("/");
     }
   }, [profile, rootNavigationKey, router, segments, status]);
+
+  /* Cold-start deep link (M2b Leg C): on Android the router can miss the
+     launch URL — its `getInitialURL` races a 150 ms timeout, and the URL is
+     consumed as the launch intent, so no later `url` event follows.
+     expo-linking's native module still holds it; route to the callback once
+     the navigator is ready. Warm deliveries are handled by the router and
+     skip this one-shot check. */
+  useEffect(() => {
+    if (status === "loading" || !rootNavigationKey || coldStartChecked.current) {
+      return;
+    }
+    coldStartChecked.current = true;
+    const params = authCallbackParams(Linking.getLinkingURL());
+    if (params === null) return;
+    Linking.clearInitialURL();
+    if (segments[0] === "auth-callback") return;
+    router.replace({ pathname: "/auth-callback", params });
+  }, [rootNavigationKey, router, segments, status]);
 
   /* The session restore is a brief, honest state of its own: the backdrop is
      real, the message is real, and neither group is mounted until the
