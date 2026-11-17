@@ -2,7 +2,7 @@
  * Tiny `.env` reader for the dev-environment orchestrator.
  *
  * The orchestrator only needs a couple of *non-secret* values (the Supabase and
- * Presenton URLs) out of `frontend/.env.development.local`, which Node's own
+ * Presenton URLs) out of `frontend/.env`, which Node's own
  * `--env-file` already feeds to the worker. Kept dependency-free and narrow so
  * nothing here can accidentally log or forward a key.
  */

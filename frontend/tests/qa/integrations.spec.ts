@@ -44,7 +44,7 @@ const GOOGLE_CONFIGURED = Boolean(
 
 /**
  * True when this suite's server was started with `PRESENTON_URL` set (the
- * Playwright config loads `.env.development.local` into this process and the
+ * Playwright config loads `frontend/.env` into this process and the
  * webServer inherits it, so test and server agree on the env fact). Whether
  * the service then answers is the server's own probe; the card's state marker
  * reports it. The exact reachable/unreachable copies are proven by the F3

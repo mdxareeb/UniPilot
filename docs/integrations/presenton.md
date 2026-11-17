@@ -27,9 +27,10 @@ redistributes or modifies its code.
 | `PRESENTON_POLL_INTERVAL_MS` | Worker-only knob: how often the async task is polled (default 5000 ms, minimum 500 ms). |
 | `PRESENTON_POLL_TIMEOUT_MS` | Worker-only knob: how long one generation attempt may poll before the 29.1 runner retries it (default 600000 ms = 10 minutes, minimum 10 s). |
 
-Locally these live in `frontend/.env.development.local` (git-ignored): the Next
-server reads it for the tool page/actions and the Node worker inherits it via
-`--env-file` (backend `package.json`). Never logged, never sent to the browser.
+Locally these live in `frontend/.env` (git-ignored): the Next server reads it
+for the tool page/actions, and the Node worker loads its own copy from
+`backend/.env` via `--env-file` (backend `package.json`). Never logged, never
+sent to the browser.
 
 ## 2. Running Presenton locally (separate service)
 
@@ -62,7 +63,7 @@ docker run -it --name presenton \
 Open `http://localhost:5001`, sign in with `AUTH_USERNAME`/`AUTH_PASSWORD`, then
 mint the UniPilot key under **Admin → API keys** (`POST
 /api/v1/admin/api-keys` from an admin session; label it "UniPilot"). Put the
-`sk-presenton-…` value into `frontend/.env.development.local` as
+`sk-presenton-…` value into `frontend/.env` (and the worker's `backend/.env`) as
 `PRESENTON_API_KEY` and set `PRESENTON_URL=http://localhost:5001`.
 
 **Local single-user alternative (used for the 2026-09-14 verification).** The

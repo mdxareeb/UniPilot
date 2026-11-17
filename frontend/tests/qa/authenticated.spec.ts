@@ -15,7 +15,7 @@
  *
  * Requires: `npx playwright test` (runs the qa-auth-setup project first),
  * the dev server on http://localhost:3000 pointed at the LOCAL Supabase
- * stack via .env.development.local.
+ * stack via frontend/.env.
  */
 import { test, expect } from "@playwright/test";
 

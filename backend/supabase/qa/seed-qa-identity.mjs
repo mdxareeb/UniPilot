@@ -27,13 +27,13 @@
  *
  * Usage (run from backend/, with the local stack running):
  *
- *   node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs
+ *   node --env-file=.env supabase/qa/seed-qa-identity.mjs
  *
  * Or from the repo root: `npm run seed:qa`.
  *
  * Reset (re-writes both identities' passwords and confirmation in place):
  *
- *   node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs --reset
+ *   node --env-file=.env supabase/qa/seed-qa-identity.mjs --reset
  *
  * Full environment reset (destroys the identities along with everything else):
  *
@@ -42,7 +42,7 @@
  *   ...then re-run this seed.
  *
  * Credentials: each password is read from its environment variable
- * (server-side only; git-ignored in frontend/.env.development.local). They are never
+ * (server-side only; git-ignored in backend/.env). They are never
  * hardcoded here, never logged, and never written to a NEXT_PUBLIC_* variable.
  * The emails are deterministic, visibly synthetic and use the reserved `.test`
  * TLD, so they cannot collide with any real person.
@@ -118,7 +118,7 @@ if (!isLocal) {
     "Fix: run `npm run seed:qa` from the repo root, or from backend/:",
   );
   console.error(
-    "  node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs",
+    "  node --env-file=.env supabase/qa/seed-qa-identity.mjs",
   );
   process.exit(1);
 }
@@ -128,14 +128,14 @@ if (!isLocal) {
 // ---------------------------------------------------------------------------
 if (!serviceRoleKey) {
   console.error(
-    "Missing SUPABASE_SERVICE_ROLE_KEY. Set it in frontend/.env.development.local (server-side only).",
+    "Missing SUPABASE_SERVICE_ROLE_KEY. Set it in backend/.env (server-side only).",
   );
   process.exit(1);
 }
 
 if (!anonKey) {
   console.error(
-    "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY. Set it in frontend/.env.development.local (the QA1 password grant and onboarding RPC need the anon key).",
+    "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY. Set it in backend/.env (the QA1 password grant and onboarding RPC need the anon key).",
   );
   process.exit(1);
 }
@@ -147,7 +147,7 @@ const missingPasswords = IDENTITIES.filter(
 if (missingPasswords.length > 0) {
   console.error(
     [
-      "Missing or too-short QA password(s). Set each of the following (8+ chars) in frontend/.env.development.local:",
+      "Missing or too-short QA password(s). Set each of the following (8+ chars) in backend/.env:",
       ...missingPasswords,
       "Then re-run from the repo root:",
       "  npm run seed:qa",
@@ -300,7 +300,7 @@ async function signInWithPassword(identity) {
   );
   if (!response.ok) {
     throw new Error(
-      `QA1 sign-in failed: HTTP ${response.status}. Verify ${identity.passwordEnv} in frontend/.env.development.local and re-run \`npm run seed:qa\`.`,
+      `QA1 sign-in failed: HTTP ${response.status}. Verify ${identity.passwordEnv} in backend/.env and re-run \`npm run seed:qa\`.`,
     );
   }
   return response.json();

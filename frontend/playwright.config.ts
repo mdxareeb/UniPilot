@@ -11,20 +11,19 @@
  * (.gitignore ignores `.playwright/`).
  *
  * ⚠ Non-production only: this config targets the LOCAL Supabase stack. The
- * `next dev` server must run with `frontend/.env.development.local` (see
- * QA_SESSION.md) so localhost:3000 talks to 127.0.0.1:54321, never to the
- * hosted project.
+ * `next dev` server must run with `frontend/.env` (see QA_SESSION.md) so
+ * localhost:3000 talks to 127.0.0.1:54937, never to the hosted project.
  */
 import { defineConfig } from "@playwright/test";
 
 /**
- * Loads `.env.development.local` into process.env if present, without
- * overriding variables already set in the shell. Keeps the QA credentials
- * server-side (Node process) only — no test ever bundles them to a browser
- * beyond typing them into the real login form.
+ * Loads `frontend/.env` (the one frontend env file) into process.env if
+ * present, without overriding variables already set in the shell. Keeps the QA
+ * credentials server-side (Node process) only — no test ever bundles them to a
+ * browser beyond typing them into the real login form.
  */
 try {
-  process.loadEnvFile(".env.development.local");
+  process.loadEnvFile(".env");
 } catch {
   // File absent — variables must then come from the shell. The fixture
   // reports a clear, actionable error when they are missing.
@@ -57,10 +56,11 @@ export default defineConfig({
    * has no HMR, no compile-on-request and no dev stream churn — the same
    * requests settle deterministically and much faster.
    *
-   * Environment: `next build` would otherwise read `.env.local`, which names the
-   * hosted project; the local values loaded above from
-   * `.env.development.local` are passed explicitly so the build and server can
-   * only ever talk to the local stack.
+   * Environment: `next build` would otherwise read any other `.env*` file a
+   * developer left behind (the hosted project used to leak in through
+   * `.env.local`); the local values loaded above from the single `frontend/.env`
+   * are passed explicitly so the build and server can only ever talk to the
+   * local stack.
    */
   webServer: {
     command: "npm run build && npm run start",

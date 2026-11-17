@@ -71,7 +71,7 @@ creating their own identity.
 | WhatsApp export-flow proof | `frontend/tests/qa/whatsapp-ui.spec.ts` + `whatsapp-export.spec.ts`
   (upload â†’ scan â†’ candidate review â†’ confirm with calendar marker â†’ reject, live-gate UI;
   Task 46.15) |
-| Env file | `frontend/.env.development.local` (git-ignored; copy from `frontend/.env.development.local.example`) |
+| Env file | `frontend/.env` (git-ignored; copy from `frontend/.env.example`; the worker keeps its own copy in `backend/.env` from `backend/.env.example`) |
 
 ## The QA identities (two users since Task 20.9)
 
@@ -101,7 +101,7 @@ onboarding state. `profiles` keeps one row per identity; `subjects` keeps only
 QA1's two onboarding rows.
 
 Passwords live only in their environment variables in
-`frontend/.env.development.local`; never in a `NEXT_PUBLIC_*` var, never
+`frontend/.env` (and the worker's `backend/.env` copy); never in a `NEXT_PUBLIC_*` var, never
 committed, never logged, never in a screenshot (the login form masks them).
 
 ## One-time setup (already done on this machine, listed for a fresh machine)
@@ -114,7 +114,7 @@ committed, never logged, never in a screenshot (the login form masks them).
 3. Run `supabase init` / `supabase start` from `backend/` inside WSL:
    `wsl -d kali-linux -u root -e sh -c "cd /mnt/c/<checkout>/backend && supabase init && supabase start"`
    (init is once; `backend/supabase/config.toml` is regenerated per machine).
-4. `copy frontend\.env.development.local.example frontend\.env.development.local`,
+4. `copy frontend\.env.example frontend\.env`,
    set `UNIPILOT_QA_PASSWORD` and `UNIPILOT_QA2_PASSWORD` (distinct 8+ char
    values â€” local-only), then run the seed.
 5. Keep WSL alive while QA runs: `wsl -d kali-linux --exec sleep 2147483647`
@@ -149,7 +149,7 @@ production server), then `storageState: frontend/.playwright/qa-session.json`
 The suite owns a **production** server: `frontend/playwright.config.ts` declares
 a `webServer` (`npm run build && npm run start`, `reuseExistingServer: false`),
 with the local `NEXT_PUBLIC_*` values passed explicitly so `next build` can
-never pick up `.env.local`'s hosted project. A manual `npm run dev` must be
+never pick up a stray `.env*` file's hosted project. A manual `npm run dev` must be
 stopped before `npm run test` â€” if port 3000 is taken the run fails loudly
 instead of silently sharing a server it does not control. Production is
 deliberate: under the suite's parallel load `next dev` tore down in-flight
@@ -187,7 +187,7 @@ stack; give each session its own git worktree with:
 - its own `backend/supabase/config.toml` (CLI-generated, git-ignored) with
   distinct API/DB/Studio ports (`supabase start` from that worktree's
   `backend/`),
-- its own `frontend/.env.development.local` pointing at that stack's URL/keys
+- its own `frontend/.env` + `backend/.env` pointing at that stack's URL/keys
   (plus its own `UNIPILOT_QA_PASSWORD` / `UNIPILOT_QA2_PASSWORD`),
 - its own seeded QA identities (`npm run seed:qa` inside the worktree) and its
   own `.playwright/qa-session.json`.
@@ -197,7 +197,7 @@ against it.
 
 For MCP-browser QA (Playwright MCP tools): drive the same real login form at
 `/login` with `qa.unipilot@unipilot.test` + `UNIPILOT_QA_PASSWORD` read from
-`frontend/.env.development.local` — never type the password into a tool call or
+`frontend/.env` — never type the password into a tool call or
 screenshot it.
 
 **Breach recorded (2026-09-16).** During a native-presentation task an agent's
@@ -246,8 +246,8 @@ npm run seed:qa -w backend -- --reset    # destroy + recreate
 Equivalent direct form (run from `backend/` â€” this is what the npm script does):
 
 ```powershell
-node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs          # create (idempotent)
-node --env-file=../frontend/.env.development.local supabase/qa/seed-qa-identity.mjs --reset  # destroy + recreate
+node --env-file=.env supabase/qa/seed-qa-identity.mjs          # create (idempotent)
+node --env-file=.env supabase/qa/seed-qa-identity.mjs --reset  # destroy + recreate
 ```
 
 - `npm run seed:qa` leaves **QA1 onboarded** with the standard fixture (QA /
@@ -433,7 +433,7 @@ Supabase's API port 54321, so `127.0.0.1:54321` stopped forwarding from Windows
 into WSL2 while the stack stayed healthy (reachable inside WSL). The local
 stack's API port was therefore moved to **54937** (outside the reserved
 ranges): `backend/supabase/config.toml` `[api] port`, plus the API URL in
-`frontend/.env.development.local` â€” `supabase stop && supabase start` applies
+`frontend/.env` â€” `supabase stop && supabase start` applies
 it, and all data persists. The specs' local-only guards require a
 `127.0.0.1`/`localhost` URL, so prefer this over pointing the env at the WSL
 IP. With an elevated shell, check `netsh interface ipv4 show excludedportrange

@@ -30,16 +30,17 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files (can opt-in for committing if needed). Exactly two runtime files
+# exist — frontend/.env and backend/.env — both ignored; exactly two templates
+# stay tracked: frontend/.env.example and backend/.env.example.
 .env*
 # Templates only — placeholders and public local-Supabase defaults, no secrets.
 !.env.example
-!.env.development.local.example
 
 # Task 30 — WhatsApp service secrets and runtime state. credentials.json /
 # token.json are live Google OAuth material, .wa_profile/ is a logged-in
 # WhatsApp Web session, and data/ + output/ hold scraped private messages and
-# generated calendars. None may ever be committed; .env.example stays tracked.
+# generated calendars. None may ever be committed.
 /whatsapp/**/.wa_profile/
 /whatsapp/**/.profiles/
 /whatsapp/**/credentials.json

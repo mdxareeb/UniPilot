@@ -90,7 +90,7 @@ For the pytest suite, `python -m pip install -r requirements-dev.txt`
 
 The service reads process environment only — it never loads a `.env` file.
 Normally the worker supplies these (locally the Node worker loads
-`frontend/.env.development.local` via `--env-file`); `.env.example` documents
+`backend/.env` via `--env-file`); `backend/.env.example` documents
 the keys. All are non-public, server-side values.
 
 | variable | purpose |
@@ -127,7 +127,7 @@ satisfy:
    export/push, plus `requirements-google.txt` for `whatsapp.push`, and
    `requirements-live.txt` only on the single-tenant live host.
 2. **Environment** supplied through the platform secret store (locally
-   inherited from `frontend/.env.development.local` by the worker's
+   inherited from `backend/.env` by the worker's
    `--env-file`): `SUPABASE_URL` (or `NEXT_PUBLIC_SUPABASE_URL`),
    `SUPABASE_SERVICE_ROLE_KEY`, `UNIPILOT_INTEGRATIONS_KEY`, and the Google
    pair for push.
@@ -156,7 +156,7 @@ both keep to that rule.
 The contract is enforced by the test suite: `npm run test:whatsapp` runs the
 pytest suite alone, and the worker-Python Playwright specs run against the
 local stack with the QA seed up. Run them through the frontend workspace from
-the repo root (the config loads `frontend/.env.development.local` relative to
+the repo root (the config loads `frontend/.env` relative to
 its run directory):
 
 ```

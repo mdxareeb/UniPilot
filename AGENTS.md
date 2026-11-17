@@ -42,7 +42,7 @@ the founder account, never a task-invented identity:
 
 - Identity: `qa.unipilot@unipilot.test` (seeded, email-confirmed, no
   application data) — password lives in `UNIPILOT_QA_PASSWORD` in
-  `frontend/.env.development.local` (git-ignored).
+  `frontend/.env` (git-ignored).
 - Environment: the LOCAL Supabase stack (Docker in `kali-linux` WSL) — the
   hosted project is never written to; the seed refuses non-local targets.
 - One-liner: `npm run test` from the repo root (local stack up; the suite builds

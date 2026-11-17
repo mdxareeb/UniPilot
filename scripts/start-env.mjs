@@ -16,7 +16,7 @@
  * Configuration, never hardcoded per machine:
  *   - `UNIPILOT_WSL_DISTRO`  — WSL2 distro (default `kali-linux`)
  *   - `PRESENTON_URL`        — where Presenton is probed (env, then
- *                              `frontend/.env.development.local`, then
+ *                              `frontend/.env`, then
  *                              `http://localhost:5001`)
  *   - `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_URL` — probed the same way
  *     (fallback `http://127.0.0.1:54937`, the port chosen in QA_SESSION.md to
@@ -44,7 +44,8 @@ import { buildPresentonRunArgs, toWslPath, wslExecArgs } from "./lib/wsl.mjs";
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const BACKEND_DIR = path.join(ROOT, "backend");
 const WORKER_ENTRY = path.join(BACKEND_DIR, "worker", "run.mjs");
-const FRONTEND_ENV_FILE = path.join(ROOT, "frontend", ".env.development.local");
+const FRONTEND_ENV_FILE = path.join(ROOT, "frontend", ".env");
+const BACKEND_ENV_FILE = path.join(ROOT, "backend", ".env");
 const PRESENTON_APP_DATA = path.join(ROOT, "presenton-main", "app_data");
 const PRESENTON_ENV_FILE = path.join(ROOT, "presenton-main", ".env");
 const PRESENTON_IMAGE = "ghcr.io/presenton/presenton:latest";
@@ -387,7 +388,7 @@ async function main() {
   if (existingWorker !== null) {
     log(`worker: already running (pid ${existingWorker})`);
   } else {
-    workerChild = spawn(process.execPath, [`--env-file=${FRONTEND_ENV_FILE}`, WORKER_ENTRY], {
+    workerChild = spawn(process.execPath, [`--env-file=${BACKEND_ENV_FILE}`, WORKER_ENTRY], {
       cwd: BACKEND_DIR,
       stdio: "inherit",
       windowsHide: true,

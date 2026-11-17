@@ -195,7 +195,7 @@ Do not implement a workaround and do not mark the task complete.
 - No secrets in client bundles.
 - No secret in `NEXT_PUBLIC_*`.
 - Server-only keys remain server-only.
-- `frontend/.env.example` must be updated whenever a new environment variable is introduced.
+- `frontend/.env.example` and `backend/.env.example` must be updated whenever a new environment variable is introduced.
 
 ## 0.15 — Database changes
 

@@ -143,7 +143,7 @@ No other `"use server"` module and no other Route Handler exists (`frontend/app/
 - **Finding:** `frontend/app/auth/callback/route.ts` built every redirect as `${origin}${path}` with `origin = new URL(request.url).origin`, and the auth actions built Supabase redirect targets (signup confirmation, recovery, OAuth) from the request `Origin`/`Host` headers. Those are caller-controlled: a non-browser client can send any `Host`, and Next itself copies the incoming `Host` into `x-forwarded-host` (`base-server.js`), which URL construction reads in self-hosted/`next start` deployments. On an origin that did not normalize the header, that is an open-redirect and a token-phishing path (a confirmation link pointing at another host), fenced only by Supabase's redirect allow-list.
 - **Observed on the local stack:** `curl -H "Host: evil.example" http://localhost:3000/auth/callback` returned the same-origin `Location` because the dev server derives `request.url` from its bind host; the code path still trusted a request-derived origin, so the fix is structural, not repro-dependent.
 - **Fix 1 — callback:** redirects are now same-origin relative (`sameOriginRedirect`), so there is no origin to forge: the browser resolves `Location: /login?error=oauth` against the URL it requested. Verified: both `-H "Host: evil.example"` and `-H "X-Forwarded-Host: evil.example"` return `Location: /login?error=oauth`, and a browser follows it to the sanitized notice copy. Next merges the PKCE session cookies onto the returned response, so the exchange is unaffected.
-- **Fix 2 — actions:** `frontend/lib/auth/origin.ts`'s `getTrustedSiteOrigin()` uses `NEXT_PUBLIC_SITE_URL` when configured, accepts a loopback Host only in local development, and otherwise throws — the action turns that into its sanitized failure and no mail is sent. `NEXT_PUBLIC_SITE_URL` is documented in `frontend/.env.example` and `frontend/.env.development.local.example`.
+- **Fix 2 — actions:** `frontend/lib/auth/origin.ts`'s `getTrustedSiteOrigin()` uses `NEXT_PUBLIC_SITE_URL` when configured, accepts a loopback Host only in local development, and otherwise throws — the action turns that into its sanitized failure and no mail is sent. `NEXT_PUBLIC_SITE_URL` is documented in `frontend/.env.example`.
 - **Proxy redirects were already safe:** `Location: /login?next=%2Ftasks` is emitted relative by Next for middleware redirects, forged Host included, so `/dashboard`/protected-route bounces never involve an origin.
 
 ### 14.11 verification (monorepo + MCP Chromium)
@@ -178,9 +178,9 @@ Re-audited after the app moved to `frontend/`, with the Playwright MCP
 
 ## Environment variables
 
-Configured per environment; the committed templates are `frontend/.env.example` (hosted)
-and `frontend/.env.development.local.example` (local stack). `.env*.local` stays
-gitignored.
+The single runtime files are `frontend/.env` (the app + QA tooling) and
+`backend/.env` (the worker); both are gitignored. Only the two committed
+templates (`frontend/.env.example`, `backend/.env.example`) are tracked.
 
 | Variable | Purpose |
 | --- | --- |
@@ -429,5 +429,5 @@ variables live in **[backend/EMAIL.md](./backend/EMAIL.md)**. The essentials:
 - **Never trigger real auth emails against the hosted project during development.** Its default SMTP is rate-limited and mail to invented addresses bounces. Run local Supabase, which catches all mail in its own inbox — no SMTP configuration needed, and no real email leaves the machine.
 - **Two emails matter to this app today:** signup confirmation (`emailRedirectTo` → `/auth/confirm`) and password recovery (`redirectTo` → `/reset-password`, a route that does not exist yet).
 - **Production is not configured.** The blocking prerequisite is a verified sending domain, which the project does not own. Custom SMTP goes in the Supabase dashboard, never in this repo — so no application code changes when it is added.
-- **Environment separation:** `frontend/.env.local` → hosted Supabase; `frontend/.env.development.local` → local Supabase (`npm run dev` loads it first). Both are gitignored; only the `*.example` templates are tracked.
+**Environment separation:** `frontend/.env` is the app's single file (local Supabase); `backend/.env` is the worker's own copy. Both are gitignored; only the two `*.example` templates are tracked.
 

@@ -266,7 +266,7 @@ test.describe("events data (22.x)", () => {
     }
     if (!anonKey || !serviceKey) {
       throw new Error(
-        "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY (frontend/.env.development.local)",
+        "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY (frontend/.env)",
       );
     }
     if (!qa1Password || !qa2Password) {

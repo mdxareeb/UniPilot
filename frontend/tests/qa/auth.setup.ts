@@ -13,7 +13,7 @@
  *   is an authenticated user with no application data, by design.
  * - It never touches the hosted (production) Supabase project: the target is
  *   whatever the dev server uses, which must be the local stack per
- *   `.env.development.local` (§12).
+ *   `frontend/.env` (§12).
  *
  * Behaviour (§23):
  * 1. Missing QA env vars → fails with a clear, actionable message.
@@ -45,8 +45,8 @@ if (!QA_PASSWORD) {
   throw new Error(
     [
       "QA fixture: UNIPILOT_QA_PASSWORD is not set.",
-      "It lives in frontend/.env.development.local (git-ignored), next to the",
-      "local Supabase stack credentials. Copy frontend/.env.development.local.example,",
+      "It lives in frontend/.env (git-ignored), next to the",
+      "local Supabase stack credentials. Copy frontend/.env.example,",
       "set the password, run `npm run seed:qa` from the repo root, then retry.",
       "Details: QA_SESSION.md",
     ].join("\n"),

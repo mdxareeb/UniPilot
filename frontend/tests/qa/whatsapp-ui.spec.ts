@@ -481,7 +481,7 @@ test.describe("whatsapp candidate mapping (pure)", () => {
 
 /* ---------------------------------------------------------------------------
  * The rendered contract (P5.1). The server flags are read from the same
- * `.env.development.local` the Playwright config loads, so a spec never
+ * `frontend/.env` the Playwright config loads, so a spec never
  * asserts a state this server cannot be in.
  * ------------------------------------------------------------------------- */
 

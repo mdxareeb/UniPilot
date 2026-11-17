@@ -19,7 +19,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
  * be re-run after every future design change.
  *
  * PRODUCTION EXCLUSION — how, exactly:
- * - `UNIPILOT_SPECIMEN` is set to `1` only in `.env.development.local`
+ * - `UNIPILOT_SPECIMEN` is set to `1` only in `frontend/.env`
  *   (git-ignored). In any other environment — including `next build`, which
  *   runs without that file — the guard below calls `notFound()` and the
  *   route serves the 404 page. The production bundle therefore contains no

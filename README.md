@@ -36,15 +36,23 @@ generated database types are in sync with the local schema.
 
 ## Environment
 
-- `frontend/.env.local` (hosted/default) and `frontend/.env.development.local`
-  (local Supabase; loaded ahead of `.env.local` by `npm run dev`) hold
-  `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
-  `SUPABASE_SERVICE_ROLE_KEY` (test/seed tooling only), the QA passwords, and
-  — when introduced — future *public* keys.
-- `backend/.env.local` / `backend/.env.development.local` hold `SUPABASE_URL`
-  (plus, later, server-only secrets).
-- Copy from the matching `.example` templates. Every real `.env*` file is
-  git-ignored; only the `.example` templates are tracked.
+Exactly two env files — one per side, both git-ignored:
+
+- `frontend/.env` — the frontend: `NEXT_PUBLIC_SUPABASE_URL`,
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (test/seed tooling
+  only), the QA passwords, the Google/WhatsApp/assistant server-only keys, the
+  Presenton pair and — when introduced — future *public* keys. Next.js loads it,
+  and `playwright.config.ts` loads it explicitly for the QA suite.
+- `backend/.env` — the backend: `SUPABASE_URL` (the backend-side alias of the
+  same public URL), the public pair the worker reads directly, the service-role
+  key, the Presenton pair, the QA passwords and the WhatsApp worker knobs. The
+  worker and the backend scripts load it with `node --env-file=.env`; the worker
+  keeps its own copy on purpose (separate process).
+
+Copy from the two tracked templates (`frontend/.env.example`,
+`backend/.env.example`). Do not create `.env.local` /
+`.env.development.local` variants — they would silently override the single
+file.
 
 ⚠ **URL invariant (never break it):** `backend`'s `SUPABASE_URL` must name the
 same Supabase project as `frontend`'s `NEXT_PUBLIC_SUPABASE_URL`. Never put a
@@ -85,7 +93,7 @@ the app needs, in order and idempotently:
    otherwise `supabase start` from `backend/` as root. The configured
    `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_URL` is probed.
 4. **Worker** — `backend/worker/run.mjs` with
-   `frontend/.env.development.local`; skipped when an instance is already
+   `backend/.env`; skipped when an instance is already
    running.
 5. **Next dev** — the frontend's `next dev` (what `npm run dev -w frontend`
    runs), skipped when something already serves `:3000`.
@@ -98,7 +106,7 @@ the app needs, in order and idempotently:
    (`resolveEditorUrl`), so the link is never dead. Manual command:
    `cd presenton-ui && npm run dev`.
 
-URLs resolve environment → `frontend/.env.development.local` → defaults
+URLs resolve environment → `frontend/.env` → defaults
 (`http://127.0.0.1:54937`, `http://localhost:5001`); no secret value is ever
 printed. **Honest degradation:** every infrastructure step only *warns* on
 failure — if Docker or Presenton cannot start, the app still runs and

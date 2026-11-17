@@ -13,7 +13,7 @@
  * (fonts/colours/radii/spacing) is what 3.11 measures separately.
  *
  * Run: `npx playwright test` (dev server pointed at the local Supabase stack
- * via .env.development.local; storage state handled by the qa-auth-setup
+ * via frontend/.env; storage state handled by the qa-auth-setup
  * project in playwright.config.ts).
  */
 import { test, expect, type Page } from "@playwright/test";

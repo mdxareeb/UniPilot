@@ -68,7 +68,7 @@ function readEnvironment() {
   if (url === "" || serviceKey === "") {
     throw new Error(
       "Missing SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. " +
-        "Locally: `npm run worker -w backend` loads frontend/.env.development.local.",
+        "Locally: `npm run worker -w backend` loads backend/.env.",
     );
   }
 

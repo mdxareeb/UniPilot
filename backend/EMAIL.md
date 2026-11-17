@@ -119,12 +119,12 @@ repo's local config lists `http://localhost:3000/**` and
 
 | File | Used by | Points at |
 | --- | --- | --- |
-| `frontend/.env.local` | production builds / default | **hosted** Supabase |
-| `frontend/.env.development.local` | `npm run dev` only — Next.js loads it ahead of `frontend/.env.local` in development | **local** Supabase |
+| `frontend/.env` | the Next app + the Playwright/QA tooling | **local** Supabase (this host: `127.0.0.1:54937`) |
+| `backend/.env` | the Node worker + backend scripts (`node --env-file=.env`) | the same local stack, seen from the worker |
 
-Copy `frontend/.env.development.local.example` to `frontend/.env.development.local` once local
-Supabase is running. Both live files are gitignored. Hosted credentials are never
-overwritten and local credentials are never committed.
+Copy `frontend/.env.example` to `frontend/.env` (and `backend/.env.example` to
+`backend/.env`) once local Supabase is running. Both runtime files are gitignored;
+only the two `*.example` templates are tracked.
 
 ### Local testing checklist
 
@@ -217,7 +217,7 @@ not a usable production signup rate.
 ## Secrets
 
 - The provider API key lives **only** in Supabase's dashboard SMTP configuration.
-- It never appears in this repo, in `frontend/.env.local`, in a `NEXT_PUBLIC_*` variable,
+- It never appears in this repo, in `frontend/.env`, in a `NEXT_PUBLIC_*` variable,
   or in any file that reaches the client bundle.
 - In `backend/supabase/config.toml`, secrets use environment interpolation —
   `pass = "env(SUPABASE_AUTH_SMTP_PASS)"` — never a literal.

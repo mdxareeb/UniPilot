@@ -61,7 +61,7 @@ function readEnvironment() {
   if (url === "" || key === "") {
     throw new Error(
       "Missing SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. " +
-        "Locally: `npm run search-benchmark -w backend` loads frontend/.env.development.local.",
+        "Locally: `npm run search-benchmark -w backend` loads backend/.env.",
     );
   }
   return { url, key };

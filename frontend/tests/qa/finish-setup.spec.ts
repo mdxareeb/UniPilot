@@ -92,7 +92,7 @@ test.describe("finish-setup affordance (14.10)", () => {
     }
     if (!qa2Password) {
       throw new Error(
-        "Missing UNIPILOT_QA2_PASSWORD (frontend/.env.development.local); seed the identities first (`npm run seed:qa` from the repo root)",
+        "Missing UNIPILOT_QA2_PASSWORD (frontend/.env); seed the identities first (`npm run seed:qa` from the repo root)",
       );
     }
   });
