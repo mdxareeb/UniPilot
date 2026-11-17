@@ -5,16 +5,16 @@ approved the same day with founder decisions (a)–(h) (see §O). Sections 0–O
 approved plan and change only by recorded amendment. §P is the append-only phase record.
 Where §P and an earlier section disagree, §P is newer and wins.
 
-## Status at a glance (updated 2026-11-16)
+## Status at a glance (updated 2026-11-17)
 
 | Item | State |
 | --- | --- |
 | Current phase | **M2b** (PKCE Google sign-in + native onboarding). M0, M1, M2a complete. |
-| Gate blocker | **None on the auth legs.** Legs A (WARM), B (CANCEL) and C (COLD) all **PASS** on the clean 2026-11-17 build; the duplicate exchange stays fixed (one `/token`, one session). Remaining M2b items: the **QA2 onboarding leg was deferred by the founder on 2026-11-17** (the native onboarding completion with a fresh identity is therefore **not exercised** this gate - recorded in §P and tracked as a follow-up), and the scoped commit. |
-| Next action | **Scoped commit (mobile-app only) -> STOP for review.** No further device legs until the founder reviews. |
+| Gate blocker | **None on the auth legs.** Legs A (WARM), B (CANCEL) and C (COLD) all **PASS** on the clean 2026-11-17 build; the duplicate exchange stays fixed (one `/token`, one session). Remaining M2b items: the **QA2 onboarding leg was deferred by the founder on 2026-11-17** (the native onboarding completion with a fresh identity is therefore **not exercised** this gate - recorded in §P and tracked as a follow-up), and the scoped commit (done: `46f2af8`, pushed through `cc685e0`). |
+| Next action | **STOP for founder review of the M2b gate.** The scoped commit and the follow-up housekeeping are pushed. No further device legs until the founder reviews. |
 | Then | QA2 onboarding leg as a tracked follow-up at the founder's call; M3 starts only after the gate closes. |
 | Test environment | Android Studio emulator `Pixel7_API36` (`emulator-5554`). The Xiaomi phone is preserved and unplugged. |
-| Not pushed | Nothing in `master` has been pushed to `origin`. |
+| Pushed | `master` @ `cc685e0` on `UniPilot` (18 commits from `83ac941`, including the mobile OAuth fix `46f2af8`). |
 
 Milestone map: M0 ✅ · M1 ✅ · M2a ✅ · **M2b 🔶** · M3–M7 pending (full table in §K).
 
