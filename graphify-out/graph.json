@@ -1291,6 +1291,32 @@
       "norm_label": "conversationsidebarprops"
     },
     {
+      "label": "SlideRailProps",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/tools/presentation/[id]/_components/SlideRail.tsx",
+      "source_location": "L29",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_tools_presentation_id_components_sliderail_sliderailprops",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "sliderailprops"
+    },
+    {
+      "label": "MotionListItemProps",
+      "file_type": "code",
+      "source_file": "frontend/components/motion/MotionListItem.tsx",
+      "source_location": "L12",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_components_motion_motionlistitem_motionlistitemprops",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "motionlistitemprops"
+    },
+    {
       "label": "ConversationItem",
       "file_type": "code",
       "source_file": "frontend/lib/data/conversations.ts",
@@ -1395,6 +1421,19 @@
       "norm_label": "typevariant"
     },
     {
+      "label": "BlockPlacement",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
+      "source_location": "L168",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_calendarevents_blockplacement",
+      "community": 142,
+      "community_name": "calendarEvents.ts",
+      "norm_label": "blockplacement"
+    },
+    {
       "label": "eventFormValues",
       "file_type": "code",
       "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
@@ -1404,8 +1443,34 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_calendarevents_eventformvalues",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "eventformvalues"
+    },
+    {
+      "label": "EventTypeChoice",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
+      "source_location": "L28",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_calendarevents_eventtypechoice",
+      "community": 142,
+      "community_name": "calendarEvents.ts",
+      "norm_label": "eventtypechoice"
+    },
+    {
+      "label": "EventType",
+      "file_type": "code",
+      "source_file": "frontend/lib/data/eventValues.ts",
+      "source_location": "L53",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_lib_data_eventvalues_eventtype",
+      "community": 142,
+      "community_name": "calendarEvents.ts",
+      "norm_label": "eventtype"
     },
     {
       "label": "GridColumns",
@@ -2784,58 +2849,6 @@
       "community": 214,
       "community_name": "AuthOptions.tsx",
       "norm_label": "collapsiblevariant"
-    },
-    {
-      "label": "eventKind",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventBlocks.tsx",
-      "source_location": "L37",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventblocks_eventkind",
-      "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "eventkind"
-    },
-    {
-      "label": "DetailStatus",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
-      "source_location": "L9",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventdetailmodal_detailstatus",
-      "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "detailstatus"
-    },
-    {
-      "label": "EventDetailModalProps",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
-      "source_location": "L11",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventdetailmodal_eventdetailmodalprops",
-      "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "eventdetailmodalprops"
-    },
-    {
-      "label": "EventItem",
-      "file_type": "code",
-      "source_file": "frontend/lib/data/eventValues.ts",
-      "source_location": "L107",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_lib_data_eventvalues_eventitem",
-      "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "eventitem"
     },
     {
       "label": "Notice_",
@@ -4526,32 +4539,6 @@
       "community": 42,
       "community_name": "TaskBoard.tsx",
       "norm_label": "taskcardprops"
-    },
-    {
-      "label": "SlideRailProps",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/tools/presentation/[id]/_components/SlideRail.tsx",
-      "source_location": "L29",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_tools_presentation_id_components_sliderail_sliderailprops",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "sliderailprops"
-    },
-    {
-      "label": "MotionListItemProps",
-      "file_type": "code",
-      "source_file": "frontend/components/motion/MotionListItem.tsx",
-      "source_location": "L12",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_components_motion_motionlistitem_motionlistitemprops",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "motionlistitemprops"
     },
     {
       "label": "TaskUiStatus",
@@ -7414,32 +7401,6 @@
       "norm_label": "proxysession"
     },
     {
-      "label": "BlockPlacement",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L168",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents_blockplacement",
-      "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "blockplacement"
-    },
-    {
-      "label": "EventTypeChoice",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L28",
-      "_callable": true,
-      "_callable_class": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents_eventtypechoice",
-      "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "eventtypechoice"
-    },
-    {
       "label": "BlockProps",
       "file_type": "code",
       "source_file": "frontend/app/(app)/calendar/_components/EventBlocks.tsx",
@@ -7449,8 +7410,21 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_blockprops",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "blockprops"
+    },
+    {
+      "label": "eventKind",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventBlocks.tsx",
+      "source_location": "L37",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventblocks_eventkind",
+      "community": 72,
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "eventkind"
     },
     {
       "label": "KindMeta",
@@ -7462,21 +7436,47 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_kindmeta",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "kindmeta"
     },
     {
-      "label": "EventType",
+      "label": "DetailStatus",
       "file_type": "code",
-      "source_file": "frontend/lib/data/eventValues.ts",
-      "source_location": "L53",
+      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
+      "source_location": "L9",
       "_callable": true,
       "_callable_class": true,
       "_origin": "ast",
-      "id": "frontend_lib_data_eventvalues_eventtype",
+      "id": "frontend_app_app_calendar_components_eventdetailmodal_detailstatus",
       "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "eventtype"
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "detailstatus"
+    },
+    {
+      "label": "EventDetailModalProps",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
+      "source_location": "L11",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventdetailmodal_eventdetailmodalprops",
+      "community": 72,
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "eventdetailmodalprops"
+    },
+    {
+      "label": "EventItem",
+      "file_type": "code",
+      "source_file": "frontend/lib/data/eventValues.ts",
+      "source_location": "L107",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "id": "frontend_lib_data_eventvalues_eventitem",
+      "community": 72,
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "eventitem"
     },
     {
       "label": "FakeResponse",
@@ -10793,6 +10793,18 @@
       "norm_label": "verdanttemplate()"
     },
     {
+      "label": "eventItemFromLocal()",
+      "file_type": "code",
+      "source_file": "frontend/lib/data/eventValues.ts",
+      "source_location": "L391",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_lib_data_eventvalues_eventitemfromlocal",
+      "community": 111,
+      "community_name": "eventValues.ts",
+      "norm_label": "eventitemfromlocal()"
+    },
+    {
       "label": "isRecord()",
       "file_type": "code",
       "source_file": "frontend/lib/data/eventValues.ts",
@@ -12389,6 +12401,42 @@
       "norm_label": "conversationsidebar()"
     },
     {
+      "label": "SlideRail()",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/tools/presentation/[id]/_components/SlideRail.tsx",
+      "source_location": "L37",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_tools_presentation_id_components_sliderail_sliderail",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "sliderail()"
+    },
+    {
+      "label": "MotionListItem()",
+      "file_type": "code",
+      "source_file": "frontend/components/motion/MotionListItem.tsx",
+      "source_location": "L36",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_components_motion_motionlistitem_motionlistitem",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "motionlistitem()"
+    },
+    {
+      "label": "listItemVariants()",
+      "file_type": "code",
+      "source_file": "frontend/components/motion/presets.ts",
+      "source_location": "L410",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_components_motion_presets_listitemvariants",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "listitemvariants()"
+    },
+    {
       "label": "insertJob()",
       "file_type": "code",
       "source_file": "frontend/tests/qa/jobs-runner.spec.ts",
@@ -12437,52 +12485,64 @@
       "norm_label": "signin()"
     },
     {
-      "label": "AddEventButton()",
+      "label": "eventCoversDate()",
       "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/AddEventButton.tsx",
-      "source_location": "L16",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
+      "source_location": "L119",
       "_callable": true,
       "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_addeventbutton_addeventbutton",
+      "id": "frontend_app_app_calendar_components_calendarevents_eventcoversdate",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
-      "norm_label": "addeventbutton()"
+      "community_name": "calendarEvents.ts",
+      "norm_label": "eventcoversdate()"
     },
     {
-      "label": "useCalendar()",
+      "label": "eventDateSpan()",
       "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/CalendarWorkspace.tsx",
-      "source_location": "L71",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
+      "source_location": "L104",
       "_callable": true,
       "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarworkspace_usecalendar",
+      "id": "frontend_app_app_calendar_components_calendarevents_eventdatespan",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
-      "norm_label": "usecalendar()"
+      "community_name": "calendarEvents.ts",
+      "norm_label": "eventdatespan()"
     },
     {
-      "label": "EventDeleteBody()",
+      "label": "minutesOf()",
       "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventDeleteModal.tsx",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
+      "source_location": "L153",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_calendarevents_minutesof",
+      "community": 142,
+      "community_name": "calendarEvents.ts",
+      "norm_label": "minutesof()"
+    },
+    {
+      "label": "timedPlacement()",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
+      "source_location": "L175",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_calendarevents_timedplacement",
+      "community": 142,
+      "community_name": "calendarEvents.ts",
+      "norm_label": "timedplacement()"
+    },
+    {
+      "label": "toEventDraftLocal()",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
       "source_location": "L54",
       "_callable": true,
       "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventdeletemodal_eventdeletebody",
+      "id": "frontend_app_app_calendar_components_calendarevents_toeventdraftlocal",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
-      "norm_label": "eventdeletebody()"
-    },
-    {
-      "label": "confirm()",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventDeleteModal.tsx",
-      "source_location": "L65",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventdeletemodal_eventdeletebody_confirm",
-      "community": 142,
-      "community_name": "calendar-ui.spec.ts",
-      "norm_label": "confirm()"
+      "community_name": "calendarEvents.ts",
+      "norm_label": "toeventdraftlocal()"
     },
     {
       "label": "EventFormFields()",
@@ -12493,7 +12553,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventformmodal_eventformfields",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "eventformfields()"
     },
     {
@@ -12505,7 +12565,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventformmodal_eventformfields_onsubmit",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "onsubmit()"
     },
     {
@@ -12517,7 +12577,7 @@
       "_origin": "ast",
       "id": "frontend_tests_qa_calendar_ui_spec_deletebyprefix",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "deletebyprefix()"
     },
     {
@@ -12529,7 +12589,7 @@
       "_origin": "ast",
       "id": "frontend_tests_qa_calendar_ui_spec_seedevent",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "seedevent()"
     },
     {
@@ -12541,7 +12601,7 @@
       "_origin": "ast",
       "id": "frontend_tests_qa_calendar_ui_spec_servertoday",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "servertoday()"
     },
     {
@@ -12553,7 +12613,7 @@
       "_origin": "ast",
       "id": "frontend_tests_qa_calendar_ui_spec_signin",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "signin()"
     },
     {
@@ -12565,7 +12625,7 @@
       "_origin": "ast",
       "id": "frontend_tests_qa_calendar_ui_spec_timed",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "timed()"
     },
     {
@@ -12577,7 +12637,7 @@
       "_origin": "ast",
       "id": "frontend_tests_qa_calendar_ui_spec_trackconsoleerrors",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "trackconsoleerrors()"
     },
     {
@@ -16313,28 +16373,52 @@
       "norm_label": "collapsible()"
     },
     {
-      "label": "EventDetailModal()",
+      "label": "AddEventButton()",
       "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
-      "source_location": "L44",
+      "source_file": "frontend/app/(app)/calendar/_components/AddEventButton.tsx",
+      "source_location": "L16",
       "_callable": true,
       "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventdetailmodal_eventdetailmodal",
+      "id": "frontend_app_app_calendar_components_addeventbutton_addeventbutton",
       "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "eventdetailmodal()"
+      "community_name": "useCalendar",
+      "norm_label": "addeventbutton()"
     },
     {
-      "label": "Field()",
+      "label": "useCalendar()",
       "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
-      "source_location": "L20",
+      "source_file": "frontend/app/(app)/calendar/_components/CalendarWorkspace.tsx",
+      "source_location": "L71",
       "_callable": true,
       "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventdetailmodal_field",
+      "id": "frontend_app_app_calendar_components_calendarworkspace_usecalendar",
       "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "field()"
+      "community_name": "useCalendar",
+      "norm_label": "usecalendar()"
+    },
+    {
+      "label": "EventDeleteBody()",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventDeleteModal.tsx",
+      "source_location": "L54",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventdeletemodal_eventdeletebody",
+      "community": 216,
+      "community_name": "useCalendar",
+      "norm_label": "eventdeletebody()"
+    },
+    {
+      "label": "confirm()",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventDeleteModal.tsx",
+      "source_location": "L65",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventdeletemodal_eventdeletebody_confirm",
+      "community": 216,
+      "community_name": "useCalendar",
+      "norm_label": "confirm()"
     },
     {
       "label": "SignInScreen()",
@@ -17957,18 +18041,6 @@
       "norm_label": "templateasseturl()"
     },
     {
-      "label": "toEventDraftLocal()",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L54",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents_toeventdraftlocal",
-      "community": 29,
-      "community_name": "CalendarWorkspace.tsx",
-      "norm_label": "toeventdraftlocal()"
-    },
-    {
       "label": "CalendarWorkspace()",
       "file_type": "code",
       "source_file": "frontend/app/(app)/calendar/_components/CalendarWorkspace.tsx",
@@ -18087,18 +18159,6 @@
       "community": 29,
       "community_name": "CalendarWorkspace.tsx",
       "norm_label": "updateeventaction()"
-    },
-    {
-      "label": "eventItemFromLocal()",
-      "file_type": "code",
-      "source_file": "frontend/lib/data/eventValues.ts",
-      "source_location": "L391",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_lib_data_eventvalues_eventitemfromlocal",
-      "community": 29,
-      "community_name": "CalendarWorkspace.tsx",
-      "norm_label": "eventitemfromlocal()"
     },
     {
       "label": "useSignInPromptOptional()",
@@ -21495,42 +21555,6 @@
       "community": 42,
       "community_name": "TaskBoard.tsx",
       "norm_label": "taskspage()"
-    },
-    {
-      "label": "SlideRail()",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/tools/presentation/[id]/_components/SlideRail.tsx",
-      "source_location": "L37",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_tools_presentation_id_components_sliderail_sliderail",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "sliderail()"
-    },
-    {
-      "label": "MotionListItem()",
-      "file_type": "code",
-      "source_file": "frontend/components/motion/MotionListItem.tsx",
-      "source_location": "L36",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_components_motion_motionlistitem_motionlistitem",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "motionlistitem()"
-    },
-    {
-      "label": "listItemVariants()",
-      "file_type": "code",
-      "source_file": "frontend/components/motion/presets.ts",
-      "source_location": "L410",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_components_motion_presets_listitemvariants",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "listitemvariants()"
     },
     {
       "label": "AuthCallbackScreen()",
@@ -27865,56 +27889,8 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_calendarevents_blockshowsmetadata",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "blockshowsmetadata()"
-    },
-    {
-      "label": "eventCoversDate()",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L119",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents_eventcoversdate",
-      "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "eventcoversdate()"
-    },
-    {
-      "label": "eventDateSpan()",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L104",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents_eventdatespan",
-      "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "eventdatespan()"
-    },
-    {
-      "label": "minutesOf()",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L153",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents_minutesof",
-      "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "minutesof()"
-    },
-    {
-      "label": "timedPlacement()",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L175",
-      "_callable": true,
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents_timedplacement",
-      "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "timedplacement()"
     },
     {
       "label": "ClassEventBlock()",
@@ -27925,7 +27901,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_classeventblock",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "classeventblock()"
     },
     {
@@ -27937,7 +27913,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_deadlineeventblock",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "deadlineeventblock()"
     },
     {
@@ -27949,7 +27925,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_eventaccessiblename",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "eventaccessiblename()"
     },
     {
@@ -27961,7 +27937,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_eventblock",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "eventblock()"
     },
     {
@@ -27973,7 +27949,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_eventchip",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "eventchip()"
     },
     {
@@ -27985,7 +27961,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_eventlegend",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "eventlegend()"
     },
     {
@@ -27997,7 +27973,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_exameventblock",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "exameventblock()"
     },
     {
@@ -28009,7 +27985,7 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_plaineventblock",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "plaineventblock()"
     },
     {
@@ -28021,8 +27997,32 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_whatsappmarker",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "whatsappmarker()"
+    },
+    {
+      "label": "EventDetailModal()",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
+      "source_location": "L44",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventdetailmodal_eventdetailmodal",
+      "community": 72,
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "eventdetailmodal()"
+    },
+    {
+      "label": "Field()",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
+      "source_location": "L20",
+      "_callable": true,
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventdetailmodal_field",
+      "community": 72,
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "field()"
     },
     {
       "label": "client()",
@@ -33781,17 +33781,6 @@
       "norm_label": "expo-build-properties"
     },
     {
-      "label": "expo-font",
-      "file_type": "code",
-      "source_file": "mobile-app/package.json",
-      "source_location": "L26",
-      "_origin": "ast",
-      "id": "mobile_app_package_dependencies_expo_font",
-      "community": 110,
-      "community_name": "dependencies",
-      "norm_label": "expo-font"
-    },
-    {
       "label": "expo-linear-gradient",
       "file_type": "code",
       "source_file": "mobile-app/package.json",
@@ -33812,6 +33801,17 @@
       "community": 110,
       "community_name": "dependencies",
       "norm_label": "expo-linking"
+    },
+    {
+      "label": "expo-splash-screen",
+      "file_type": "code",
+      "source_file": "mobile-app/package.json",
+      "source_location": "L31",
+      "_origin": "ast",
+      "id": "mobile_app_package_dependencies_expo_splash_screen",
+      "community": 110,
+      "community_name": "dependencies",
+      "norm_label": "expo-splash-screen"
     },
     {
       "label": "expo-status-bar",
@@ -33891,17 +33891,6 @@
       "norm_label": "expo-build-properties"
     },
     {
-      "label": "expo-font",
-      "file_type": "concept",
-      "source_file": "mobile-app/package.json",
-      "source_location": "L26",
-      "_origin": "ast",
-      "id": "expo_font",
-      "community": 110,
-      "community_name": "dependencies",
-      "norm_label": "expo-font"
-    },
-    {
       "label": "expo-linear-gradient",
       "file_type": "concept",
       "source_file": "mobile-app/package.json",
@@ -33922,6 +33911,17 @@
       "community": 110,
       "community_name": "dependencies",
       "norm_label": "expo-linking"
+    },
+    {
+      "label": "expo-splash-screen",
+      "file_type": "concept",
+      "source_file": "mobile-app/package.json",
+      "source_location": "L31",
+      "_origin": "ast",
+      "id": "expo_splash_screen",
+      "community": 110,
+      "community_name": "dependencies",
+      "norm_label": "expo-splash-screen"
     },
     {
       "label": "expo-status-bar",
@@ -35882,6 +35882,50 @@
       "norm_label": "conversationsidebar.tsx"
     },
     {
+      "label": "SlideRail.tsx",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/tools/presentation/[id]/_components/SlideRail.tsx",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "frontend_app_app_tools_presentation_id_components_sliderail",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "sliderail.tsx"
+    },
+    {
+      "label": "MotionListItem.tsx",
+      "file_type": "code",
+      "source_file": "frontend/components/motion/MotionListItem.tsx",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "frontend_components_motion_motionlistitem",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "motionlistitem.tsx"
+    },
+    {
+      "label": "LIST_TAGS",
+      "file_type": "code",
+      "source_file": "frontend/components/motion/MotionListItem.tsx",
+      "source_location": "L7",
+      "_origin": "ast",
+      "id": "frontend_components_motion_motionlistitem_list_tags",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "list_tags"
+    },
+    {
+      "label": "listItemIn",
+      "file_type": "code",
+      "source_file": "frontend/components/motion/presets.ts",
+      "source_location": "L427",
+      "_origin": "ast",
+      "id": "frontend_components_motion_presets_listitemin",
+      "community": 130,
+      "community_name": "AssistantWorkspace.tsx",
+      "norm_label": "listitemin"
+    },
+    {
       "label": "Surface.tsx",
       "file_type": "code",
       "source_file": "mobile-app/src/components/Surface.tsx",
@@ -37411,15 +37455,15 @@
       "norm_label": "8. unipilot-native mapping (design.md + motion.md)"
     },
     {
-      "label": "AddEventButton.tsx",
+      "label": "calendarEvents.ts",
       "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/AddEventButton.tsx",
+      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_addeventbutton",
+      "id": "frontend_app_app_calendar_components_calendarevents",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
-      "norm_label": "addeventbutton.tsx"
+      "community_name": "calendarEvents.ts",
+      "norm_label": "calendarevents.ts"
     },
     {
       "label": "calendar-ui.spec.ts",
@@ -37429,7 +37473,7 @@
       "_origin": "ast",
       "id": "frontend_tests_qa_calendar_ui_spec",
       "community": 142,
-      "community_name": "calendar-ui.spec.ts",
+      "community_name": "calendarEvents.ts",
       "norm_label": "calendar-ui.spec.ts"
     },
     {
@@ -42487,7 +42531,7 @@
       "label": "Q. References",
       "file_type": "document",
       "source_file": "mobile-app/plan.md",
-      "source_location": "L593",
+      "source_location": "L601",
       "_origin": "ast",
       "id": "mobile_app_plan_q_references",
       "community": 212,
@@ -42495,15 +42539,15 @@
       "norm_label": "q. references"
     },
     {
-      "label": "Status at a glance (updated 2026-11-16)",
+      "label": "Status at a glance (updated 2026-11-18)",
       "file_type": "document",
       "source_file": "mobile-app/plan.md",
       "source_location": "L8",
       "_origin": "ast",
-      "id": "mobile_app_plan_status_at_a_glance_updated_2026_11_16",
+      "id": "mobile_app_plan_status_at_a_glance_updated_2026_11_18",
       "community": 212,
       "community_name": "UniPilot Mobile \u2014 Plan and Phase Record",
-      "norm_label": "status at a glance (updated 2026-11-16)"
+      "norm_label": "status at a glance (updated 2026-11-18)"
     },
     {
       "label": "UniPilot Mobile \u2014 Plan and Phase Record",
@@ -42792,26 +42836,15 @@
       "norm_label": "web"
     },
     {
-      "label": "EVENT_KIND_META",
+      "label": "AddEventButton.tsx",
       "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventBlocks.tsx",
-      "source_location": "L30",
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventblocks_event_kind_meta",
-      "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "event_kind_meta"
-    },
-    {
-      "label": "EventDetailModal.tsx",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
+      "source_file": "frontend/app/(app)/calendar/_components/AddEventButton.tsx",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_eventdetailmodal",
+      "id": "frontend_app_app_calendar_components_addeventbutton",
       "community": 216,
-      "community_name": "EventDetailModal.tsx",
-      "norm_label": "eventdetailmodal.tsx"
+      "community_name": "useCalendar",
+      "norm_label": "addeventbutton.tsx"
     },
     {
       "label": "sign-in.tsx",
@@ -43782,26 +43815,26 @@
       "norm_label": "expo-secure-store"
     },
     {
-      "label": "expo-splash-screen",
+      "label": "expo-font",
       "file_type": "code",
       "source_file": "mobile-app/package.json",
-      "source_location": "L31",
+      "source_location": "L26",
       "_origin": "ast",
-      "id": "mobile_app_package_dependencies_expo_splash_screen",
+      "id": "mobile_app_package_dependencies_expo_font",
       "community": 236,
-      "community_name": "expo-splash-screen",
-      "norm_label": "expo-splash-screen"
+      "community_name": "expo-font",
+      "norm_label": "expo-font"
     },
     {
-      "label": "expo-splash-screen",
+      "label": "expo-font",
       "file_type": "concept",
       "source_file": "mobile-app/package.json",
-      "source_location": "L31",
+      "source_location": "L26",
       "_origin": "ast",
-      "id": "expo_splash_screen",
+      "id": "expo_font",
       "community": 236,
-      "community_name": "expo-splash-screen",
-      "norm_label": "expo-splash-screen"
+      "community_name": "expo-font",
+      "norm_label": "expo-font"
     },
     {
       "label": "expo-system-ui",
@@ -47487,50 +47520,6 @@
       "community": 42,
       "community_name": "TaskBoard.tsx",
       "norm_label": "tasks/page.tsx"
-    },
-    {
-      "label": "SlideRail.tsx",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/tools/presentation/[id]/_components/SlideRail.tsx",
-      "source_location": "L1",
-      "_origin": "ast",
-      "id": "frontend_app_app_tools_presentation_id_components_sliderail",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "sliderail.tsx"
-    },
-    {
-      "label": "MotionListItem.tsx",
-      "file_type": "code",
-      "source_file": "frontend/components/motion/MotionListItem.tsx",
-      "source_location": "L1",
-      "_origin": "ast",
-      "id": "frontend_components_motion_motionlistitem",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "motionlistitem.tsx"
-    },
-    {
-      "label": "LIST_TAGS",
-      "file_type": "code",
-      "source_file": "frontend/components/motion/MotionListItem.tsx",
-      "source_location": "L7",
-      "_origin": "ast",
-      "id": "frontend_components_motion_motionlistitem_list_tags",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "list_tags"
-    },
-    {
-      "label": "listItemIn",
-      "file_type": "code",
-      "source_file": "frontend/components/motion/presets.ts",
-      "source_location": "L427",
-      "_origin": "ast",
-      "id": "frontend_components_motion_presets_listitemin",
-      "community": 42,
-      "community_name": "TaskBoard.tsx",
-      "norm_label": "listitemin"
     },
     {
       "label": "auth-callback.tsx",
@@ -52318,17 +52307,6 @@
       "norm_label": "guest_routes"
     },
     {
-      "label": "calendarEvents.ts",
-      "file_type": "code",
-      "source_file": "frontend/app/(app)/calendar/_components/calendarEvents.ts",
-      "source_location": "L1",
-      "_origin": "ast",
-      "id": "frontend_app_app_calendar_components_calendarevents",
-      "community": 72,
-      "community_name": "calendarEvents.ts",
-      "norm_label": "calendarevents.ts"
-    },
-    {
       "label": "EventBlocks.tsx",
       "file_type": "code",
       "source_file": "frontend/app/(app)/calendar/_components/EventBlocks.tsx",
@@ -52336,8 +52314,19 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "eventblocks.tsx"
+    },
+    {
+      "label": "EVENT_KIND_META",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventBlocks.tsx",
+      "source_location": "L30",
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventblocks_event_kind_meta",
+      "community": 72,
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "event_kind_meta"
     },
     {
       "label": "EVENT_LEGEND_ITEMS",
@@ -52347,8 +52336,19 @@
       "_origin": "ast",
       "id": "frontend_app_app_calendar_components_eventblocks_event_legend_items",
       "community": 72,
-      "community_name": "calendarEvents.ts",
+      "community_name": "EventBlocks.tsx",
       "norm_label": "event_legend_items"
+    },
+    {
+      "label": "EventDetailModal.tsx",
+      "file_type": "code",
+      "source_file": "frontend/app/(app)/calendar/_components/EventDetailModal.tsx",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "frontend_app_app_calendar_components_eventdetailmodal",
+      "community": 72,
+      "community_name": "EventBlocks.tsx",
+      "norm_label": "eventdetailmodal.tsx"
     },
     {
       "label": "test_supabase_client.py",
@@ -179329,7 +179329,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "mobile-app/plan.md",
-      "source_location": "L593",
+      "source_location": "L601",
       "weight": 1.0,
       "_origin": "ast",
       "source": "mobile_app_plan_unipilot_mobile_plan_and_phase_record",
@@ -179344,7 +179344,7 @@
       "weight": 1.0,
       "_origin": "ast",
       "source": "mobile_app_plan_unipilot_mobile_plan_and_phase_record",
-      "target": "mobile_app_plan_status_at_a_glance_updated_2026_11_16",
+      "target": "mobile_app_plan_status_at_a_glance_updated_2026_11_18",
       "confidence_score": 1.0
     },
     {
@@ -188519,5 +188519,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "2a35f9191441c131813ea45538ba688f60dee1df"
+  "built_at_commit": "7c526e498f3c4e5bf1022ebfe580a16aca6a5f6a"
 }

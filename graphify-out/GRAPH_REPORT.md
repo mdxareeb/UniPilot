@@ -1,7 +1,7 @@
-# Graph Report - unipilot  (2026-11-17)
+# Graph Report - unipilot  (2026-11-18)
 
 ## Corpus Check
-- 571 files · ~673,204 words
+- 571 files · ~674,135 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
@@ -10,7 +10,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `2a35f919`
+- Built from commit: `7c526e49`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -87,7 +87,7 @@
 - useAssistantTurn.ts
 - redirects.ts
 - engineApi
-- calendarEvents.ts
+- EventBlocks.tsx
 - SupabaseRest
 - EditorRail.tsx
 - TableElement.tsx
@@ -157,7 +157,7 @@
 - Phase F — History / settings
 - 10. Phases A–F
 - 8. UniPilot-native mapping (DESIGN.md + MOTION.md)
-- calendar-ui.spec.ts
+- calendarEvents.ts
 - app/layout.tsx
 - tasks-ui.spec.ts
 - FUTURE DEVELOPMENT RULES
@@ -210,7 +210,7 @@
 - UniPilot mobile (`mobile-app/`)
 - AuthOptions.tsx
 - scripts
-- EventDetailModal.tsx
+- useCalendar
 - sign-in.tsx
 - onboardingActions.ts
 - D. Server-side work this milestone requires (in the existing repo)
@@ -230,7 +230,7 @@
 - @expo-google-fonts/geist-mono
 - expo-router
 - expo-secure-store
-- expo-splash-screen
+- expo-font
 - expo-system-ui
 - lucide-react-native
 - react-dom
@@ -391,8 +391,8 @@ Cohesion: 0.08
 Nodes (33): DeckDeleteModal(), DeckRow(), DecksList(), onDelete(), onDownload(), DecksListProps, deleteDescription(), slideCountLabel() (+25 more)
 
 ### Community 29 - "CalendarWorkspace.tsx"
-Cohesion: 0.14
-Nodes (23): toEventDraftLocal(), CalendarContext, CalendarContextValue, CalendarView, CalendarWorkspace(), DetailState, onOptimisticResult(), sortEvents() (+15 more)
+Cohesion: 0.16
+Nodes (21): CalendarContext, CalendarContextValue, CalendarView, CalendarWorkspace(), DetailState, onOptimisticResult(), sortEvents(), VIEWS (+13 more)
 
 ### Community 30 - "toolCatalog.ts"
 Cohesion: 0.08
@@ -443,8 +443,8 @@ Cohesion: 0.11
 Nodes (32): ASSISTANT_ACTION_STATUSES, ASSISTANT_ACTION_TYPES, AssistantAction, AssistantActionExecution, AssistantActionStatus, AssistantActionType, EventCreatePayload, formatClock() (+24 more)
 
 ### Community 42 - "TaskBoard.tsx"
-Cohesion: 0.08
-Nodes (23): QuickAddTask(), COLUMNS, FILTERS, StatusFilter, TaskBoard(), handleDrop(), handleMove(), NEXT (+15 more)
+Cohesion: 0.11
+Nodes (16): QuickAddTask(), COLUMNS, FILTERS, StatusFilter, TaskBoard(), handleDrop(), handleMove(), NEXT (+8 more)
 
 ### Community 43 - "AuthProvider.tsx"
 Cohesion: 0.12
@@ -562,9 +562,9 @@ Nodes (18): AUTHENTICATED_REDIRECT_PATHS, PROTECTED_PREFIXES, PUBLIC_AUTH_PATHS,
 Cohesion: 0.14
 Nodes (24): collectElementAssetPaths(), collectExternalAssetUrls(), createBlankEngineDeck(), deleteCreatedEngineDecks(), deleteNewEngineConversations(), discoverBrowserTemplates(), discoverChatRaceTarget(), discoverCustomTheme() (+16 more)
 
-### Community 72 - "calendarEvents.ts"
-Cohesion: 0.13
-Nodes (15): BlockPlacement, blockShowsMetadata(), eventCoversDate(), eventDateSpan(), EventTypeChoice, minutesOf(), timedPlacement(), BlockProps (+7 more)
+### Community 72 - "EventBlocks.tsx"
+Cohesion: 0.12
+Nodes (14): blockShowsMetadata(), BlockProps, EVENT_KIND_META, EVENT_LEGEND_ITEMS, eventAccessibleName(), EventBlock(), EventChip(), eventKind (+6 more)
 
 ### Community 73 - "SupabaseRest"
 Cohesion: 0.17
@@ -716,11 +716,11 @@ Nodes (13): 7.0 Stack and plumbing (reused — nothing new is introduced), 7.10 
 
 ### Community 110 - "dependencies"
 Cohesion: 0.10
-Nodes (21): expo, expo-blur, expo-build-properties, expo-font, expo-linear-gradient, expo-linking, expo-status-bar, expo-web-browser (+13 more)
+Nodes (21): expo, expo-blur, expo-build-properties, expo-linear-gradient, expo-linking, expo-splash-screen, expo-status-bar, expo-web-browser (+13 more)
 
 ### Community 111 - "eventValues.ts"
-Cohesion: 0.15
-Nodes (20): EVENT_DESCRIPTION_MAX_LENGTH, EVENT_LOCATION_MAX_LENGTH, EVENT_TITLE_MAX_LENGTH, EVENT_TYPE_LABELS, EVENT_TYPE_OPTIONS, EVENT_TYPES, EventDraft, EventRow (+12 more)
+Cohesion: 0.14
+Nodes (21): EVENT_DESCRIPTION_MAX_LENGTH, EVENT_LOCATION_MAX_LENGTH, EVENT_TITLE_MAX_LENGTH, EVENT_TYPE_LABELS, EVENT_TYPE_OPTIONS, EVENT_TYPES, EventDraft, eventItemFromLocal() (+13 more)
 
 ### Community 112 - "WhatsApp integration service"
 Cohesion: 0.15
@@ -795,8 +795,8 @@ Cohesion: 0.25
 Nodes (8): 5.1 Matrix, 5.2 Generation/setup detail (Phase A scope), 5.3 Outline (recorded, deferred), 5.4 Editor operations inventory (Phases B–D scope), 5.5 Templates detail, 5.6 History / settings / admin detail, 5.7 Smart mode, 5. Presenton UI inventory — screen/feature matrix
 
 ### Community 130 - "AssistantWorkspace.tsx"
-Cohesion: 0.16
-Nodes (6): AssistantWorkspaceProps, ConversationBodyProps, ConversationPanelHeader(), ConversationSidebar(), ConversationSidebarProps, ConversationItem
+Cohesion: 0.11
+Nodes (13): AssistantWorkspaceProps, ConversationBodyProps, ConversationPanelHeader(), ConversationSidebar(), ConversationSidebarProps, SlideRail(), SlideRailProps, LIST_TAGS (+5 more)
 
 ### Community 131 - "ThemeProvider.tsx"
 Cohesion: 0.21
@@ -842,9 +842,9 @@ Nodes (7): 10. Phases A–F, A. Generate/setup + result, B. Deck viewer, C. Core
 Cohesion: 0.29
 Nodes (7): 8.1 Routes and shell, 8.2 Component mapping, 8.3 Motion mapping, 8.4 Prohibitions honoured, 8.5 Accessibility, 8.6 Branding (chrome is UniPilot's; deck content is the deck's), 8. UniPilot-native mapping (DESIGN.md + MOTION.md)
 
-### Community 142 - "calendar-ui.spec.ts"
+### Community 142 - "calendarEvents.ts"
 Cohesion: 0.14
-Nodes (6): AddEventButton(), eventFormValues, useCalendar(), EventDeleteBody(), EventFormFields(), timed()
+Nodes (11): BlockPlacement, eventCoversDate(), eventDateSpan(), eventFormValues, EventTypeChoice, minutesOf(), timedPlacement(), toEventDraftLocal() (+3 more)
 
 ### Community 143 - "app/layout.tsx"
 Cohesion: 0.33
@@ -978,9 +978,9 @@ Nodes (7): AuthOptionsProps, FaqAccordion(), FaqAccordionProps, FaqItem, Collaps
 Cohesion: 0.22
 Nodes (9): scripts, android, build:preview, ios, lint, start, test, typecheck (+1 more)
 
-### Community 216 - "EventDetailModal.tsx"
-Cohesion: 0.29
-Nodes (6): EVENT_KIND_META, eventKind, DetailStatus, EventDetailModal(), EventDetailModalProps, EventItem
+### Community 216 - "useCalendar"
+Cohesion: 0.50
+Nodes (3): AddEventButton(), useCalendar(), EventDeleteBody()
 
 ### Community 217 - "sign-in.tsx"
 Cohesion: 0.32
@@ -1032,7 +1032,7 @@ _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `Database` connect `createClient` to `redirects.ts`, `taskValues.ts`, `supabase.ts`, `eventValues.ts`, `integrationValues.ts`, `schema-contract.ts`, `presentationValues.ts`, `assistantActionLog.ts`, `documents.ts`, `onboarding.ts`?**
   _High betweenness centrality (0.021) - this node is a cross-community bridge._
-- **Why does `Button()` connect `ui/Button.tsx` to `motionIndex`, `AssistantWorkspace.tsx`, `DeckEditor.tsx`, `calendar-ui.spec.ts`, `(app)/layout.tsx`, `integrationValues.ts`, `ChartControls.tsx`, `GenerateHero.tsx`, `PresentationWorkspace.tsx`, `MotionRevealGroup.tsx`, `integrations.ts`, `ChatPanel.tsx`, `TaskBoard.tsx`, `ProPlanCard.tsx`, `tableOps.ts`, `components/motion/presets.ts`, `EditorRail.tsx`, `assistantValues.ts`, `AuthOptions.tsx`, `EventDetailModal.tsx`, `documents/page.tsx`, `specimen/page.tsx`, `infographicOps.ts`, `ImageControls.tsx`, `requireOnboardedUser`?**
+- **Why does `Button()` connect `ui/Button.tsx` to `motionIndex`, `AssistantWorkspace.tsx`, `DeckEditor.tsx`, `(app)/layout.tsx`, `integrationValues.ts`, `ChartControls.tsx`, `GenerateHero.tsx`, `PresentationWorkspace.tsx`, `MotionRevealGroup.tsx`, `integrations.ts`, `ChatPanel.tsx`, `TaskBoard.tsx`, `ProPlanCard.tsx`, `tableOps.ts`, `EventBlocks.tsx`, `components/motion/presets.ts`, `EditorRail.tsx`, `assistantValues.ts`, `AuthOptions.tsx`, `useCalendar`, `documents/page.tsx`, `specimen/page.tsx`, `infographicOps.ts`, `ImageControls.tsx`, `requireOnboardedUser`?**
   _High betweenness centrality (0.019) - this node is a cross-community bridge._
 - **Why does `createClient()` connect `createClient` to `motionIndex`, `assistant.ts`, `assets.ts`, `GlobalSearch.tsx`, `integrations.ts`, `requestPasswordReset`, `edit/page.tsx`, `gate.ts`, `getTrustedSiteOrigin`, `actions.ts`, `(app)/layout.tsx`, `calendar/page.tsx`, `onboardingActions.ts`, `assistantActionLog.ts`, `documents.ts`, `onboarding.ts`?**
   _High betweenness centrality (0.019) - this node is a cross-community bridge._
