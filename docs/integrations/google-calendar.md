@@ -164,9 +164,10 @@ exported event carries `extendedProperties.private.unipilotSource`.
 
 ## Automated verification
 
-- `npm run test:gcal` — 11 mocked-HTTP worker tests: config gate, token refresh,
+- `npm run test:gcal` — 12 mocked-HTTP worker tests: config gate, token refresh,
   revoked vs retryable errors, `410` handling, cancelled-event deletion,
-  primary-ON/secondary-OFF upsert, export insert/patch and loop guards, run
+  same-event re-sync (unique-key upsert, no duplicate), primary-ON/secondary-OFF
+  upsert, export insert/patch, undated tasks staying local, loop guards, run
   row `mode='sync'`, heartbeat-started.
 - `npm run mobile:typecheck`, `mobile:lint`, `mobile:test` — 181 Jest tests,
   including the snapshot parser, state→controls table, API client (Bearer
