@@ -3,7 +3,7 @@ import { View } from "react-native";
 
 import { AppText } from "@/components/AppText";
 import { Badge } from "@/components/Badge";
-import { Button } from "@/components/Button";
+import { AppButton } from "@/components/ui/AppButton";
 import { Divider } from "@/components/Divider";
 import { Notice } from "@/components/Notice";
 import { Surface } from "@/components/Surface";
@@ -81,16 +81,16 @@ export function ReviewCard({ items, onDecide }: ReviewCardProps) {
                         Dismiss this for good? It won&apos;t be suggested again.
                       </AppText>
                       <View style={{ flexDirection: "row", gap: theme.spacing.sm }}>
-                        <Button
+                        <AppButton
                           label="Dismiss"
                           variant="destructive"
                           size="sm"
                           disabled={busy}
                           onPress={() => void decide(item.id, "reject")}
                         />
-                        <Button
+                        <AppButton
                           label="Keep"
-                          variant="outline"
+                          variant="secondary"
                           size="sm"
                           disabled={busy}
                           onPress={() => setConfirmingId(null)}
@@ -99,16 +99,16 @@ export function ReviewCard({ items, onDecide }: ReviewCardProps) {
                     </View>
                   ) : (
                     <View style={{ flexDirection: "row", gap: theme.spacing.sm }}>
-                      <Button
+                      <AppButton
                         label={busy ? "Adding…" : "Add"}
                         size="sm"
                         disabled={busy}
                         accessibilityLabel={`Add ${item.title}`}
                         onPress={() => void decide(item.id, "confirm")}
                       />
-                      <Button
+                      <AppButton
                         label="Dismiss"
-                        variant="outline"
+                        variant="secondary"
                         size="sm"
                         disabled={busy}
                         accessibilityLabel={`Dismiss ${item.title}`}

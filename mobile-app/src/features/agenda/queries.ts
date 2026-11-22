@@ -20,7 +20,7 @@ export async function fetchTasks(): Promise<QueryResult<TaskRowInput>> {
   const { data, error } = await supabase
     .from("tasks")
     .select(
-      "id, title, status, due_date, priority, task_type, source, source_message_id, subject:subjects(name, color_tag)",
+      "id, title, status, due_date, priority, task_type, source, source_message_id, description, confidence_score, subject_id, subject:subjects(id, name, color_tag)",
     )
     .order("due_date", { ascending: true, nullsFirst: false })
     .limit(TASK_LIMIT);
@@ -34,7 +34,7 @@ export async function fetchEvents(now: number): Promise<QueryResult<EventRowInpu
   const { data, error } = await supabase
     .from("events")
     .select(
-      "id, title, start_at, end_at, all_day, type, location, source, source_message_id, subject:subjects(name, color_tag)",
+      "id, title, start_at, end_at, all_day, type, location, source, source_message_id, description, confidence_score, subject:subjects(id, name, color_tag)",
     )
     .gte("start_at", since)
     .order("start_at", { ascending: true })

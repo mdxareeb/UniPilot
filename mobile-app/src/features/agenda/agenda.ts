@@ -6,9 +6,12 @@
  */
 /** A subject joined onto a row; `color_tag` is an optional UI slug, not a hue. */
 export type AgendaSubject = {
+  id?: string | null;
   name: string;
   color_tag?: string | null;
 };
+
+export type DueState = "none" | "overdue" | "today" | "soon" | "later";
 
 export type TaskRowInput = {
   id: string;
@@ -20,6 +23,9 @@ export type TaskRowInput = {
   source: string;
   /** The captured WhatsApp message this row came from; null for manual rows. */
   source_message_id: string | null;
+  description?: string | null;
+  confidence_score?: number | null;
+  subject_id?: string | null;
   subject: AgendaSubject | null;
 };
 
@@ -30,6 +36,16 @@ export type TaskListItem = {
   statusLabel: string;
   /** "Wed, Sep 2", or null when the task has no due date. */
   dueLabel: string | null;
+  /** "Wed, Sep 2 · 11:59 PM", or null. */
+  dueTimestampLabel: string | null;
+  /** Machine due instant, used by the calendar and the detail sheet. */
+  dueIso: string | null;
+  dueState: DueState;
+  /** "Overdue" / "Due today" / "Due soon", or null. */
+  dueBadge: string | null;
+  description: string | null;
+  confidence: number | null;
+  subjectId: string | null;
   subjectName: string | null;
   /** The subject's optional tag slug; null renders the name alone. */
   subjectColorTag: string | null;
@@ -49,6 +65,8 @@ export type EventRowInput = {
   source: string;
   /** The captured WhatsApp message this row came from; null for manual rows. */
   source_message_id: string | null;
+  description?: string | null;
+  confidence_score?: number | null;
   subject: AgendaSubject | null;
 };
 
@@ -67,6 +85,8 @@ export type EventListItem = {
   /** The subject's optional tag slug; null renders the name alone. */
   subjectColorTag: string | null;
   sourceMessageId: string | null;
+  description: string | null;
+  confidence: number | null;
   fromWhatsApp: boolean;
 };
 
@@ -139,13 +159,50 @@ export function dayKeyOf(instantIso: string, timeZone: string): string {
   return `${pick("year")}-${pick("month")}-${pick("day")}`;
 }
 
-export function toTaskItem(row: TaskRowInput, timeZone: string): TaskListItem {
+export function toTaskItem(
+  row: TaskRowInput,
+  timeZone: string,
+  now: number = Date.now(),
+): TaskListItem {
+  const due = row.due_date ? Date.parse(row.due_date) : null;
+  const todayKey = dayKeyOf(new Date(now).toISOString(), timeZone);
+  const dueKey = row.due_date ? dayKeyOf(row.due_date, timeZone) : null;
+
+  let dueState: DueState = "none";
+  let dueBadge: string | null = null;
+  if (due !== null && row.status !== "done") {
+    if (due < now) {
+      dueState = "overdue";
+      dueBadge = "Overdue";
+    } else if (dueKey === todayKey) {
+      dueState = "today";
+      dueBadge = "Due today";
+    } else if (due - now <= 24 * 60 * 60 * 1000) {
+      dueState = "soon";
+      dueBadge = "Due soon";
+    } else {
+      dueState = "later";
+    }
+  }
+
   return {
     id: row.id,
     title: row.title,
     done: row.status === "done",
     statusLabel: STATUS_LABELS[row.status] ?? row.status,
     dueLabel: row.due_date ? formatDay(row.due_date, timeZone) : null,
+    dueTimestampLabel: row.due_date
+      ? `${formatDay(row.due_date, timeZone)} · ${formatTime(row.due_date, timeZone)}`
+      : null,
+    dueIso: row.due_date,
+    dueState,
+    dueBadge,
+    description:
+      row.description !== undefined && row.description !== null && row.description.trim() !== ""
+        ? row.description.trim()
+        : null,
+    confidence: row.confidence_score ?? null,
+    subjectId: row.subject_id ?? row.subject?.id ?? null,
     subjectName: row.subject?.name ?? null,
     subjectColorTag: row.subject?.color_tag ?? null,
     sourceMessageId: row.source_message_id,
@@ -186,6 +243,11 @@ export function toEventItem(row: EventRowInput, timeZone: string): EventListItem
     subjectName: row.subject?.name ?? null,
     subjectColorTag: row.subject?.color_tag ?? null,
     sourceMessageId: row.source_message_id,
+    description:
+      row.description !== undefined && row.description !== null && row.description.trim() !== ""
+        ? row.description.trim()
+        : null,
+    confidence: row.confidence_score ?? null,
     fromWhatsApp: row.source === "whatsapp_group",
   };
 }

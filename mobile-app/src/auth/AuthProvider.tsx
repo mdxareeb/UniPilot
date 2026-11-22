@@ -19,11 +19,23 @@ import {
   type OAuthResult,
 } from "./oauth";
 
-/** The owner-scoped profile projection the app renders (M2a). */
+/** The owner-scoped profile projection the app renders. */
 export type ProfileItem = {
   fullName: string | null;
+  firstName: string | null;
+  lastName: string | null;
   timezone: string;
   onboardingComplete: boolean;
+  institution: string | null;
+  courseProgram: string | null;
+  academicYear: number | null;
+  semester: number | null;
+};
+
+export type ProfileEditFields = {
+  firstName: string | null;
+  lastName: string | null;
+  timezone: string;
 };
 
 export type AuthStatus = "loading" | "unconfigured" | "signed_out" | "signed_in";
@@ -40,6 +52,8 @@ type AuthContextValue = {
   completeAuthCallback: (url: string) => Promise<OAuthResult>;
   signOut: () => Promise<{ error: string | null }>;
   refreshProfile: () => Promise<void>;
+  /** Owner-only profile update (name + timezone); RLS is the authority. */
+  saveProfile: (fields: ProfileEditFields) => Promise<{ error: string | null }>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -70,7 +84,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfileError(null);
     const { data, error } = await supabase
       .from("profiles")
-      .select("first_name, last_name, timezone, onboarding_completed_at")
+      .select(
+        "first_name, last_name, timezone, onboarding_completed_at, institution, course_program, academic_year, semester",
+      )
       .eq("id", nextUser.id)
       .maybeSingle();
 
@@ -91,8 +107,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setProfile({
       fullName: fullName === "" ? null : fullName,
+      firstName: data.first_name,
+      lastName: data.last_name,
       timezone: data.timezone ?? "UTC",
       onboardingComplete: data.onboarding_completed_at !== null,
+      institution: data.institution,
+      courseProgram: data.course_program,
+      academicYear: data.academic_year,
+      semester: data.semester,
     });
   }, []);
 
@@ -169,6 +191,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await readProfile(user);
   }, [readProfile, user]);
 
+  const saveProfile = useCallback(
+    async (fields: ProfileEditFields): Promise<{ error: string | null }> => {
+      if (supabase === null || user === null) {
+        return { error: AUTH_COPY.UNCONFIGURED };
+      }
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          first_name: fields.firstName,
+          last_name: fields.lastName,
+          timezone: fields.timezone,
+        })
+        .eq("id", user.id);
+      if (error) {
+        return { error: "Couldn't save your profile. Try again." };
+      }
+      await readProfile(user);
+      return { error: null };
+    },
+    [readProfile, user],
+  );
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
@@ -180,6 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       completeAuthCallback,
       signOut,
       refreshProfile,
+      saveProfile,
     }),
     [
       status,
@@ -191,6 +236,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       completeAuthCallback,
       signOut,
       refreshProfile,
+      saveProfile,
     ],
   );
 

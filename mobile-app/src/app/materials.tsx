@@ -5,7 +5,7 @@ import { FileText } from "lucide-react-native";
 import { useAuth } from "@/auth/AuthProvider";
 import { AppText } from "@/components/AppText";
 import { Badge } from "@/components/Badge";
-import { Button } from "@/components/Button";
+import { AppButton } from "@/components/ui/AppButton";
 import { EmptyState } from "@/components/EmptyState";
 import { Notice } from "@/components/Notice";
 import { PageHeading } from "@/components/PageHeading";
@@ -79,9 +79,9 @@ export default function MaterialsScreen() {
       {error !== null ? (
         <MotionEnter index={1}>
           <Notice tone="error">{error}</Notice>
-          <Button
+          <AppButton
             label="Try again"
-            variant="outline"
+            variant="secondary"
             onPress={() => void reload()}
             style={{ alignSelf: "stretch", marginTop: theme.spacing.sm }}
           />
@@ -111,19 +111,19 @@ export default function MaterialsScreen() {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={{ gap: theme.spacing.sm }}
               >
-                <Button
+                <AppButton
                   label={`All · ${items.length}`}
                   size="sm"
-                  variant={activeId === null ? "primary" : "outline"}
+                  variant={activeId === null ? "primary" : "secondary"}
                   onPress={() => setSubjectId(null)}
                   accessibilityLabel="Show all course materials"
                 />
                 {filters.map((filter) => (
-                  <Button
+                  <AppButton
                     key={filter.id}
                     label={`${filter.name} · ${filter.count}`}
                     size="sm"
-                    variant={activeId === filter.id ? "primary" : "outline"}
+                    variant={activeId === filter.id ? "primary" : "secondary"}
                     onPress={() => setSubjectId(filter.id)}
                     accessibilityLabel={`Show files for ${filter.name}`}
                   />
@@ -205,10 +205,10 @@ export default function MaterialsScreen() {
                   ) : null}
 
                   {item.canOpen ? (
-                    <Button
+                    <AppButton
                       label={openingId === item.id ? "Opening…" : "Open file"}
                       size="sm"
-                      variant="outline"
+                      variant="secondary"
                       disabled={openingId !== null}
                       onPress={() => void onOpen(item)}
                       accessibilityLabel={`Open ${item.name}`}
@@ -224,7 +224,7 @@ export default function MaterialsScreen() {
             </View>
           </MotionEnter>
 
-          <Button
+          <AppButton
             label={loading ? "Refreshing…" : "Refresh"}
             variant="ghost"
             disabled={loading}

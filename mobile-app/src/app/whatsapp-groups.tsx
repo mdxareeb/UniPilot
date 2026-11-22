@@ -5,7 +5,7 @@ import { ChevronLeft } from "lucide-react-native";
 
 import { AppText } from "@/components/AppText";
 import { Badge } from "@/components/Badge";
-import { Button } from "@/components/Button";
+import { AppButton } from "@/components/ui/AppButton";
 import { Notice } from "@/components/Notice";
 import { PageHeading } from "@/components/PageHeading";
 import { Screen } from "@/components/Screen";
@@ -86,9 +86,9 @@ export default function WhatsAppGroupsScreen() {
           {sync.loadError !== null ? (
             <View style={{ gap: theme.spacing.sm }}>
               <Notice tone="error">{sync.loadError}</Notice>
-              <Button
+              <AppButton
                 label="Try again"
-                variant="outline"
+                variant="secondary"
                 onPress={() => void sync.refresh()}
                 style={{ alignSelf: "stretch" }}
               />
@@ -126,16 +126,16 @@ export default function WhatsAppGroupsScreen() {
                         : "Cancel this link?"}
                     </AppText>
                     <View style={{ flexDirection: "row", gap: theme.spacing.sm }}>
-                      <Button
+                      <AppButton
                         label={disconnectBusy ? "Working…" : view.disconnectLabel}
                         variant="destructive"
                         size="sm"
                         disabled={disconnectBusy}
                         onPress={() => void onDisconnect()}
                       />
-                      <Button
+                      <AppButton
                         label="Keep"
-                        variant="outline"
+                        variant="secondary"
                         size="sm"
                         disabled={disconnectBusy}
                         onPress={() => setConfirmingDisconnect(false)}
@@ -143,9 +143,9 @@ export default function WhatsAppGroupsScreen() {
                     </View>
                   </View>
                 ) : (
-                  <Button
+                  <AppButton
                     label={view.disconnectLabel}
-                    variant="outline"
+                    variant="secondary"
                     onPress={() => setConfirmingDisconnect(true)}
                     style={{ alignSelf: "stretch" }}
                   />

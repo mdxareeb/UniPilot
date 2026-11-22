@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { View } from "react-native";
 
 import { AppText } from "@/components/AppText";
-import { Button } from "@/components/Button";
+import { AppButton } from "@/components/ui/AppButton";
 import { Input } from "@/components/Input";
 import { Notice } from "@/components/Notice";
 import { useTheme } from "@/theme/ThemeProvider";
@@ -66,7 +66,7 @@ export function PhoneLinkForm({ onSubmit, lastError }: PhoneLinkFormProps) {
       <AppText variant="mono" color={theme.colors.mutedForeground}>
         Include the country code. Spaces, dashes and a leading + are fine.
       </AppText>
-      <Button
+      <AppButton
         label={busy ? "Requesting…" : "Get pairing code"}
         onPress={() => void submit()}
         disabled={busy}

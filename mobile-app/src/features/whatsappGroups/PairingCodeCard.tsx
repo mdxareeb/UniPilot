@@ -4,7 +4,7 @@ import * as Clipboard from "expo-clipboard";
 import { Check, Copy } from "lucide-react-native";
 
 import { AppText } from "@/components/AppText";
-import { Button } from "@/components/Button";
+import { AppButton } from "@/components/ui/AppButton";
 import { Notice } from "@/components/Notice";
 import { Surface } from "@/components/Surface";
 import { useTheme } from "@/theme/ThemeProvider";
@@ -98,10 +98,10 @@ export function PairingCodeCard({ pairing }: PairingCodeCardProps) {
       <AppText variant="mono" color={theme.colors.mutedForeground}>
         {expired ? "Expired" : `Expires in ${formatCountdown(left)}`}
       </AppText>
-      <Button
+      <AppButton
         label={copied ? "Copied" : "Copy Code"}
         accessibilityLabel={copied ? "Code copied" : "Copy pairing code"}
-        variant={copied ? "outline" : "primary"}
+        variant={copied ? "secondary" : "primary"}
         disabled={expired}
         onPress={() => void onCopy()}
         leading={
