@@ -150,6 +150,13 @@ The hosted project is production.
 | `20261118171254_whatsapp_group_sync_ingest.sql` | `ingest_raw_messages` (atomic, idempotent, active-groups-only batch insert that enqueues one ids-only `whatsapp.extract` job per new text message) and `enqueue_raw_message_extraction` (queues a media message once its file is stored) |
 | `20261119112803_whatsapp_group_sync_pairing_code.sql` | Mobile pairing-code link: status `code_ready`, `whatsapp_sessions.link_method` (`qr`/`pairing_code`), encrypted `phone_enc` / `pairing_code_enc` / `pairing_expires_at` on the secrets table, and the service-role-only RPCs `set/get_whatsapp_pairing_phone` (digits-only E.164, 8-15 digits, validated in SQL), `set/get_whatsapp_pairing_code` (TTL clamped 30-300 s) and `clear_whatsapp_pairing` |
 | `20261119113748_whatsapp_group_sync_pairing_status.sql` | `get_whatsapp_pairing_status(uuid, text)`: the live code AND its expiry (no row once expired; stale values are cleared). Service role only |
+| `20261122132216_google_oauth_states.sql` | Google Calendar mobile OAuth state: `google_oauth_states` (`state_hash` PK, single use, 10-minute TTL, service-only, no policies) |
+| `20261122132217_google_calendars.sql` | `google_calendars`: owner SELECT + `is_active` update only; the worker owns names, cursors and freshness; primary seeded ON by the worker |
+| `20261122132218_google_connection_sync_fields.sql` | `integration_connections.last_synced_at` / `auto_export_to_gcal` / `export_calendar_id` |
+| `20261122132220_gcal_event_provenance.sql` | `events.source` gains `google_calendar`; `events.google_event_id` + `tasks.google_event_id` (per-user partial unique); provenance triggers extended |
+| `20261122132221_integration_runs_sync_mode.sql` | `integration_runs.mode` gains `sync` (third input-check arm: neither storage path nor chat name) |
+| `20261122132245_gcal_sync_enqueue_rpc.sql` | `enqueue_gcal_sync(uuid)`: connected-row gate, one live job per user, ids-only `{ userId }` payload, service role only |
+| `qa/google-calendar-schema-check.sql` | Rolled-back SQL proof of the Google Calendar contract (RLS isolation, state table unreachable, calendar defaults, provenance/export-id locks, disconnect semantics) |
 | `qa/whatsapp-group-sync-ingest-check.sql` | Rolled-back SQL proof of the ingest RPCs (active-only, replay no-op, ids-only jobs, owner scoping, grants) |
 | `qa/whatsapp-group-sync-pairing-check.sql` | Rolled-back SQL proof of the pairing RPCs (phone sanitising and rejection, ciphertext at rest, code expiry, clear, grants) |
 | `qa/whatsapp-group-sync-rpc-check.sql` | Rolled-back SQL proof of the session RPCs (round trip, ciphertext at rest, wrong key raises, QR expiry, grants) |
