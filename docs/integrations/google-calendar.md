@@ -210,6 +210,10 @@ exported event carries `extendedProperties.private.unipilotSource`.
 - The export calendar is found by name (`UniPilot`) or by the stored id. If a
   user renames it and the stored id is lost (disconnect clears it), a new
   calendar is created on the next export.
+- All-day Google events are date-only; UniPilot stores an instant. They are
+  placed at noon UTC so the common profile zones keep the same calendar day;
+  zones beyond +12 can still show the next day. A date-only column would be
+  the structural fix.
 - Export is idempotent per row, but a Google-side deletion of an exported
   event is not detected; the next PATCH re-creates nothing and reports the
   missing event as a rejected request. A reconciliation pass is a future item.
