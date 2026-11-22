@@ -121,6 +121,7 @@ function ThemedShell() {
         <Stack.Protected guard={status === "signed_in"}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="specimen" />
+          <Stack.Screen name="whatsapp-groups" />
           <Stack.Screen name="onboarding" />
         </Stack.Protected>
         <Stack.Protected guard={status !== "signed_in"}>

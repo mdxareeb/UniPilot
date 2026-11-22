@@ -34,6 +34,7 @@ live in one**; RLS is the authority.
 | `EXPO_PUBLIC_SUPABASE_URL` | The Supabase project URL (local stack on this host: `http://127.0.0.1:54937`; a device reaches it via `adb reverse` or a LAN address) |
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | The public anon key (never the service-role key) |
 | `EXPO_PUBLIC_ALLOW_CLEARTEXT` | Dev/preview only: allow HTTP to a local server; set by the `preview` EAS profile, unset for production |
+| `EXPO_PUBLIC_API_BASE_URL` | The UniPilot web server for the WhatsApp groups screen (Bearer API). Local: `http://127.0.0.1:3000` with `adb reverse tcp:3000 tcp:3000` and cleartext on; production: the HTTPS origin. Unset, the screen says it is not connected. |
 
 ## Commands (repo root)
 

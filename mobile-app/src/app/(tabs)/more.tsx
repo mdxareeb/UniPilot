@@ -128,8 +128,14 @@ export default function MoreScreen() {
           />
           <Divider />
           <ListRow
-            title="Integrations"
-            subtitle="WhatsApp · Google Calendar · Outlook"
+            title="WhatsApp groups"
+            subtitle="Deadlines and files from your college groups"
+            onPress={() => router.push("/whatsapp-groups")}
+          />
+          <Divider />
+          <ListRow
+            title="Google Calendar · Outlook"
+            subtitle="Calendar integrations"
             value="Not connected yet"
             disabled
           />

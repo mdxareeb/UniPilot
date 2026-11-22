@@ -1,0 +1,43 @@
+import { supabase } from "@/lib/supabase";
+
+import type { EventRowInput, TaskRowInput } from "./agenda";
+
+/**
+ * The student's own rows, read straight from Supabase with their session (RLS
+ * scopes every query to them). Read-only: nothing here writes. A bounded read,
+ * not pagination: the agenda shows what is coming up.
+ */
+export type QueryResult<T> = { rows: T[]; error: string | null };
+
+const TASK_LIMIT = 200;
+const EVENT_LIMIT = 200;
+/** Events from a day ago onward, so "today" never drops off early across zones. */
+const EVENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+export async function fetchTasks(): Promise<QueryResult<TaskRowInput>> {
+  if (supabase === null) return { rows: [], error: "This build isn't configured." };
+  const { data, error } = await supabase
+    .from("tasks")
+    .select(
+      "id, title, status, due_date, priority, task_type, source, subject:subjects(name)",
+    )
+    .order("due_date", { ascending: true, nullsFirst: false })
+    .limit(TASK_LIMIT);
+  if (error) return { rows: [], error: "Couldn't load your tasks. Try again." };
+  return { rows: (data ?? []) as TaskRowInput[], error: null };
+}
+
+export async function fetchEvents(now: number): Promise<QueryResult<EventRowInput>> {
+  if (supabase === null) return { rows: [], error: "This build isn't configured." };
+  const since = new Date(now - EVENT_LOOKBACK_MS).toISOString();
+  const { data, error } = await supabase
+    .from("events")
+    .select(
+      "id, title, start_at, end_at, all_day, type, location, source, subject:subjects(name)",
+    )
+    .gte("start_at", since)
+    .order("start_at", { ascending: true })
+    .limit(EVENT_LIMIT);
+  if (error) return { rows: [], error: "Couldn't load your calendar. Try again." };
+  return { rows: (data ?? []) as EventRowInput[], error: null };
+}
