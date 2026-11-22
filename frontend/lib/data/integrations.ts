@@ -255,9 +255,13 @@ export const GOOGLE_OAUTH_STATE_COOKIE = "google_oauth_state";
 /** The callback path both OAuth halves build the redirect URI from (P7.1). */
 export const GOOGLE_OAUTH_CALLBACK_PATH = "/api/integrations/google/callback";
 
-/** The Calendar scope requested at authorize time and stored with the token. */
+/** The Calendar scopes requested at authorize time and stored with the token.
+ * `calendar.events` covers event read/write on existing calendars;
+ * `calendar.calendarlist.readonly` allows `calendarList.list`; and
+ * `calendar.app.created` allows creating the dedicated UniPilot calendar
+ * (`calendars.insert`). All three travel in one consent grant. */
 export const GOOGLE_CALENDAR_SCOPE =
-  "https://www.googleapis.com/auth/calendar.events";
+  "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.app.created";
 
 /** Whether this server has the OAuth client pair (P7.1's gate). */
 export function isGoogleConfigured(): boolean {
