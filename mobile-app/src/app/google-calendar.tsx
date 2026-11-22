@@ -44,8 +44,16 @@ export default function GoogleCalendarScreen() {
       return;
     }
     // The system browser runs the consent round trip; the callback returns
-    // the app through unipilot://oauth/google.
-    await WebBrowser.openAuthSessionAsync(authorizationUrl, "unipilot://oauth/google");
+    // the app through unipilot://oauth/google. If the custom tab intercepts
+    // that URL instead of the deep link, the refresh below still settles the
+    // screen on the real server state.
+    const result = await WebBrowser.openAuthSessionAsync(
+      authorizationUrl,
+      "unipilot://oauth/google",
+    );
+    if (result.type === "success") {
+      await gcal.refresh();
+    }
   };
 
   const onSync = async () => {
