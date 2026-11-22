@@ -134,6 +134,10 @@ function connectionRow(
     last_error: null,
     qr_data_enc: null,
     qr_expires_at: null,
+    // Google Calendar sync columns (defaults for a whatsapp row).
+    last_synced_at: null,
+    auto_export_to_gcal: false,
+    export_calendar_id: null,
     created_at: "2026-09-02T09:00:00.000Z",
     updated_at: "2026-09-02T09:00:00.000Z",
     ...overrides,

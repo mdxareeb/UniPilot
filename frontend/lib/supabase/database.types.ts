@@ -247,6 +247,7 @@ export type Database = {
           created_at: string
           description: string | null
           end_at: string | null
+          google_event_id: string | null
           id: string
           location: string | null
           source: string
@@ -267,6 +268,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           end_at?: string | null
+          google_event_id?: string | null
           id?: string
           location?: string | null
           source?: string
@@ -287,6 +289,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           end_at?: string | null
+          google_event_id?: string | null
           id?: string
           location?: string | null
           source?: string
@@ -355,6 +358,78 @@ export type Database = {
           refresh_token_enc?: string
           scope?: string | null
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      google_calendars: {
+        Row: {
+          activated_at: string | null
+          created_at: string
+          google_calendar_id: string
+          id: string
+          is_active: boolean
+          last_synced_at: string | null
+          summary: string
+          sync_cursor: string | null
+          timezone: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          activated_at?: string | null
+          created_at?: string
+          google_calendar_id: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          summary?: string
+          sync_cursor?: string | null
+          timezone?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          activated_at?: string | null
+          created_at?: string
+          google_calendar_id?: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          summary?: string
+          sync_cursor?: string | null
+          timezone?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      google_oauth_states: {
+        Row: {
+          consumed_at: string | null
+          created_at: string
+          expires_at: string
+          provider: string
+          return_scheme: string
+          state_hash: string
+          user_id: string
+        }
+        Insert: {
+          consumed_at?: string | null
+          created_at?: string
+          expires_at: string
+          provider: string
+          return_scheme: string
+          state_hash: string
+          user_id: string
+        }
+        Update: {
+          consumed_at?: string | null
+          created_at?: string
+          expires_at?: string
+          provider?: string
+          return_scheme?: string
+          state_hash?: string
           user_id?: string
         }
         Relationships: []
@@ -487,11 +562,14 @@ export type Database = {
       }
       integration_connections: {
         Row: {
+          auto_export_to_gcal: boolean
           created_at: string
           date_order: string
           detect_relative_dates: boolean
+          export_calendar_id: string | null
           id: string
           last_error: string | null
+          last_synced_at: string | null
           mode: string | null
           profile_ref: string | null
           provider: string
@@ -503,11 +581,14 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          auto_export_to_gcal?: boolean
           created_at?: string
           date_order?: string
           detect_relative_dates?: boolean
+          export_calendar_id?: string | null
           id?: string
           last_error?: string | null
+          last_synced_at?: string | null
           mode?: string | null
           profile_ref?: string | null
           provider: string
@@ -519,11 +600,14 @@ export type Database = {
           user_id: string
         }
         Update: {
+          auto_export_to_gcal?: boolean
           created_at?: string
           date_order?: string
           detect_relative_dates?: boolean
+          export_calendar_id?: string | null
           id?: string
           last_error?: string | null
+          last_synced_at?: string | null
           mode?: string | null
           profile_ref?: string | null
           provider?: string
@@ -1079,6 +1163,7 @@ export type Database = {
           description: string | null
           due_date: string | null
           effort_minutes: number | null
+          google_event_id: string | null
           id: string
           priority: string | null
           source: string
@@ -1099,6 +1184,7 @@ export type Database = {
           description?: string | null
           due_date?: string | null
           effort_minutes?: number | null
+          google_event_id?: string | null
           id?: string
           priority?: string | null
           source?: string
@@ -1119,6 +1205,7 @@ export type Database = {
           description?: string | null
           due_date?: string | null
           effort_minutes?: number | null
+          google_event_id?: string | null
           id?: string
           priority?: string | null
           source?: string
@@ -1396,6 +1483,7 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: undefined
       }
+      enqueue_gcal_sync: { Args: { p_user_id: string }; Returns: boolean }
       enqueue_raw_message_extraction: {
         Args: { p_message_id: string; p_user_id: string }
         Returns: boolean

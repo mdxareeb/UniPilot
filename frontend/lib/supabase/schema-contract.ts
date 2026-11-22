@@ -163,3 +163,48 @@ export type CandidatesHaveConfidence = Assert<
 export type CandidatesHaveProposedSubject = Assert<
   HasKey<CandidateRow, "proposed_subject_name">
 >;
+
+/* Google Calendar integration: the tables and columns the OAuth flow, the
+ * gcal.sync worker and the mobile screen depend on. */
+type GcalTable = "google_oauth_states" | "google_calendars";
+
+export type GcalTablesPresent = Assert<
+  Exclude<GcalTable, keyof PublicTables> extends never ? true : false
+>;
+
+type GcalRow<T extends GcalTable> = PublicTables[T]["Row"];
+
+export type OauthStatesHaveExpires = Assert<
+  HasKey<GcalRow<"google_oauth_states">, "expires_at">
+>;
+export type OauthStatesHaveConsumed = Assert<
+  HasKey<GcalRow<"google_oauth_states">, "consumed_at">
+>;
+export type OauthStatesHaveReturnScheme = Assert<
+  HasKey<GcalRow<"google_oauth_states">, "return_scheme">
+>;
+export type GcalendarsHaveIsActive = Assert<
+  HasKey<GcalRow<"google_calendars">, "is_active">
+>;
+export type GcalendarsHaveSyncCursor = Assert<
+  HasKey<GcalRow<"google_calendars">, "sync_cursor">
+>;
+
+type ConnectionRow = PublicTables["integration_connections"]["Row"];
+export type ConnectionsHaveLastSynced = Assert<
+  HasKey<ConnectionRow, "last_synced_at">
+>;
+export type ConnectionsHaveAutoExport = Assert<
+  HasKey<ConnectionRow, "auto_export_to_gcal">
+>;
+export type ConnectionsHaveExportCalendar = Assert<
+  HasKey<ConnectionRow, "export_calendar_id">
+>;
+
+export type TasksHaveGoogleEvent = Assert<
+  HasKey<Row<"tasks">, "google_event_id">
+>;
+export type EventsHaveGoogleEvent = Assert<
+  HasKey<Row<"events">, "google_event_id">
+>;
+
