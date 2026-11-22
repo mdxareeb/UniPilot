@@ -134,6 +134,12 @@ export default function MoreScreen() {
           />
           <Divider />
           <ListRow
+            title="Course materials"
+            subtitle="Files and summaries from your groups"
+            onPress={() => router.push("/materials")}
+          />
+          <Divider />
+          <ListRow
             title="Google Calendar · Outlook"
             subtitle="Calendar integrations"
             value="Not connected yet"

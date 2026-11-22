@@ -3,60 +3,13 @@ import { View } from "react-native";
 import { AppText } from "@/components/AppText";
 import { Badge } from "@/components/Badge";
 import { Divider } from "@/components/Divider";
+import { SubjectTag } from "@/components/SubjectTag";
 import { Surface } from "@/components/Surface";
 import { useTheme } from "@/theme/ThemeProvider";
 
 import type { EventDayGroup, TaskListItem } from "./agenda";
 import { WHATSAPP_MARK } from "./agenda";
 import { SourceMessageBadge } from "./SourceMessageBadge";
-
-/**
- * Subject on a row: the name alone, or — when the subject carries a tag slug —
- * a subtle neutral dot with that slug. `color_tag` is a slug by schema design,
- * not a hue; the monochrome design system stays authoritative.
- */
-function SubjectLine({
-  name,
-  colorTag,
-}: {
-  name: string | null;
-  colorTag: string | null;
-}) {
-  const theme = useTheme();
-  if (name === null) return null;
-
-  if (colorTag === null) {
-    return (
-      <AppText variant="mono" color={theme.colors.mutedForeground}>
-        {name}
-      </AppText>
-    );
-  }
-
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: theme.spacing.xs,
-        flexWrap: "wrap",
-      }}
-    >
-      <View
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: 3,
-          backgroundColor: theme.colors.mutedForeground,
-        }}
-      />
-      <Badge>{colorTag}</Badge>
-      <AppText variant="mono" color={theme.colors.mutedForeground}>
-        {name}
-      </AppText>
-    </View>
-  );
-}
 
 function SourceMark({
   fromWhatsApp,
@@ -99,7 +52,7 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
                 .filter(Boolean)
                 .join(" · ")}
             </AppText>
-            <SubjectLine name={task.subjectName} colorTag={task.subjectColorTag} />
+            <SubjectTag name={task.subjectName} colorTag={task.subjectColorTag} />
             <SourceMark
               fromWhatsApp={task.fromWhatsApp}
               sourceMessageId={task.sourceMessageId}
@@ -137,7 +90,7 @@ export function EventAgenda({ days }: { days: EventDayGroup[] }) {
                       .filter(Boolean)
                       .join(" · ")}
                   </AppText>
-                  <SubjectLine
+                  <SubjectTag
                     name={event.subjectName}
                     colorTag={event.subjectColorTag}
                   />
