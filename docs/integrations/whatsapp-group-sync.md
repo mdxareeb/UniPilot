@@ -32,7 +32,7 @@ commit.
 | 5 | Group discovery + toggles | done | bridge unit + live tests, spec |
 | 6 | Message ingestion (`ingest_raw_messages`) | done | `qa/whatsapp-group-sync-ingest-check.sql`, bridge tests |
 | 7 | Media capture (hash, dedupe, Storage, `documents`) | done | bridge tests, live store test |
-| 8 | Extraction core (Gemini client, Zod, noise, PPTX, handler) | done | `npm run test:groupsync` (123), `test:groupsync:live` |
+| 8 | Extraction core (Gemini client, Zod, noise, PPTX, handler) | done | `npm run test:groupsync` (128), `test:groupsync:live`, live Gemini 2026-11-22 |
 | 9 | Date resolver + image path | done | resolver table tests (DST, zones), image tests |
 | 10 | Subject matching + persistence + review confirm | done | worker tests, live test, spec |
 | 11 | Review queue, document card, task and event markers | done, see gaps | spec |
@@ -88,6 +88,34 @@ discovery, live messages/files); live Gemini extraction (no key was set for
 these legs, so the worker path was not exercised); and the diagnostics removal
 found earlier is already in the baseline.
 
+## Live Gemini verification (2026-11-22, host)
+
+Run against the local stack with a real key. The model is pinned in
+`backend/.env` as **`gemini-3.1-flash-lite`** (a cheap lite tier):
+`gemini-2.5-flash` is retired for new keys (404), and `gemini-2.5-flash-lite`
+and `gemini-3.8-flash-lite` are not servable to this key either.
+
+Three live drifts were found and fixed in the client/pipeline, each with tests:
+
+1. Google rejects the generated JSON Schema ("produces a constraint that has
+   too many states"). The client already retried without it; it now remembers
+   the rejection **process-wide**, so only the first job pays the 400. The
+   prompt now carries an explicit JSON example (the schema fallback previously
+   had no shape guidance), and the schema accepts a missing `relevant` (derived
+   from the items), null `topic_tags`, and capitalised enum values
+   ("Monday", "Assignment").
+2. A text message: `whatsapp.extract` succeeded, `auto=1`, and wrote a task
+   ("Assignment 5", due 2026-12-12 18:29 UTC = 23:59 IST, `source
+   whatsapp_group`, matched CS301, one `gemini_extract` usage row).
+3. A PDF: extraction wrote a real `ai_summary` and seven `topic_tags`, then
+   the queued `document.process` indexed it (`pages=1 units=1`).
+4. An exam-schedule image: vision classification passed, extraction wrote an
+   exam event (2026-12-15 04:30 UTC = 10:00 IST, Hall B, CS301,
+   `source whatsapp_group`); the image document was kept.
+
+Model note: `GEMINI_MODEL` remains an env var because Google retires names;
+re-run this check when the key or model changes.
+
 ## Remaining
 
 1. **Regression, partly done.** With the flag on: onboarding, tasks (data, UI),
@@ -108,9 +136,9 @@ found earlier is already in the baseline.
 
 ## Known gaps and risks
 
-- **Gemini is unverified live** (no key). Request/response shapes follow Google's
-  docs and are covered only by mocked-fetch tests. First real call may need a
-  tweak to the request body; `GEMINI_MODEL` must be set to a current model name.
+- **Gemini is verified live (2026-11-22)** with `gemini-3.1-flash-lite`; see
+  "Live Gemini verification" above for the model retirement and the three
+  shape fixes. Re-check with a simple call whenever the key or model changes.
 - **Real WhatsApp is unverified** (needs a spare number and test group): QR scan,
   group list, live messages, files, history at link time, reconnect. Checklist in
   `whatsapp/README.md`. Baileys is unofficial; use a throwaway number.
