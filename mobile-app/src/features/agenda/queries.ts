@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 
 import type { EventRowInput, TaskRowInput } from "./agenda";
+import type { RawMessageRowInput } from "./sourceMessage";
 
 /**
  * The student's own rows, read straight from Supabase with their session (RLS
@@ -19,7 +20,7 @@ export async function fetchTasks(): Promise<QueryResult<TaskRowInput>> {
   const { data, error } = await supabase
     .from("tasks")
     .select(
-      "id, title, status, due_date, priority, task_type, source, subject:subjects(name)",
+      "id, title, status, due_date, priority, task_type, source, source_message_id, subject:subjects(name, color_tag)",
     )
     .order("due_date", { ascending: true, nullsFirst: false })
     .limit(TASK_LIMIT);
@@ -33,11 +34,38 @@ export async function fetchEvents(now: number): Promise<QueryResult<EventRowInpu
   const { data, error } = await supabase
     .from("events")
     .select(
-      "id, title, start_at, end_at, all_day, type, location, source, subject:subjects(name)",
+      "id, title, start_at, end_at, all_day, type, location, source, source_message_id, subject:subjects(name, color_tag)",
     )
     .gte("start_at", since)
     .order("start_at", { ascending: true })
     .limit(EVENT_LIMIT);
   if (error) return { rows: [], error: "Couldn't load your calendar. Try again." };
   return { rows: (data ?? []) as EventRowInput[], error: null };
+}
+
+export type OriginalMessageResult = {
+  row: RawMessageRowInput | null;
+  error: string | null;
+};
+
+/**
+ * One captured message by immutable id, or null when it is not ours or has
+ * been purged. The owner-only RLS policy is the only guard needed: the id
+ * travels from the student's own task/event row.
+ */
+export async function fetchOriginalMessage(
+  messageId: string,
+): Promise<OriginalMessageResult> {
+  if (supabase === null) {
+    return { row: null, error: "This build isn't configured." };
+  }
+  const { data, error } = await supabase
+    .from("raw_messages")
+    .select("sender_name, raw_text, sent_at, media_type")
+    .eq("id", messageId)
+    .maybeSingle();
+  if (error) {
+    return { row: null, error: "Couldn't load the original message." };
+  }
+  return { row: (data ?? null) as RawMessageRowInput | null, error: null };
 }

@@ -16,6 +16,7 @@ const task = (over: Partial<TaskRowInput>): TaskRowInput => ({
   priority: null,
   task_type: null,
   source: "manual",
+  source_message_id: null,
   subject: null,
   ...over,
 });
@@ -29,6 +30,7 @@ const event = (over: Partial<EventRowInput>): EventRowInput => ({
   type: null,
   location: null,
   source: "manual",
+  source_message_id: null,
   subject: null,
   ...over,
 });
@@ -36,13 +38,29 @@ const event = (over: Partial<EventRowInput>): EventRowInput => ({
 describe("tasks", () => {
   it("marks WhatsApp tasks and shows the course", () => {
     const item = toTaskItem(
-      task({ source: "whatsapp_group", subject: { name: "Databases" }, task_type: "assignment" }),
+      task({
+        source: "whatsapp_group",
+        source_message_id: "m-1",
+        subject: { name: "Databases" },
+        task_type: "assignment",
+      }),
       "UTC",
     );
     expect(item.fromWhatsApp).toBe(true);
     expect(item.subjectName).toBe("Databases");
     expect(item.typeLabel).toBe("Assignment");
+    expect(item.sourceMessageId).toBe("m-1");
     expect(toTaskItem(task({}), "UTC").fromWhatsApp).toBe(false);
+  });
+
+  it("carries the subject tag slug and falls back to a null tag", () => {
+    const tagged = toTaskItem(
+      task({ subject: { name: "Linear Algebra", color_tag: "MATH201" } }),
+      "UTC",
+    );
+    expect(tagged.subjectColorTag).toBe("MATH201");
+    expect(toTaskItem(task({ subject: { name: "Databases" } }), "UTC").subjectColorTag).toBeNull();
+    expect(toTaskItem(task({ subject: { name: "Databases", color_tag: null } }), "UTC").subjectColorTag).toBeNull();
   });
 
   it("formats the due date in the profile zone, never as a raw timestamp", () => {
@@ -70,10 +88,20 @@ describe("tasks", () => {
 
 describe("calendar", () => {
   it("marks WhatsApp events and labels all-day and timed ones", () => {
-    const timed = toEventItem(event({ source: "whatsapp_group", type: "exam" }), "UTC");
+    const timed = toEventItem(
+      event({
+        source: "whatsapp_group",
+        source_message_id: "m-1",
+        type: "exam",
+        subject: { name: "Physics", color_tag: "PHY101" },
+      }),
+      "UTC",
+    );
     expect(timed.fromWhatsApp).toBe(true);
     expect(timed.typeLabel).toBe("Exam");
     expect(timed.timeLabel).toBe("9:00 AM");
+    expect(timed.subjectColorTag).toBe("PHY101");
+    expect(timed.sourceMessageId).toBe("m-1");
     expect(toEventItem(event({ all_day: true }), "UTC").timeLabel).toBe("All day");
   });
 

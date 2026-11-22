@@ -4,6 +4,12 @@
  * as a raw timestamp) and carries the "From WhatsApp" provenance marker. Pure,
  * so it is testable without a device.
  */
+/** A subject joined onto a row; `color_tag` is an optional UI slug, not a hue. */
+export type AgendaSubject = {
+  name: string;
+  color_tag?: string | null;
+};
+
 export type TaskRowInput = {
   id: string;
   title: string;
@@ -12,7 +18,9 @@ export type TaskRowInput = {
   priority: string | null;
   task_type: string | null;
   source: string;
-  subject: { name: string } | null;
+  /** The captured WhatsApp message this row came from; null for manual rows. */
+  source_message_id: string | null;
+  subject: AgendaSubject | null;
 };
 
 export type TaskListItem = {
@@ -23,6 +31,9 @@ export type TaskListItem = {
   /** "Wed, Sep 2", or null when the task has no due date. */
   dueLabel: string | null;
   subjectName: string | null;
+  /** The subject's optional tag slug; null renders the name alone. */
+  subjectColorTag: string | null;
+  sourceMessageId: string | null;
   fromWhatsApp: boolean;
   typeLabel: string | null;
 };
@@ -36,7 +47,9 @@ export type EventRowInput = {
   type: string | null;
   location: string | null;
   source: string;
-  subject: { name: string } | null;
+  /** The captured WhatsApp message this row came from; null for manual rows. */
+  source_message_id: string | null;
+  subject: AgendaSubject | null;
 };
 
 export type EventListItem = {
@@ -51,6 +64,9 @@ export type EventListItem = {
   typeLabel: string | null;
   location: string | null;
   subjectName: string | null;
+  /** The subject's optional tag slug; null renders the name alone. */
+  subjectColorTag: string | null;
+  sourceMessageId: string | null;
   fromWhatsApp: boolean;
 };
 
@@ -76,6 +92,9 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   class: "Class",
   deadline: "Deadline",
 };
+
+/** Where an item came from; shown only for WhatsApp group sync. */
+export const WHATSAPP_MARK = "From WhatsApp";
 
 /** A usable IANA zone, or UTC when the stored one is missing or invalid. */
 export function safeZone(timeZone: string | null | undefined): string {
@@ -128,6 +147,8 @@ export function toTaskItem(row: TaskRowInput, timeZone: string): TaskListItem {
     statusLabel: STATUS_LABELS[row.status] ?? row.status,
     dueLabel: row.due_date ? formatDay(row.due_date, timeZone) : null,
     subjectName: row.subject?.name ?? null,
+    subjectColorTag: row.subject?.color_tag ?? null,
+    sourceMessageId: row.source_message_id,
     fromWhatsApp: row.source === "whatsapp_group",
     typeLabel: row.task_type ? (TASK_TYPE_LABELS[row.task_type] ?? null) : null,
   };
@@ -163,6 +184,8 @@ export function toEventItem(row: EventRowInput, timeZone: string): EventListItem
     typeLabel: row.type ? (EVENT_TYPE_LABELS[row.type] ?? null) : null,
     location: row.location && row.location.trim() !== "" ? row.location : null,
     subjectName: row.subject?.name ?? null,
+    subjectColorTag: row.subject?.color_tag ?? null,
+    sourceMessageId: row.source_message_id,
     fromWhatsApp: row.source === "whatsapp_group",
   };
 }

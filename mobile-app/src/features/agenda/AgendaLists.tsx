@@ -7,9 +7,68 @@ import { Surface } from "@/components/Surface";
 import { useTheme } from "@/theme/ThemeProvider";
 
 import type { EventDayGroup, TaskListItem } from "./agenda";
+import { WHATSAPP_MARK } from "./agenda";
+import { SourceMessageBadge } from "./SourceMessageBadge";
 
-/** Where an item came from; shown only for WhatsApp group sync. */
-export const WHATSAPP_MARK = "From WhatsApp";
+/**
+ * Subject on a row: the name alone, or — when the subject carries a tag slug —
+ * a subtle neutral dot with that slug. `color_tag` is a slug by schema design,
+ * not a hue; the monochrome design system stays authoritative.
+ */
+function SubjectLine({
+  name,
+  colorTag,
+}: {
+  name: string | null;
+  colorTag: string | null;
+}) {
+  const theme = useTheme();
+  if (name === null) return null;
+
+  if (colorTag === null) {
+    return (
+      <AppText variant="mono" color={theme.colors.mutedForeground}>
+        {name}
+      </AppText>
+    );
+  }
+
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: theme.spacing.xs,
+        flexWrap: "wrap",
+      }}
+    >
+      <View
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          backgroundColor: theme.colors.mutedForeground,
+        }}
+      />
+      <Badge>{colorTag}</Badge>
+      <AppText variant="mono" color={theme.colors.mutedForeground}>
+        {name}
+      </AppText>
+    </View>
+  );
+}
+
+function SourceMark({
+  fromWhatsApp,
+  sourceMessageId,
+}: {
+  fromWhatsApp: boolean;
+  sourceMessageId: string | null;
+}) {
+  if (!fromWhatsApp) return null;
+  if (sourceMessageId === null) return <Badge>{WHATSAPP_MARK}</Badge>;
+  return <SourceMessageBadge messageId={sourceMessageId} />;
+}
 
 export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
   const theme = useTheme();
@@ -24,19 +83,7 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
       {tasks.map((task, index) => (
         <View key={task.id}>
           {index > 0 ? <Divider /> : null}
-          <View
-            style={{ padding: theme.spacing.lg, gap: theme.spacing.xs }}
-            accessible
-            accessibilityLabel={[
-              task.title,
-              task.done ? "done" : task.statusLabel,
-              task.dueLabel ? `due ${task.dueLabel}` : "no due date",
-              task.subjectName ?? "",
-              task.fromWhatsApp ? WHATSAPP_MARK : "",
-            ]
-              .filter(Boolean)
-              .join(", ")}
-          >
+          <View style={{ padding: theme.spacing.lg, gap: theme.spacing.xs }}>
             <AppText
               variant="bodyMd"
               color={task.done ? theme.colors.mutedForeground : undefined}
@@ -47,13 +94,16 @@ export function TaskList({ tasks }: { tasks: TaskListItem[] }) {
             <AppText variant="mono" color={theme.colors.mutedForeground}>
               {[
                 task.dueLabel ? `Due ${task.dueLabel}` : "No due date",
-                task.subjectName,
                 task.typeLabel,
               ]
                 .filter(Boolean)
                 .join(" · ")}
             </AppText>
-            {task.fromWhatsApp ? <Badge>{WHATSAPP_MARK}</Badge> : null}
+            <SubjectLine name={task.subjectName} colorTag={task.subjectColorTag} />
+            <SourceMark
+              fromWhatsApp={task.fromWhatsApp}
+              sourceMessageId={task.sourceMessageId}
+            />
           </View>
         </View>
       ))}
@@ -80,26 +130,21 @@ export function EventAgenda({ days }: { days: EventDayGroup[] }) {
             {day.events.map((event, index) => (
               <View key={event.id}>
                 {index > 0 ? <Divider /> : null}
-                <View
-                  style={{ padding: theme.spacing.lg, gap: theme.spacing.xs }}
-                  accessible
-                  accessibilityLabel={[
-                    event.title,
-                    event.timeLabel,
-                    event.typeLabel ?? "",
-                    event.subjectName ?? "",
-                    event.fromWhatsApp ? WHATSAPP_MARK : "",
-                  ]
-                    .filter(Boolean)
-                    .join(", ")}
-                >
+                <View style={{ padding: theme.spacing.lg, gap: theme.spacing.xs }}>
                   <AppText variant="bodyMd">{event.title}</AppText>
                   <AppText variant="mono" color={theme.colors.mutedForeground}>
-                    {[event.timeLabel, event.typeLabel, event.subjectName, event.location]
+                    {[event.timeLabel, event.typeLabel, event.location]
                       .filter(Boolean)
                       .join(" · ")}
                   </AppText>
-                  {event.fromWhatsApp ? <Badge>{WHATSAPP_MARK}</Badge> : null}
+                  <SubjectLine
+                    name={event.subjectName}
+                    colorTag={event.subjectColorTag}
+                  />
+                  <SourceMark
+                    fromWhatsApp={event.fromWhatsApp}
+                    sourceMessageId={event.sourceMessageId}
+                  />
                 </View>
               </View>
             ))}
