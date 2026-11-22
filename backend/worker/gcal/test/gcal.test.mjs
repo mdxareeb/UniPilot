@@ -218,6 +218,13 @@ describe("gcalSync", () => {
     assert.ok(holiday?.is_active === false, "secondary starts OFF");
     assert.equal(primary.sync_cursor, "next-primary");
 
+    // The first run is a bounded window, not an unbounded crawl.
+    const primaryList = fetchCalls.find((call) =>
+      call.url.includes("/calendars/primary/events"),
+    );
+    assert.ok(primaryList.url.includes("timeMin="));
+    assert.ok(primaryList.url.includes("timeMax="));
+
     // The new event was imported; the cancelled one deleted the local row.
     const imported = client.state.tables.events.find(
       (row) => row.source === "google_calendar" && row.source_ref === "gevent-1",
@@ -284,5 +291,32 @@ describe("gcalSync", () => {
     const connection = client.state.tables.integration_connections[0];
     assert.equal(connection.status, "error");
     assert.equal(connection.last_error, GCAL_MESSAGES.revoked);
+    assert.equal(client.state.tables.integration_runs[0]?.status, "failed");
+    assert.equal(client.state.tables.integration_runs[0]?.mode, "sync");
+  });
+
+  it("a missing stored refresh token is the same permanent reconnect", async () => {
+    const client = createMemoryClient();
+    client.state.tables.integration_connections.push({
+      user_id: USER,
+      provider: "google",
+      status: "connected",
+      auto_export_to_gcal: false,
+      export_calendar_id: null,
+    });
+    client.state.rpcHandlers.set("get_google_credentials", () => ({
+      data: [],
+      error: null,
+    }));
+
+    await assert.rejects(
+      gcalSync({ userId: USER }, ctxOf(client, { fetchImpl: async () => failedJson(500) })),
+      (error) => error.retryable === false,
+    );
+
+    const connection = client.state.tables.integration_connections[0];
+    assert.equal(connection.status, "error");
+    assert.equal(connection.last_error, GCAL_MESSAGES.revoked);
+    assert.equal(client.state.tables.integration_runs[0]?.status, "failed");
   });
 });

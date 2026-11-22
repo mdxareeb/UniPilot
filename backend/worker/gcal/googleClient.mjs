@@ -139,12 +139,13 @@ export async function listCalendars(accessToken, fetchImpl = globalThis.fetch) {
 export async function listEvents(
   accessToken,
   calendarId,
-  { syncToken, timeMin },
+  { syncToken, timeMin, timeMax },
   fetchImpl = globalThis.fetch,
 ) {
   const params = new URLSearchParams({ maxResults: "250" });
   if (syncToken) params.set("syncToken", syncToken);
   if (!syncToken && timeMin) params.set("timeMin", timeMin);
+  if (!syncToken && timeMax) params.set("timeMax", timeMax);
   if (syncToken) {
     params.set("showDeleted", "true");
     params.set("singleEvents", "false");

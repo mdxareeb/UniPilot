@@ -142,8 +142,7 @@ export async function gcalSync(payload, ctx) {
       process.env.UNIPILOT_INTEGRATIONS_KEY ?? "",
     );
     if (!refreshToken) {
-      await repo.markConnectionError(ctx.client, userId, GCAL_MESSAGES.revoked);
-      throw permanent(GCAL_MESSAGES.revoked);
+      throw new GcalError("revoked", GCAL_MESSAGES.revoked, false);
     }
 
     const accessToken = await refreshAccessToken(config, refreshToken, ctx.fetchImpl);
@@ -168,6 +167,9 @@ export async function gcalSync(payload, ctx) {
           timeMin: firstRun
             ? new Date(Date.now() - FIRST_RUN_MIN_AGE_MS).toISOString()
             : undefined,
+          timeMax: firstRun
+            ? new Date(Date.now() + FIRST_RUN_HORIZON_MS).toISOString()
+            : undefined,
         },
         ctx.fetchImpl,
       );
@@ -190,7 +192,10 @@ export async function gcalSync(payload, ctx) {
         const full = await listEvents(
           accessToken,
           calendar.google_calendar_id,
-          { timeMin: new Date(Date.now() - FIRST_RUN_MIN_AGE_MS).toISOString() },
+          {
+            timeMin: new Date(Date.now() - FIRST_RUN_MIN_AGE_MS).toISOString(),
+            timeMax: new Date(Date.now() + FIRST_RUN_HORIZON_MS).toISOString(),
+          },
           ctx.fetchImpl,
         );
         for (const googleEvent of full.events) {
@@ -268,6 +273,9 @@ export async function gcalSync(payload, ctx) {
     if (caught instanceof GcalError) {
       if (!caught.retryable) {
         await repo.markConnectionError(ctx.client, userId, caught.message).catch(() => {});
+        // A permanent failure is part of the pass's history; a retryable one
+        // will be retried and only its final settlement is recorded.
+        await repo.recordRun(ctx.client, userId, "failed", caught.message).catch(() => {});
       }
       const error = permanent(caught.message);
       error.retryable = caught.retryable;
