@@ -22,6 +22,7 @@
  * provider bodies are never logged.
  */
 import { createGeminiClient, GeminiError, GEMINI_MESSAGES, readGeminiConfig } from "./gemini.mjs";
+import { startJobHeartbeat } from "../heartbeat.mjs";
 import { extractDocx } from "../extract/docx.mjs";
 import { extractPdf } from "../extract/pdf.mjs";
 import { extractPptx } from "../extract/pptx.mjs";
@@ -333,9 +334,16 @@ export async function whatsappExtract(payload, ctx) {
 
   const { createRepo } = await import("./repo.mjs");
   const gemini = createGeminiClient({ config: readGeminiConfig() });
-  await extractMessage(
-    { repo: createRepo(ctx.client), gemini, log: ctx.log },
-    id,
-    { attempt: ctx.attempt, maxAttempts: ctx.maxAttempts },
-  );
+  /* A slow Gemini call or a large file must never outlive the 5-minute lease;
+     the heartbeat extends it exactly like the Python and presentation jobs. */
+  const stopHeartbeat = startJobHeartbeat(ctx);
+  try {
+    await extractMessage(
+      { repo: createRepo(ctx.client), gemini, log: ctx.log },
+      id,
+      { attempt: ctx.attempt, maxAttempts: ctx.maxAttempts },
+    );
+  } finally {
+    stopHeartbeat();
+  }
 }
