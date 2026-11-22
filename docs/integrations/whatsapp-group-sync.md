@@ -27,11 +27,11 @@ commit.
 | --- | --- | --- | --- |
 | 1 | Schema migrations (7 files) | done | `db:lint` clean, types regenerated and drift-checked, `qa/whatsapp-group-sync-schema-check.sql` |
 | 2 | Encrypted session store RPCs | done | `qa/whatsapp-group-sync-rpc-check.sql` |
-| 3 | `whatsapp-bridge` workspace, read-only socket, DB auth state, session manager | done | `npm run bridge:test` (98, incl. live DB), `npm run smoke -w whatsapp-bridge` (QR path, no phone) |
+| 3 | `whatsapp-bridge` workspace, read-only socket, DB auth state, session manager | done | `npm run bridge:test` (117, incl. live DB), `npm run smoke -w whatsapp-bridge`, live pairing 2026-11-22 |
 | 4 | Link flow UI + Server Actions | done | `tests/qa/whatsapp-groups.spec.ts` |
-| 5 | Group discovery + toggles | done | bridge unit + live tests, spec |
-| 6 | Message ingestion (`ingest_raw_messages`) | done | `qa/whatsapp-group-sync-ingest-check.sql`, bridge tests |
-| 7 | Media capture (hash, dedupe, Storage, `documents`) | done | bridge tests, live store test |
+| 5 | Group discovery + toggles | done | bridge unit + live tests, spec, live: 46 groups discovered |
+| 6 | Message ingestion (`ingest_raw_messages`) | done | `qa/whatsapp-group-sync-ingest-check.sql`, bridge tests, live text + DOCX 2026-11-22 |
+| 7 | Media capture (hash, dedupe, Storage, `documents`) | done | bridge tests, live store test, live DOCX capture 2026-11-22 |
 | 8 | Extraction core (Gemini client, Zod, noise, PPTX, handler) | done | `npm run test:groupsync` (128), `test:groupsync:live`, live Gemini 2026-11-22 |
 | 9 | Date resolver + image path | done | resolver table tests (DST, zones), image tests |
 | 10 | Subject matching + persistence + review confirm | done | worker tests, live test, spec |
@@ -116,6 +116,32 @@ Three live drifts were found and fixed in the client/pipeline, each with tests:
 Model note: `GEMINI_MODEL` remains an env var because Google retires names;
 re-run this check when the key or model changes.
 
+## Live WhatsApp verification (2026-11-22, spare number)
+
+Paired from the mobile app with the 8-character code (no QR) on a
+spare/throwaway number. The first attempt ended with **408 `timedOut`** — the app
+had requested a second code, which invalidated the first, and the entered code
+was past its short WhatsApp lifetime. Code review then fixed three latent
+hazards (commit `188e1d8`): a non-standard browser tuple, credential writes that
+could race a 515 reconnect, and partial unregistered keys surviving a failed
+pair. The next attempt passed: Baileys emitted `stream:error 515`,
+`connection.update` reported `code: 515`, the runner flushed credentials and
+reconnected, then the session opened.
+
+| Check | Result |
+| --- | --- |
+| Link | pairing code; `status = connected`; **48** group rows discovered (46 in the bridge log plus 2 synthetic fixtures) |
+| Defaults / toggles | every discovered group starts OFF; "3rd SEM ISE 2025-2026" and "IPL Project" were switched on through the app |
+| Text | `Submit COA Assignment 3 by next Friday 11:59 PM` ingested live; extraction scored **0.80** (relative-date penalty), so it went to **Needs Review**; approving it created the task "COA Assignment 3" (due 2026-11-27 18:29 UTC = 23:59 IST, `source = whatsapp_group`) and the new subject "Computer Organization and Architecture" (created only on approval) |
+| File | `OS M2.docx` (66,499 bytes) captured once (`media stored: 1`); Gemini wrote a real summary and **7 topic tags**; `document.process` indexed it (`units = 1`); no matching subject (honest null) |
+| Restart | bridge stopped and restarted; reconnected from stored credentials in ~2 s with no new code and re-discovered 46 groups |
+
+Not exercised live: the web QR path; a repeat send of the same file (dedupe);
+a deliberate message in an OFF group; Disconnect/unlink from the card (the link
+was kept); phone battery/background behaviour beyond the restart check. Baileys
+logged one non-fatal `No session found to decrypt message` frame for an inactive
+group's history, which the ingestor dropped as designed.
+
 ## Remaining
 
 1. **Regression, partly done.** With the flag on: onboarding, tasks (data, UI),
@@ -139,11 +165,12 @@ re-run this check when the key or model changes.
 - **Gemini is verified live (2026-11-22)** with `gemini-3.1-flash-lite`; see
   "Live Gemini verification" above for the model retirement and the three
   shape fixes. Re-check with a simple call whenever the key or model changes.
-- **Real WhatsApp is unverified** (needs a spare number and test group): QR scan,
-  group list, live messages, files, history at link time, reconnect. Checklist in
-  `whatsapp/README.md`. Baileys is unofficial; use a throwaway number.
-- `UNIPILOT_INTEGRATIONS_KEY` must be set in `backend/.env` (it is only in
-  `frontend/.env` today) for the bridge and worker.
+- **Real WhatsApp is verified live (2026-11-22)** with a spare number:
+  pairing code, 46 discovered groups, live text extraction through review, and
+  a DOCX captured, summarised and indexed. The web QR path, repeat-send dedupe
+  and disconnect stay unexercised; see "Live WhatsApp verification".
+- `UNIPILOT_INTEGRATIONS_KEY` must be present in **both** `frontend/.env` and
+  `backend/.env`; it is set locally in both now.
 - Rotating `UNIPILOT_INTEGRATIONS_KEY` makes stored sessions unreadable (users
   re-link); there is no re-encrypt RPC for them yet.
 - No subject filter or grouping on `/documents` yet (subject is shown on each

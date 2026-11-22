@@ -236,21 +236,28 @@ Verify only with a **spare number and a test group**.
 
 ### Live verification checklist (needs a phone; not automated)
 
-Until every line below has been done, live end to end is **`[!]` unverified**.
+Verified live on 2026-11-22 with a spare number (pairing code from the mobile
+app). The first attempt timed out (408) because a second code had invalidated
+the first; commit `188e1d8` fixed the browser tuple, 515 credential flushing and
+clean-retry state, and the next attempt linked. Unticked items are still
+unexercised.
 
-- [ ] Request the link on `/integrations`; a QR appears (the bridge is running).
-- [ ] Scan it from WhatsApp > Linked devices on the spare number; the card
-      shows "Linked" and the groups list fills.
-- [ ] Groups are all OFF by default; nothing from them is stored yet.
-- [ ] Switch the test group ON; send a text message with a deadline from another
-      member; it appears in `raw_messages` and (once extraction runs) as a task
-      or event.
-- [ ] Send a PDF to the group; exactly one `documents` row exists after a
-      repeat send of the same file.
-- [ ] Send a message in a group that is OFF; nothing is stored.
-- [ ] Stop and restart the bridge; the link survives without a new scan.
+- [x] Request the link from the app (`More -> WhatsApp groups`) and get an
+      8-character pairing code (the web QR path is not exercised here).
+- [x] Enter it under WhatsApp > Linked devices > Link with phone number instead;
+      the card shows "Linked" and the groups list fills (46 discovered).
+- [x] Groups are all OFF by default; nothing from them is stored yet.
+- [x] Switch a test group ON; a live deadline message from a member appears in
+      `raw_messages` and, after Gemini, as a review candidate (approved into a
+      task for the live test).
+- [x] Send a document (`OS M2.docx`); one `documents` row is created with a
+      summary, tags and a successful indexing job. Repeat-send dedupe was not
+      re-tested live.
+- [ ] Send a message in a group that is OFF; nothing is stored (not run live).
+- [x] Stop and restart the bridge; the link survives without a new code
+      (reconnected from stored credentials in ~2 s).
 - [ ] Disconnect from the card; the device disappears from Linked devices and
-      the session secrets are gone.
+      the session secrets are gone (not run live; the link was kept).
 
 ### Known limits
 
