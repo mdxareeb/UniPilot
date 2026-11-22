@@ -80,22 +80,22 @@ export default function GoogleCalendarScreen() {
 
   return (
     <Screen>
-      <PageHeading eyebrow="Integrations" title="Google Calendar" />
-
       <MotionEnter index={0} style={{ gap: theme.spacing.xs }}>
         <Pressable
           onPress={() => router.back()}
           accessibilityRole="button"
-          accessibilityLabel="Back"
+          accessibilityLabel="Back to More"
           hitSlop={8}
           style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.xs }}
         >
-          <ChevronLeft size={18} color={theme.colors.mutedForeground} />
-          <AppText variant="mono" color={theme.colors.mutedForeground}>
-            Integrations
+          <ChevronLeft size={16} color={theme.colors.mutedForeground} />
+          <AppText variant="label" color={theme.colors.mutedForeground}>
+            More
           </AppText>
         </Pressable>
       </MotionEnter>
+
+      <PageHeading eyebrow="Integrations" title="Google Calendar" />
 
       {!isGcalApiConfigured ? (
         <MotionEnter index={1}>
