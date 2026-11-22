@@ -113,21 +113,24 @@ export async function setCalendarCursor(client, calendarRowId, cursor, syncedAtI
   if (error) throw new Error("Failed to save the calendar cursor.");
 }
 
-/** Upsert one imported Google event; true when a row was inserted. */
+/** Upsert one imported Google event; true when a row was inserted or updated. */
 export async function upsertEvent(client, userId, event) {
   const { data, error } = await client
     .from("events")
-    .insert({
-      user_id: userId,
-      title: event.title,
-      description: event.description,
-      start_at: event.startAt,
-      end_at: event.endAt,
-      all_day: event.allDay,
-      location: event.location,
-      source: EVENT_SOURCE,
-      source_ref: event.googleEventId,
-    })
+    .upsert(
+      {
+        user_id: userId,
+        title: event.title,
+        description: event.description,
+        start_at: event.startAt,
+        end_at: event.endAt,
+        all_day: event.allDay,
+        location: event.location,
+        source: EVENT_SOURCE,
+        source_ref: event.googleEventId,
+      },
+      { onConflict: "user_id,source,source_ref" },
+    )
     .select("id")
     .maybeSingle();
   if (error) throw new Error("Failed to import the event.");
@@ -158,6 +161,9 @@ export async function listUnexportedRows(client, userId, limit) {
       .neq("source", EVENT_SOURCE)
       .is("google_event_id", null)
       .neq("status", "done")
+      // A task without a due date is not a deadline; exporting it as "today"
+      // would invent a date the user never set.
+      .not("due_date", "is", null)
       .order("created_at", { ascending: true })
       .limit(limit),
     client

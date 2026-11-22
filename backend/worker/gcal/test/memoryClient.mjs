@@ -1,7 +1,7 @@
 /**
  * In-memory Supabase client for the gcal tests: models exactly the query
- * shapes `repo.mjs` uses (select/insert/update/delete with eq/neq/is/not
- * filters, maybeSingle, and rpc). Not a general fake.
+ * shapes `repo.mjs` uses (select/insert/upsert/update/delete with
+ * eq/neq/is/not filters, maybeSingle, and rpc). Not a general fake.
  */
 export function createMemoryClient() {
   const state = {
@@ -28,7 +28,7 @@ export function createMemoryClient() {
     return true;
   }
 
-  function run(op, table, conds, values, selectAfter) {
+  function run(op, table, conds, payload, selectAfter) {
     state.calls.push(`${table}:${op}`);
     const rows = state.tables[table] ?? [];
     if (op === "select") {
@@ -36,16 +36,40 @@ export function createMemoryClient() {
       return { data: found, error: null };
     }
     if (op === "insert") {
-      const list = Array.isArray(values) ? values : [values];
+      const list = Array.isArray(payload) ? payload : [payload];
       for (const value of list) rows.push({ ...value });
       if (selectAfter) {
         return { data: list.map((value) => ({ id: value.id ?? "inserted" })), error: null };
       }
       return { data: null, error: null };
     }
+    if (op === "upsert") {
+      const list = Array.isArray(payload.values) ? payload.values : [payload.values];
+      const keys = String(payload.onConflict ?? "id")
+        .split(",")
+        .map((key) => key.trim())
+        .filter(Boolean);
+      const affected = [];
+      for (const value of list) {
+        const existing = rows.find((row) =>
+          keys.every((key) => row[key] === value[key]),
+        );
+        if (existing) {
+          Object.assign(existing, value);
+          affected.push(existing);
+        } else {
+          const row = { ...value };
+          rows.push(row);
+          affected.push(row);
+        }
+      }
+      return selectAfter
+        ? { data: affected.map((row) => ({ ...row })), error: null }
+        : { data: null, error: null };
+    }
     if (op === "update") {
       for (const row of rows) {
-        if (matches(row, conds)) Object.assign(row, values);
+        if (matches(row, conds)) Object.assign(row, payload);
       }
       return { data: null, error: null };
     }
@@ -57,7 +81,7 @@ export function createMemoryClient() {
     return { data: null, error: null };
   }
 
-  function builder(op, table, values, selectAfter) {
+  function builder(op, table, payload, selectAfter) {
     const conds = [];
     const api = {
       eq: (column, value) => {
@@ -81,19 +105,19 @@ export function createMemoryClient() {
       select: () => ({
         maybeSingle: () => ({
           then: (resolve) => {
-            const { data, error } = run(op, table, conds, values, true);
+            const { data, error } = run(op, table, conds, payload, true);
             resolve(error ? { data: null, error } : { data: data.length > 0 ? data[0] : null, error: null });
           },
         }),
-        then: (resolve) => resolve(run(op, table, conds, values, true)),
+        then: (resolve) => resolve(run(op, table, conds, payload, true)),
       }),
       maybeSingle: () => ({
         then: (resolve) => {
-          const { data, error } = run(op, table, conds, values, selectAfter);
+          const { data, error } = run(op, table, conds, payload, selectAfter);
           resolve({ data: data.length > 0 ? data[0] : null, error });
         },
       }),
-      then: (resolve) => resolve(run(op, table, conds, values, selectAfter)),
+      then: (resolve) => resolve(run(op, table, conds, payload, selectAfter)),
     };
     return api;
   }
@@ -105,6 +129,13 @@ export function createMemoryClient() {
       return {
         select: () => builder("select", table, null),
         insert: (values) => builder("insert", table, values, false),
+        upsert: (values, options) =>
+          builder(
+            "upsert",
+            table,
+            { values, onConflict: options?.onConflict ?? "id" },
+            false,
+          ),
         update: (values) => builder("update", table, values, false),
         delete: () => builder("delete", table, null, true),
       };

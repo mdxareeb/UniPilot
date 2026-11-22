@@ -136,7 +136,8 @@ describe("gcalSync", () => {
       source: "google_calendar",
       source_ref: "gevent-cancelled",
     });
-    // One unexported task and one already-exported event.
+    // One unexported task and one already-exported event; one undated task
+    // must never be exported (it is not a deadline).
     client.state.tables.tasks.push({
       id: "task-1",
       user_id: USER,
@@ -145,6 +146,16 @@ describe("gcalSync", () => {
       source: "whatsapp_group",
       due_date: new Date(Date.now() + 3 * 86400000).toISOString(),
       description: "From the group",
+      google_event_id: null,
+    });
+    client.state.tables.tasks.push({
+      id: "task-undated",
+      user_id: USER,
+      title: "Read the chapter",
+      status: "todo",
+      source: "manual",
+      due_date: null,
+      description: null,
       google_event_id: null,
     });
     client.state.tables.events.push({
@@ -239,11 +250,13 @@ describe("gcalSync", () => {
     // The export pass inserted the task and patched the already-exported event.
     const task = client.state.tables.tasks.find((row) => row.id === "task-1");
     assert.equal(task.google_event_id, "gexport-new-1");
-    const insertBody = JSON.parse(
-      fetchCalls.find(
-        (call) => call.method === "POST" && call.url.includes("/calendars/unipilot-cal/events"),
-      ).body,
+    const undated = client.state.tables.tasks.find((row) => row.id === "task-undated");
+    assert.equal(undated.google_event_id ?? null, null, "undated tasks stay local");
+    const inserts = fetchCalls.filter(
+      (call) => call.method === "POST" && call.url.includes("/calendars/unipilot-cal/events"),
     );
+    assert.equal(inserts.length, 1, "only the dated task used the export calendar");
+    const insertBody = JSON.parse(inserts[0].body);
     assert.equal(insertBody.extendedProperties.private.unipilotSource, "task:task-1");
     assert.equal(insertBody.summary, "Assignment 5");
     assert.ok(
@@ -257,6 +270,58 @@ describe("gcalSync", () => {
     assert.equal(connection.status, "connected");
     assert.equal(client.state.tables.integration_runs[0]?.mode, "sync");
     assert.equal(client.state.tables.usage_events[0]?.kind, "gcal_sync");
+  });
+
+  it("re-syncs the same Google event in place, not as a duplicate", async () => {
+    const client = createMemoryClient();
+    client.state.tables.integration_connections.push({
+      user_id: USER,
+      provider: "google",
+      status: "connected",
+      auto_export_to_gcal: false,
+      export_calendar_id: null,
+    });
+    client.state.rpcHandlers.set("get_google_credentials", () => ({
+      data: [{ refresh_token: "stored-refresh" }],
+      error: null,
+    }));
+
+    let title = "Class";
+    const fakeFetch = async (url) => {
+      const target = String(url);
+      if (target.startsWith("https://oauth2.googleapis.com/token")) {
+        return okJson({ access_token: "access-1" });
+      }
+      if (target.includes("/users/me/calendarList")) {
+        return okJson({ items: [{ id: "primary", summary: "Primary", primary: true }] });
+      }
+      if (target.includes("/calendars/primary/events")) {
+        return okJson({
+          items: [
+            {
+              id: "gevent-1",
+              status: "confirmed",
+              summary: title,
+              start: { dateTime: "2026-11-24T09:00:00Z" },
+              end: { dateTime: "2026-11-24T10:00:00Z" },
+            },
+          ],
+          nextSyncToken: "next-1",
+        });
+      }
+      return failedJson(404);
+    };
+
+    await gcalSync({ userId: USER }, ctxOf(client, { fetchImpl: fakeFetch }));
+    title = "Class moved";
+    await gcalSync({ userId: USER }, ctxOf(client, { fetchImpl: fakeFetch }));
+
+    const imported = client.state.tables.events.filter(
+      (row) => row.source === "google_calendar",
+    );
+    assert.equal(imported.length, 1, "the unique key kept one local row");
+    assert.equal(imported[0].source_ref, "gevent-1");
+    assert.equal(imported[0].title, "Class moved", "the second pass updated it");
   });
 
   it("a revoked grant marks the connection error and is permanent", async () => {
