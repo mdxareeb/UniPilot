@@ -24,10 +24,13 @@ export async function POST(
     return noStoreJson({ error: GCAL_ERRORS.GENERIC }, 404);
   }
 
-  let active = true;
+  let active: boolean;
   try {
     const body = (await request.json()) as { active?: unknown };
-    if (typeof body.active === "boolean") active = body.active;
+    if (typeof body.active !== "boolean") {
+      return noStoreJson({ error: GCAL_ERRORS.GENERIC }, 400);
+    }
+    active = body.active;
   } catch {
     return noStoreJson({ error: GCAL_ERRORS.GENERIC }, 400);
   }

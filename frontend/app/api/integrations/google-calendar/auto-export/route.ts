@@ -13,10 +13,13 @@ export async function POST(request: Request): Promise<Response> {
   const auth = await authenticateBearer(request);
   if (!auth.ok) return auth.response;
 
-  let enabled = true;
+  let enabled: boolean;
   try {
     const body = (await request.json()) as { enabled?: unknown };
-    if (typeof body.enabled === "boolean") enabled = body.enabled;
+    if (typeof body.enabled !== "boolean") {
+      return noStoreJson({ error: GCAL_ERRORS.GENERIC }, 400);
+    }
+    enabled = body.enabled;
   } catch {
     return noStoreJson({ error: GCAL_ERRORS.GENERIC }, 400);
   }
