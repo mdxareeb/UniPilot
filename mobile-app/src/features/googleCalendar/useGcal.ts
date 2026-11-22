@@ -69,6 +69,9 @@ export function useGcal() {
 
   const setCalendarActive = useCallback(
     async (calendarId: string, active: boolean): Promise<GcalActionResult> => {
+      // Never flip the optimistic state when another action is in flight:
+      // withBusy would skip the write and leave the screen lying.
+      if (busy) return { error: null, notice: null };
       // Optimistic: flip locally, revert when the write refuses.
       setSnapshot((current) => {
         if (current === null) return current;
@@ -93,11 +96,13 @@ export function useGcal() {
       }
       return result;
     },
-    [withBusy],
+    [busy, withBusy],
   );
 
   const sync = useCallback(
     async (): Promise<{ outcome: string | null; error: string | null }> => {
+      if (busy) return { outcome: null, error: null };
+      setBusy(true);
       try {
         const outcome = await gcalApi.sync();
         if (outcome === "accepted") await refresh();
@@ -107,13 +112,16 @@ export function useGcal() {
           outcome: null,
           error: caught instanceof Error ? caught.message : "Couldn't start the sync.",
         };
+      } finally {
+        setBusy(false);
       }
     },
-    [refresh],
+    [busy, refresh],
   );
 
   const setAutoExport = useCallback(
     async (enabled: boolean): Promise<GcalActionResult> => {
+      if (busy) return { error: null, notice: null };
       setSnapshot((current) =>
         current === null ? current : { ...current, autoExport: enabled },
       );
@@ -125,7 +133,7 @@ export function useGcal() {
       }
       return result;
     },
-    [withBusy],
+    [busy, withBusy],
   );
 
   const disconnect = useCallback(
