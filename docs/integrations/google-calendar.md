@@ -173,6 +173,12 @@ exported event carries `extendedProperties.private.unipilotSource`.
   header, toggle body, three sync outcomes, 401/500/network mapping), registry
   statuses and the Calendar/Tasks provenance mapping.
 - `npm run db:lint` + the schema-check script on the local stack.
+- **Bearer route smoke (2026-11-22):** signed in as the QA identity, the real
+  Next routes answered `GET` 200 (`configured: true`, `status: not_connected`),
+  `POST /connect` 200 with an
+  `accounts.google.com/o/oauth2/v2/auth` URL carrying `state` and
+  `access_type=offline`, `POST /sync` 200 `not_connected`, `POST /auto-export`
+  200 and `POST /disconnect` 200 with the keep-your-events notice.
 - **Local worker smoke (2026-11-22):** a QA identity connection with a bogus
   stored refresh token was enqueued through the real `enqueue_gcal_sync` RPC
   and processed by `worker:once`. Google's token endpoint really rejected it;
