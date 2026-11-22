@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 
 import { AppText } from "@/components/AppText";
-import { Badge } from "@/components/Badge";
+import { StatusPill, type StatusTone } from "@/components/ui/StatusPill";
 import { AppButton } from "@/components/ui/AppButton";
 import { Notice } from "@/components/Notice";
 import { PageHeading } from "@/components/PageHeading";
@@ -38,6 +38,18 @@ export default function WhatsAppGroupsScreen() {
 
   const snapshot = sync.snapshot;
   const view = snapshot === null ? null : effectiveView(snapshot);
+
+  const stateTone: StatusTone =
+    snapshot?.state === "connected"
+      ? "solid"
+      : snapshot?.state === "error"
+        ? "danger"
+        : snapshot?.state === "code_ready" ||
+            snapshot?.state === "qr_ready" ||
+            snapshot?.state === "starting" ||
+            snapshot?.state === "disconnecting"
+          ? "warning"
+          : "outline";
 
   const onDisconnect = async () => {
     setDisconnectBusy(true);
@@ -109,7 +121,7 @@ export default function WhatsAppGroupsScreen() {
               padding={theme.spacing.xl}
               style={{ gap: theme.spacing.md }}
             >
-              <Badge>{view.badge}</Badge>
+              <StatusPill label={view.badge} tone={stateTone} dot />
               <AppText variant="headlineMd">{view.title}</AppText>
               <AppText variant="bodyMd" color={theme.colors.mutedForeground}>
                 {view.body}

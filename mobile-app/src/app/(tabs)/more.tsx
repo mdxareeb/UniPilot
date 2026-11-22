@@ -305,7 +305,7 @@ export default function MoreScreen() {
                 accessibilityLabel={`${tool.name}${tool.status === "planned" ? ", planned" : ""}`}
                 style={{ flexGrow: 1, flexBasis: "46%" }}
               >
-                <Card style={{ height: "100%" }}>
+                <Card>
                   <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm }}>
                     <View
                       style={{

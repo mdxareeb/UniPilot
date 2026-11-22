@@ -325,7 +325,7 @@ export default function TasksScreen() {
                           <Badge>{item.typeLabel}</Badge>
                         ) : null}
                         {item.fromWhatsApp ? (
-                          <Badge>WhatsApp</Badge>
+                          <StatusPill label="From WhatsApp" tone="outline" />
                         ) : null}
                       </View>
                       {item.description !== null ? (

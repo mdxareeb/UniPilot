@@ -5,6 +5,7 @@ import { AppText } from "@/components/AppText";
 import { Divider } from "@/components/Divider";
 import { Notice } from "@/components/Notice";
 import { Surface } from "@/components/Surface";
+import { tapFeedback } from "@/lib/haptics";
 import { Switch } from "@/components/Switch";
 import { useTheme } from "@/theme/ThemeProvider";
 
@@ -76,7 +77,10 @@ export function GroupsCard({ groups, onToggle }: GroupsCardProps) {
               <Switch
                 value={group.active}
                 disabled={pending === group.id}
-                onValueChange={(next) => void change(group.id, next)}
+                onValueChange={(next) => {
+                  tapFeedback();
+                  void change(group.id, next);
+                }}
                 accessibilityLabel={`Capture messages from ${group.name}`}
               />
             </View>
