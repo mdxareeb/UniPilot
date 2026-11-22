@@ -28,7 +28,11 @@ export function createBaileysSocket(
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
     logger,
-    browser: Browsers.macOS("Desktop"),
+    /* A standard, current web-client identity. WhatsApp rejects pairing for
+       unknown browser tuples, so this must stay one of Baileys' Browsers
+       presets and must not be a custom app name. No `version` is passed: the
+       pinned Baileys package's bundled WA Web version is the supported one. */
+    browser: Browsers.ubuntu("Chrome"),
     markOnlineOnConnect: false,
     syncFullHistory: false,
     generateHighQualityLinkPreview: false,

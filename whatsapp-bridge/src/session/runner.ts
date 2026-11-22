@@ -87,6 +87,10 @@ export class SessionRunner {
   /** One pairing code per socket: asking again would invalidate the first. */
   private codeRequested = false;
   private chain: Promise<void> = Promise.resolve();
+  /** Latest queued credentials write (all earlier writes are chained behind it). */
+  private pendingCreds: Promise<void> = Promise.resolve();
+  /** Flushes the auth-state write queue; replaced on every new socket. */
+  private credsFlush: () => Promise<void> = async () => {};
 
   constructor(userId: string, deps: RunnerDeps, options: { linkMethod?: LinkMethod } = {}) {
     this.userId = userId;
@@ -124,6 +128,7 @@ export class SessionRunner {
           this.log.warn(safeError(error), "logout did not complete");
         }
       }
+      await this.flushPendingCreds();
       await this.deps.store.clearSession(this.userId);
       await this.deps.store.updateSession(this.userId, {
         status: "disconnected",
@@ -132,6 +137,7 @@ export class SessionRunner {
       });
       this.lastStatus = "disconnected";
     } else if (sock) {
+      await this.flushPendingCreds();
       try {
         sock.end(undefined);
       } catch {
@@ -143,8 +149,12 @@ export class SessionRunner {
 
   private async connect(): Promise<void> {
     const generation = ++this.generation;
-    const { state, saveCreds } = await useDbAuthState(this.userId, this.deps.store);
+    const { state, saveCreds, flushCreds } = await useDbAuthState(
+      this.userId,
+      this.deps.store,
+    );
     if (this.stopping || generation !== this.generation) return;
+    this.credsFlush = flushCreds;
     this.registered = state.creds.registered === true;
     this.codeRequested = false;
 
@@ -152,7 +162,7 @@ export class SessionRunner {
     this.sock = sock;
 
     sock.ev.on("creds.update", () => {
-      saveCreds().catch((error) =>
+      this.pendingCreds = saveCreds().catch((error) =>
         this.log.error(safeError(error), "failed to persist credentials"),
       );
     });
@@ -268,6 +278,7 @@ export class SessionRunner {
 
     if (code === DisconnectReason.loggedOut) {
       // The phone unlinked this device: the stored session is worthless.
+      await this.flushPendingCreds();
       await this.deps.store.clearSession(this.userId);
       await this.giveUp(SESSION_MESSAGES.loggedOut);
       return;
@@ -312,6 +323,10 @@ export class SessionRunner {
   }
 
   private async reconnect(delayMs: number): Promise<void> {
+    // 515 (restartRequired) arrives right after the code/QR is accepted; the
+    // freshly issued credentials must reach the database before this socket is
+    // torn down, or the reopened socket starts from a half-saved state.
+    await this.flushPendingCreds();
     const old = this.sock;
     this.sock = undefined;
     this.generation += 1; // detaches the old socket's listeners
@@ -342,6 +357,18 @@ export class SessionRunner {
     }
     await this.deps.store.clearQr(this.userId);
     await this.deps.store.clearPairing(this.userId);
+    await this.flushPendingCreds();
+    const failedPairing =
+      this.lastStatus === "qr_ready" ||
+      this.lastStatus === "code_ready" ||
+      (this.linkMethod === "pairing_code" && !this.registered);
+    if (!this.registered && failedPairing) {
+      /* A failed, never-linked pairing leaves partial keys that would break
+         the next handshake. A retry must start from fresh `initAuthCreds()`.
+         A replaced/lost session keeps its credentials (a later reconnect may
+         still use them). */
+      await this.deps.store.clearSession(this.userId);
+    }
     await this.deps.store.updateSession(this.userId, {
       status: "disconnected",
       desiredState: "disconnected",
@@ -351,5 +378,19 @@ export class SessionRunner {
     this.lastStatus = "disconnected";
     this.finished = true;
     this.log.warn("session stopped");
+  }
+
+  /** Wait for the auth-state queue so nothing lands after a teardown/clear. */
+  private async flushPendingCreds(): Promise<void> {
+    try {
+      await this.pendingCreds;
+    } catch {
+      /* already logged by the creds.update handler */
+    }
+    try {
+      await this.credsFlush();
+    } catch {
+      /* a failed write must not block teardown; it was logged already */
+    }
   }
 }

@@ -23,7 +23,11 @@ import type { KeyEntry, SessionStore } from "../store/types.ts";
 export async function useDbAuthState(
   userId: string,
   store: SessionStore,
-): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> {
+): Promise<{
+  state: AuthenticationState;
+  saveCreds: () => Promise<void>;
+  flushCreds: () => Promise<void>;
+}> {
   const stored = await store.getCreds(userId);
   const creds: AuthenticationCreds = stored
     ? (JSON.parse(stored, BufferJSON.reviver) as AuthenticationCreds)
@@ -79,5 +83,5 @@ export async function useDbAuthState(
     },
   };
 
-  return { state, saveCreds };
+  return { state, saveCreds, flushCreds: () => pendingWrite };
 }

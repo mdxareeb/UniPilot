@@ -348,7 +348,11 @@ export async function requestGroupLink(
     const key = process.env.UNIPILOT_INTEGRATIONS_KEY;
     if (!key) throw new Error("Failed to request the WhatsApp link.");
 
-    // Drop any earlier code, then store the number: only the newest attempt lives.
+    // Drop any earlier code, then store the number: only the newest attempt
+    // lives. Clearing the whole session first removes partial, unregistered
+    // credentials from a failed handshake, so Baileys starts from
+    // `initAuthCreds()` and `creds.registered` is genuinely false.
+    await service.rpc("clear_whatsapp_session", { p_user_id: userId });
     await service.rpc("clear_whatsapp_pairing", { p_user_id: userId });
     const stored = await service.rpc("set_whatsapp_pairing_phone", {
       p_user_id: userId,

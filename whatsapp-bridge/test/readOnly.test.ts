@@ -134,6 +134,12 @@ describe("source scan: nothing in src/ can write to WhatsApp", () => {
     assert.doesNotMatch(factory, /markOnlineOnConnect:\s*true/);
   });
 
+  it("uses a standard browser identity and Baileys' bundled web version", () => {
+    const factory = readFileSync(join(srcDir, "socket", "factory.ts"), "utf8");
+    assert.match(factory, /browser:\s*Browsers\.ubuntu\("Chrome"\)/);
+    assert.doesNotMatch(factory, /version\s*:/, "no WA Web version override");
+  });
+
   it("only the factory imports the raw Baileys socket constructor", () => {
     const importers = listTs(srcDir).filter((file) =>
       /import\s+makeWASocket|from\s+"@whiskeysockets\/baileys"[^;]*makeWASocket/.test(

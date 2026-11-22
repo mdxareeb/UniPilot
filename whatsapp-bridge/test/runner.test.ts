@@ -73,6 +73,70 @@ describe("SessionRunner", () => {
     assert.equal(runner.isFinished, false);
   });
 
+  it("flushes credentials before reconnecting after restartRequired", async () => {
+    class SlowStore extends MemoryStore {
+      private releaseGate!: () => void;
+      readonly gate = new Promise<void>((resolve) => {
+        this.releaseGate = resolve;
+      });
+      credsDone = false;
+      override async setCreds(userId: string, serialized: string): Promise<void> {
+        await this.gate;
+        await super.setCreds(userId, serialized);
+        this.credsDone = true;
+      }
+      release(): void {
+        this.releaseGate();
+      }
+    }
+
+    const store = new SlowStore();
+    store.addSession(USER, "disconnected", "connected");
+    const sockets: FakeSocket[] = [];
+    const runner = new SessionRunner(USER, {
+      store,
+      logger: silent,
+      openSocket: () => {
+        const sock = new FakeSocket();
+        sockets.push(sock);
+        return sock;
+      },
+      sleep: async () => {},
+    });
+
+    await runner.start();
+    sockets[0]!.emit("creds.update", {});
+    sockets[0]!.close(DisconnectReason.restartRequired);
+    await flush();
+
+    assert.equal(sockets.length, 1, "the reopen waits for the credential write");
+    assert.equal(store.credsDone, false);
+
+    store.release();
+    await flush();
+    await flush();
+
+    assert.equal(store.credsDone, true);
+    assert.equal(sockets.length, 2);
+    assert.ok(store.creds.has(USER));
+  });
+
+  it("a failed unlinked attempt clears partial credentials for a clean retry", async () => {
+    const { store, sockets, runner } = setup();
+    store.creds.set(USER, JSON.stringify({ registered: false }));
+    store.keys.set(`${USER}|pre-key|1`, "partial");
+    await runner.start();
+    sockets[0]!.emit("connection.update", { qr: "2@scan-me" });
+    await flush();
+
+    sockets[0]!.close(DisconnectReason.timedOut);
+    await flush();
+
+    assert.equal(store.creds.has(USER), false);
+    assert.equal(store.keys.has(`${USER}|pre-key|1`), false);
+    assert.equal(store.sessions.get(USER)!.desiredState, "disconnected");
+  });
+
   it("does not treat a post-scan timeout as an unscanned QR", async () => {
     const { store, sockets, runner } = setup({ maxReconnectAttempts: 3 });
     await runner.start();
