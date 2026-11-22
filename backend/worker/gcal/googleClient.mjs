@@ -131,8 +131,9 @@ export async function listCalendars(accessToken, fetchImpl = globalThis.fetch) {
 }
 
 /**
- * One calendar's events. First run: a bounded forward window and no cursor.
- * Later runs: the stored `syncToken` (incremental, includes deleted). A gone
+ * One calendar's events. `singleEvents=true` expands recurring events into
+ * instances. First run: a bounded forward window and no cursor. Later runs:
+ * the stored `syncToken` (incremental, includes deleted instances). A gone
  * cursor (410) is reported so the caller resets it and re-syncs fully.
  * @returns {Promise<{events: object[], nextSyncToken: string|null, cursorGone: boolean}>}
  */
@@ -142,13 +143,12 @@ export async function listEvents(
   { syncToken, timeMin, timeMax },
   fetchImpl = globalThis.fetch,
 ) {
-  const params = new URLSearchParams({ maxResults: "250" });
+  const params = new URLSearchParams({ maxResults: "2500", singleEvents: "true" });
   if (syncToken) params.set("syncToken", syncToken);
   if (!syncToken && timeMin) params.set("timeMin", timeMin);
   if (!syncToken && timeMax) params.set("timeMax", timeMax);
   if (syncToken) {
     params.set("showDeleted", "true");
-    params.set("singleEvents", "false");
   }
 
   let response;

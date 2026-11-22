@@ -96,13 +96,17 @@ describe("listEvents", () => {
     assert.deepEqual(result, { events: [], nextSyncToken: null, cursorGone: true });
   });
 
-  it("returns events and the next sync token", async () => {
-    const result = await listEvents("access", "primary", {}, async () =>
-      okJson({ items: [{ id: "e1" }], nextSyncToken: "next" }),
-    );
+  it("returns events and the next sync token, expanding recurrences", async () => {
+    let seen = "";
+    const result = await listEvents("access", "primary", {}, async (url) => {
+      seen = String(url);
+      return okJson({ items: [{ id: "e1" }], nextSyncToken: "next" });
+    });
     assert.deepEqual(result.events, [{ id: "e1" }]);
     assert.equal(result.nextSyncToken, "next");
     assert.equal(result.cursorGone, false);
+    assert.match(seen, /singleEvents=true/);
+    assert.match(seen, /maxResults=2500/);
   });
 });
 
@@ -168,6 +172,17 @@ describe("gcalSync", () => {
       source: "manual",
       google_event_id: "gexport-1",
     });
+    // A never-exported all-day event: end must be the next day (exclusive).
+    client.state.tables.events.push({
+      id: "event-3",
+      user_id: USER,
+      title: "Reading day",
+      start_at: "2026-11-28T12:00:00.000Z",
+      end_at: null,
+      all_day: true,
+      source: "manual",
+      google_event_id: null,
+    });
 
     client.state.rpcHandlers.set("get_google_credentials", () => ({
       data: [{ refresh_token: "stored-refresh" }],
@@ -175,6 +190,7 @@ describe("gcalSync", () => {
     }));
 
     const fetchCalls = [];
+    let exportedCount = 0;
     const fakeFetch = async (url, init) => {
       fetchCalls.push({ url: String(url), method: init?.method ?? "GET", body: init?.body });
       const target = String(url);
@@ -217,7 +233,8 @@ describe("gcalSync", () => {
         throw new Error("inactive calendar was fetched");
       }
       if (target.includes("/calendars/unipilot-cal/events") && init?.method === "POST") {
-        return okJson({ id: "gexport-new-1" });
+        exportedCount += 1;
+        return okJson({ id: `gexport-new-${exportedCount}` });
       }
       if (target.includes("/calendars/unipilot-cal/events/") && init?.method === "PATCH") {
         return okJson({ id: "gexport-1" });
@@ -259,18 +276,32 @@ describe("gcalSync", () => {
       "the cancelled event's row is gone",
     );
 
-    // The export pass inserted the task and patched the already-exported event.
+    // The export pass inserted the dated task and the all-day event, then
+    // patched the already-exported event.
     const task = client.state.tables.tasks.find((row) => row.id === "task-1");
     assert.equal(task.google_event_id, "gexport-new-1");
     const undated = client.state.tables.tasks.find((row) => row.id === "task-undated");
     assert.equal(undated.google_event_id ?? null, null, "undated tasks stay local");
+    const readingDay = client.state.tables.events.find((row) => row.id === "event-3");
+    assert.equal(readingDay.google_event_id, "gexport-new-2");
     const inserts = fetchCalls.filter(
       (call) => call.method === "POST" && call.url.includes("/calendars/unipilot-cal/events"),
     );
-    assert.equal(inserts.length, 1, "only the dated task used the export calendar");
-    const insertBody = JSON.parse(inserts[0].body);
-    assert.equal(insertBody.extendedProperties.private.unipilotSource, "task:task-1");
-    assert.equal(insertBody.summary, "Assignment 5");
+    assert.equal(inserts.length, 2, "the task and the all-day event were inserted");
+    const taskBody = JSON.parse(
+      inserts.find((call) => JSON.parse(call.body).summary === "Assignment 5").body,
+    );
+    assert.equal(taskBody.extendedProperties.private.unipilotSource, "task:task-1");
+    assert.equal(
+      Date.parse(taskBody.end.dateTime) - Date.parse(taskBody.start.dateTime),
+      30 * 60 * 1000,
+      "a deadline has a real 30-minute span",
+    );
+    const allDayBody = JSON.parse(
+      inserts.find((call) => JSON.parse(call.body).summary === "Reading day").body,
+    );
+    assert.equal(allDayBody.start.date, "2026-11-28");
+    assert.equal(allDayBody.end.date, "2026-11-29", "all-day end is exclusive");
     assert.ok(
       fetchCalls.some((call) => call.method === "PATCH" && call.url.includes("gexport-1")),
       "the already-exported event was patched, not duplicated",

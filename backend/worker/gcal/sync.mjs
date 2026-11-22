@@ -90,6 +90,12 @@ function importedEventOf(googleEvent) {
   };
 }
 
+function addDays(dateString, days) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day) + days * DAY_MS);
+  return next.toISOString().slice(0, 10);
+}
+
 /** The exported event body: times plus the self-identifying private property. */
 function exportedBodyOf(kind, row, sourceValue) {
   const body = {
@@ -98,18 +104,30 @@ function exportedBodyOf(kind, row, sourceValue) {
     extendedProperties: { private: { [EXPORT_SOURCE_KEY]: sourceValue } },
   };
   if (kind === "task") {
-    // A deadline exports as a timed event when it has a time, else all-day.
-    body.start = row.due_date
-      ? { dateTime: row.due_date, timeZone: "UTC" }
-      : { date: new Date().toISOString().slice(0, 10) };
-    body.end = body.start;
+    // A deadline is a timed event with a real 30-minute span. The export set
+    // excludes undated tasks, so the fallback is only a defensive path.
+    if (row.due_date) {
+      body.start = { dateTime: row.due_date, timeZone: "UTC" };
+      body.end = {
+        dateTime: new Date(Date.parse(row.due_date) + 30 * 60 * 1000).toISOString(),
+        timeZone: "UTC",
+      };
+    } else {
+      const today = new Date().toISOString().slice(0, 10);
+      body.start = { date: today };
+      body.end = { date: addDays(today, 1) };
+    }
+  } else if (row.all_day) {
+    // Google's all-day end is exclusive: a one-day event ends the next day.
+    const startDate = row.start_at.slice(0, 10);
+    body.start = { date: startDate };
+    body.end = { date: row.end_at ? row.end_at.slice(0, 10) : addDays(startDate, 1) };
   } else {
-    body.start = row.all_day
-      ? { date: row.start_at.slice(0, 10) }
-      : { dateTime: row.start_at, timeZone: "UTC" };
-    body.end = row.end_at
-      ? { dateTime: row.end_at, timeZone: "UTC" }
-      : body.start;
+    body.start = { dateTime: row.start_at, timeZone: "UTC" };
+    body.end = {
+      dateTime: row.end_at ?? new Date(Date.parse(row.start_at) + 60 * 60 * 1000).toISOString(),
+      timeZone: "UTC",
+    };
     if (row.location) body.location = row.location;
   }
   return body;
