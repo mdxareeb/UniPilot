@@ -5,7 +5,9 @@ design rules live in `backend/DATABASE.md` ("WhatsApp group live sync"),
 `whatsapp-bridge/README.md` and `whatsapp/README.md` (runbook and live
 checklist). Update this file when a line below changes.
 
-Last updated 2026-11-19. Nothing here is committed or pushed yet.
+Last updated 2026-11-22. The baseline is committed locally (not pushed): the
+migrations/worker, bridge, web API and mobile screens each have their own
+commit.
 
 ## Decisions (approved)
 
@@ -36,7 +38,7 @@ Last updated 2026-11-19. Nothing here is committed or pushed yet.
 | 11 | Review queue, document card, task and event markers | done, see gaps | spec |
 | 12 | Retention purge, docs | mostly done | see "Remaining" |
 | 13 | Pairing-code link (DB, bridge, Bearer API) | done | `qa/whatsapp-group-sync-pairing-check.sql`, bridge tests (114), `tests/qa/whatsapp-api.spec.ts` |
-| 14 | Mobile screens: WhatsApp groups, read-only Tasks and Calendar | code complete, not run on a device | `mobile-app` jest (127), tsc, lint; record in `mobile-app/plan.md` section P |
+| 14 | Mobile screens: WhatsApp groups, read-only Tasks and Calendar, Course materials | done | device-verified 2026-11-22 (`mobile-app/plan.md` §P); `mobile-app` jest 139, tsc, lint |
 
 ## Mobile app (pairing-code link)
 
@@ -53,6 +55,39 @@ button to paste under WhatsApp > Linked devices > Link with phone number.
   `mobile-app/src/features/agenda/`; env `EXPO_PUBLIC_API_BASE_URL`.
 - Not verified: any device run, the real clipboard, and a real pairing code from
   WhatsApp. `expo-clipboard` needs a new native build.
+
+## Device verification (2026-11-22, emulator)
+
+Built from the proven worktree recipe and installed in place over the permanent
+identity (signer SHA-256 `bc51cd50…`, `usesCleartextTraffic=true`). The
+authenticated identity was the **OAuth test user `lets.thryvee@gmail.com`**
+(the phone signed in with Google, not the QA2 email form); the fixture rows
+were seeded for that user. This is a recorded deviation from the QA1/QA2
+convention, not a founder account. Recorded on the emulator
+(`Pixel7_API36`), with a **mocked bridge heartbeat** (DB-only; no WhatsApp
+connection):
+
+| Leg | Result | Evidence (`mobile-app/screenshots/`) |
+| --- | --- | --- |
+| Calendar + Tasks read live rows, subject tags, From WhatsApp badge, original-message snippet via owner-RLS `raw_messages` | PASS | `wg-m4-calendar-tags.png`, `wg-m4-calendar-original-message.png`, `wg-m4-tasks-markers.png`, `wg-m4-tasks-original-message.png` |
+| Pairing-code card from a mocked `code_ready` session, live countdown, Copy Code | PASS ("✓ Copied" captured) | `wg-m4-pairing-code.png`, `wg-m4-pairing-code-copied.png` |
+| Connected state, group switches (Supabase `is_active` + `activated_at`), review Add → task/event + proposed course created only on approval | PASS | `wg-m4-groups-connected.png`, `wg-m4-groups-both-active.png`, `wg-m4-review-added.png`, `wg-m4-tasks-after-approvals.png`, `wg-m4-calendar-after-approvals.png` |
+| Course materials: type/size/summary/tags, From WhatsApp, subject filter, honest "File unavailable", open via signed URL in Chrome | PASS (storage 200, `application/pdf`) | `wg-m4-materials.png`, `wg-m4-materials-filter.png`, `wg-m4-materials-open-pdf.png` |
+| Dark rendering | PASS | `wg-m4-materials-dark.png`, `wg-m4-groups-dark.png` |
+| Reduced motion (scales 0/0/0, cold start) | PASS, all content rendered | `wg-m4-calendar-reduced-motion.png` |
+
+Incidents recorded, not hidden: the emulator was memory-starved (host ~437 MB
+free) and produced ANR dialogs and dropped taps; it was restarted with 2 GB.
+`uiautomator dump` then failed with "could not get idle state" and returned a
+stale hierarchy, which briefly looked like a frozen app; verification moved to
+screenshots + Windows OCR. PowerShell `>` corrupts binary screenshots — captures
+must use `cmd /c "adb exec-out screencap -p > file.png"`.
+
+**Still `[!]` unverified:** real WhatsApp (pairing code from WhatsApp, group
+discovery, live messages/files); live Gemini extraction (no key was set for
+these legs, so the worker path was not exercised); and the diagnostics removal
+found earlier is already in the baseline.
+
 ## Remaining
 
 1. **Regression, partly done.** With the flag on: onboarding, tasks (data, UI),
@@ -68,7 +103,8 @@ button to paste under WhatsApp > Linked devices > Link with phone number.
 4. `db:reset` from scratch was NOT run (it would wipe local data, including the
    founder's account). Needs the founder's go, or run it on a disposable stack.
 5. Small docs: RLS matrix rows in `backend/DATABASE.md`, root `README.md` row.
-6. Commit in scoped commits (none made).
+6. Commits: baseline committed in scoped commits (backend, bridge, web, mobile);
+   the mobile device verification and these docs are the next scoped commit.
 
 ## Known gaps and risks
 

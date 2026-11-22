@@ -190,6 +190,8 @@ npx eas-cli build -p android --profile preview-noenv --non-interactive --no-wait
 - `npm run mobile:test` (jest) covers the token mirror and the Supabase
   unconfigured state; `mobile:typecheck` and `mobile:lint` are the static
   gates; `expo export --platform android` proves the monorepo bundle.
-- Device evidence screenshots go to `screenshots/` (git-ignored).
+- Device evidence screenshots go to `screenshots/` (git-ignored). Capture with
+  `cmd /c "adb exec-out screencap -p > screenshots/<name>.png"`: PowerShell's
+  `>` writes text and corrupts the PNG bytes.
 - **The web Playwright suite does not test this app** — and this app's tests
   are not evidence about the web.
