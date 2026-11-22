@@ -88,7 +88,19 @@ function ThemedShell() {
       return;
     }
     coldStartChecked.current = true;
-    const params = authCallbackParams(Linking.getLinkingURL());
+
+    /* The provider OAuth landing (Google Calendar): same Android cold-start
+       hazard as the auth callback. Only a status word travels in the URL. */
+    const launch = Linking.getLinkingURL();
+    if (launch !== null && launch.startsWith("unipilot://oauth/google")) {
+      Linking.clearInitialURL();
+      if (segments[0] !== "oauth") {
+        router.replace("/google-calendar");
+      }
+      return;
+    }
+
+    const params = authCallbackParams(launch);
     if (params === null) return;
     Linking.clearInitialURL();
     if (segments[0] === "auth-callback") return;
@@ -122,6 +134,7 @@ function ThemedShell() {
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="specimen" />
           <Stack.Screen name="whatsapp-groups" />
+          <Stack.Screen name="google-calendar" />
           <Stack.Screen name="materials" />
           <Stack.Screen name="onboarding" />
         </Stack.Protected>
@@ -131,6 +144,7 @@ function ThemedShell() {
         {/* The OAuth landing must exist in both auth states: a cold-start
             deep link arrives before the session verdict does. */}
         <Stack.Screen name="auth-callback" />
+        <Stack.Screen name="oauth/google" />
       </Stack>
     </>
   );

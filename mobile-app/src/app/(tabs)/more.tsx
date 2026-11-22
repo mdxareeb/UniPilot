@@ -29,8 +29,10 @@ import {
   INTEGRATIONS_REGISTRY,
   relativeTime,
   TOOLS_REGISTRY,
+  type GoogleStatus,
   type WhatsAppStatus,
 } from "@/features/workspace/registries";
+import { isGcalApiConfigured, gcalApi } from "@/features/googleCalendar/gcalClient";
 import { isApiConfigured, whatsappApi } from "@/features/whatsappGroups/client";
 import { confirmFeedback } from "@/lib/haptics";
 import { appIdentity, isSupabaseConfigured, supabase } from "@/lib/supabase";
@@ -67,6 +69,8 @@ export default function MoreScreen() {
 
   const [docCount, setDocCount] = useState<number | null>(null);
   const [whatsapp, setWhatsapp] = useState<WhatsAppStatus | null>(null);
+  const [google, setGoogle] = useState<GoogleStatus | null>(null);
+  const [checkedAt, setCheckedAt] = useState(0);
   const [planned, setPlanned] = useState<{ name: string; description: string } | null>(
     null,
   );
@@ -88,6 +92,7 @@ export default function MoreScreen() {
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      setCheckedAt(Date.now());
       if (supabase === null) {
         setDocCount(null);
       } else {
@@ -133,6 +138,26 @@ export default function MoreScreen() {
                 lastSyncedAt: null,
                 checkedAt: Date.now(),
               });
+            }
+          });
+      }
+
+      if (!isGcalApiConfigured) {
+        setGoogle({ configured: false, status: "not_configured", lastSyncedAt: null });
+      } else {
+        void gcalApi
+          .getSnapshot()
+          .then((snapshot) => {
+            if (!active) return;
+            setGoogle({
+              configured: snapshot.configured,
+              status: snapshot.status,
+              lastSyncedAt: snapshot.lastSyncedAt,
+            });
+          })
+          .catch(() => {
+            if (active) {
+              setGoogle({ configured: true, status: "unknown", lastSyncedAt: null });
             }
           });
       }
@@ -349,8 +374,9 @@ export default function MoreScreen() {
         <Card>
           {INTEGRATIONS_REGISTRY.map((integration, index) => {
             const Icon = REGISTRY_ICONS[integration.icon];
-            const status = integration.statusResolver({ whatsapp });
-            const lastSynced = integration.lastSyncedAt?.({ whatsapp }) ?? null;
+            const status = integration.statusResolver({ whatsapp, google });
+            const lastSynced =
+              integration.lastSyncedAt?.({ whatsapp, google }) ?? null;
             const live = integration.route !== undefined;
             return (
               <View key={integration.id}>
@@ -410,7 +436,11 @@ export default function MoreScreen() {
                         <StatusPill label={status.label} tone={status.tone} />
                         {lastSynced !== null || live ? (
                           <AppText variant="mono" color={theme.colors.mutedForeground}>
-                            {relativeTime(lastSynced, whatsapp?.checkedAt ?? 0, profile?.timezone ?? "UTC")}
+                            {relativeTime(
+                              lastSynced,
+                              checkedAt,
+                              profile?.timezone ?? "UTC",
+                            )}
                           </AppText>
                         ) : null}
                       </View>

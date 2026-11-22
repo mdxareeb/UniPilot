@@ -59,6 +59,7 @@ export type WhatsAppStatus = {
 
 export type IntegrationStatusContext = {
   whatsapp: WhatsAppStatus | null;
+  google: GoogleStatus | null;
 };
 
 export type IntegrationStatus = {
@@ -73,12 +74,33 @@ export type IntegrationDefinition = {
   description: string;
   icon: RegistryIcon;
   statusResolver: (context: IntegrationStatusContext) => IntegrationStatus;
-  route?: "/whatsapp-groups";
+  route?: "/whatsapp-groups" | "/google-calendar";
   /** Relative timestamp shown on the row, when the integration can provide one. */
   lastSyncedAt?: (context: IntegrationStatusContext) => string | null;
 };
 
 const PLANNED: IntegrationStatus = { label: "Planned", tone: "planned" };
+
+export type GoogleStatus = {
+  configured: boolean;
+  status: "connected" | "not_connected" | "not_configured" | "error" | "unknown";
+  lastSyncedAt: string | null;
+};
+
+function googleStatus(context: IntegrationStatusContext): IntegrationStatus {
+  const google = context.google;
+  if (!google || !google.configured) {
+    return { label: "Not available", tone: "planned" };
+  }
+  switch (google.status) {
+    case "connected":
+      return { label: "Connected", tone: "solid" };
+    case "error":
+      return { label: "Needs reconnect", tone: "danger" };
+    default:
+      return { label: "Not linked", tone: "outline" };
+  }
+}
 
 function whatsappStatus(context: IntegrationStatusContext): IntegrationStatus {
   const whatsapp = context.whatsapp;
@@ -133,7 +155,9 @@ export const INTEGRATIONS_REGISTRY: readonly IntegrationDefinition[] = [
     category: "calendar",
     description: "Two-way calendar import and event push.",
     icon: "google",
-    statusResolver: () => PLANNED,
+    statusResolver: googleStatus,
+    route: "/google-calendar",
+    lastSyncedAt: (context) => context.google?.lastSyncedAt ?? null,
   },
   {
     id: "microsoft",

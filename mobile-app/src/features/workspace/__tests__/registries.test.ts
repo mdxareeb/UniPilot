@@ -6,7 +6,8 @@ import {
 } from "../registries";
 
 const context = (
-  over: Partial<NonNullable<IntegrationStatusContext["whatsapp"]>>,
+  over: Partial<NonNullable<IntegrationStatusContext["whatsapp"]>> = {},
+  google: IntegrationStatusContext["google"] = null,
 ): IntegrationStatusContext => ({
   whatsapp: {
     configured: true,
@@ -15,6 +16,7 @@ const context = (
     lastSyncedAt: null,
     ...over,
   },
+  google,
 });
 
 describe("tools registry", () => {
@@ -49,7 +51,7 @@ describe("integrations registry", () => {
   });
 
   it("resolves the honest WhatsApp states", () => {
-    expect(whatsapp.statusResolver({ whatsapp: null })).toEqual({
+    expect(whatsapp.statusResolver({ whatsapp: null, google: null })).toEqual({
       label: "Not connected",
       tone: "outline",
     });
@@ -78,14 +80,21 @@ describe("integrations registry", () => {
     });
   });
 
-  it("marks the future integrations as planned", () => {
-    for (const id of ["desk-companion", "google-calendar", "microsoft", "moodle"]) {
+  it("marks the future integrations as planned, with Google live", () => {
+    for (const id of ["desk-companion", "microsoft", "moodle"]) {
       const integration = INTEGRATIONS_REGISTRY.find((entry) => entry.id === id)!;
-      expect(integration.statusResolver({ whatsapp: null })).toEqual({
+      expect(integration.statusResolver(context())).toEqual({
         label: "Planned",
         tone: "planned",
       });
     }
+    // Google Calendar is live now: no pair on the server is the honest
+    // "Not available" state, not "Planned".
+    const google = INTEGRATIONS_REGISTRY.find((entry) => entry.id === "google-calendar")!;
+    expect(google.statusResolver(context())).toEqual({
+      label: "Not available",
+      tone: "planned",
+    });
   });
 });
 
