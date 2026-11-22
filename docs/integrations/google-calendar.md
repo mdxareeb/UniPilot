@@ -187,6 +187,14 @@ next day because Google treats it as exclusive. Every exported event carries
   header, toggle body, three sync outcomes, 401/500/network mapping), registry
   statuses and the Calendar/Tasks provenance mapping.
 - `npm run db:lint` + the schema-check script on the local stack.
+- **Web Playwright suite (2026-11-22):** the full run reported 601 passed,
+  3 failed of the started 758 (62 skipped; the run bailed before 154). Two
+  failures were this pass's own QA Google-connection residue (the route smoke
+  left a `disconnected` row); after removing it, the affected
+  `qa-whatsapp-jobs` project ran green: 199 passed, 3 skipped — including
+  "an automatic run with a connected Google row enqueues ids-only push jobs".
+  The third failure is the pre-existing Presenton engine dependency
+  (`ECONNREFUSED ::1:5001`), unrelated to this work.
 - **Bearer route smoke (2026-11-22):** signed in as the QA identity, the real
   Next routes answered `GET` 200 (`configured: true`, `status: not_connected`),
   `POST /connect` 200 with an
