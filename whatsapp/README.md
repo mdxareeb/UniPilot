@@ -208,3 +208,57 @@ Push needs a Google Cloud OAuth client (`GOOGLE_OAUTH_CLIENT_ID` /
 registered. In this environment it is marked `[!]` verified-blocked — no push
 is ever faked: the insert/dedupe/refresh paths are covered by pytest with a
 mocked Google client, and the no-credentials no-op is covered end to end.
+
+## Group live sync (Stage 1) - runbook
+
+Separate from the export and Selenium paths above (those are untouched). Group
+live sync links a student's WhatsApp once through the **`whatsapp-bridge`**
+service (Baileys, strictly read-only), captures messages and files from the
+groups the student switches on, and a worker step extracts deadlines with
+Gemini. Design and rules: `whatsapp-bridge/README.md`; schema:
+`backend/DATABASE.md` "WhatsApp group live sync (Stage 1)".
+
+**Risk, stated plainly:** Baileys is an unofficial client. WhatsApp can
+restrict or ban an account that uses linked-device tools, even a passive one.
+Verify only with a **spare number and a test group**.
+
+### Enable locally
+
+1. Local Supabase up with all migrations applied (`20261118154551` onwards).
+2. `UNIPILOT_INTEGRATIONS_KEY` set to the **same value** in `frontend/.env`
+   and `backend/.env`.
+3. `UNIPILOT_WHATSAPP_BRIDGE=1` in `frontend/.env` (shows the card on
+   `/integrations`).
+4. Run the bridge in its own terminal: `npm run bridge`. Without it the card
+   truthfully says "Bridge not running" and nothing is captured.
+5. Extraction needs `GEMINI_API_KEY` and `GEMINI_MODEL` in `backend/.env`;
+   without them captured items wait and the pipeline reports "not configured".
+
+### Live verification checklist (needs a phone; not automated)
+
+Until every line below has been done, live end to end is **`[!]` unverified**.
+
+- [ ] Request the link on `/integrations`; a QR appears (the bridge is running).
+- [ ] Scan it from WhatsApp > Linked devices on the spare number; the card
+      shows "Linked" and the groups list fills.
+- [ ] Groups are all OFF by default; nothing from them is stored yet.
+- [ ] Switch the test group ON; send a text message with a deadline from another
+      member; it appears in `raw_messages` and (once extraction runs) as a task
+      or event.
+- [ ] Send a PDF to the group; exactly one `documents` row exists after a
+      repeat send of the same file.
+- [ ] Send a message in a group that is OFF; nothing is stored.
+- [ ] Stop and restart the bridge; the link survives without a new scan.
+- [ ] Disconnect from the card; the device disappears from Linked devices and
+      the session secrets are gone.
+
+### Known limits
+
+- Turning a group on captures messages **from that moment forward**. Baileys'
+  on-demand history fetch is unreliable and was not built; history delivered at
+  link time is ingested only for groups that are already active (for example
+  after a re-link).
+- The bridge cannot suppress the protocol traffic that keeps a linked device
+  valid (keep-alives, key uploads, retry requests, app-state sync).
+- Rotating `UNIPILOT_INTEGRATIONS_KEY` makes stored WhatsApp sessions
+  unreadable (there is no re-encrypt RPC for them yet); users re-link.

@@ -139,6 +139,21 @@ The hosted project is production.
 | `20260913080000_whatsapp_detection_settings.sql` | Detection settings: `integration_connections.date_order` (`DMY`/`MDY`, default `DMY`) and `detect_relative_dates` (default false) (Task 46.26) |
 | `20260923083919_assistant_actions.sql` | The 27.x action log: `assistant_actions` (closed `type`/`status` CHECKs, per-user idempotency key, owner-SELECT RLS, service-role-only writes) (Tasks 27.1/27.8) |
 | `20260923125254_assistant_action_source_anchors.sql` | The 27.13 safe retry anchor: `tasks`/`events.source_action_id` → `assistant_actions` (SET NULL) plus the partial unique `(user_id, source_action_id)` indexes (Task 27.13, T27-D) |
+| `20261118154551_whatsapp_group_sync_tables.sql` | WhatsApp group sync: `whatsapp_sessions` (status + `desired_state` command channel), the deny-by-default `whatsapp_session_secrets` / `whatsapp_auth_keys`, `monitored_groups` (`is_active` default false, owner-toggle column grant) and `raw_messages` (per-user fingerprint) |
+| `20261118154555_subjects_course_fields.sql` | `subjects.course_code` / `color_tag` / `aliases`: the matching targets for group messages |
+| `20261118154558_tasks_group_sync_provenance.sql` | `tasks.subject_id` (+ owner trigger), `source`/`source_ref`/`source_message_id` (SET NULL)/`confidence_score`/`task_type`, and the server-only provenance lock |
+| `20261118154602_events_group_sync_provenance.sql` | `events.source` gains `whatsapp_group`; `source_message_id` (SET NULL) + `confidence_score`; `lock_event_provenance` replaced to cover them |
+| `20261118154605_documents_group_sync_provenance.sql` | `documents.source` gains `whatsapp_group`; `source_message_id` (SET NULL), `file_sha256` (unique per user), `subject_id`, `ai_summary`, `topic_tags`, owner + provenance triggers |
+| `20261118154608_candidates_group_sync_origin.sql` | `integration_candidates` generalised for live group candidates: nullable `run_id`/`start_at` behind checks, `origin`, `kind`, classification, confidence, subject match/proposal, `source_message_id` (SET NULL) |
+| `20261118154612_whatsapp_group_sync_retention.sql` | `purge_expired_raw_messages`: the 30-day raw-text purge (service role only) |
+| `20261118155450_whatsapp_group_sync_session_rpcs.sql` | The eight service-role-only definer RPCs over the encrypted session store: credentials, batched signal keys, QR with TTL, and logout (pgcrypto, `UNIPILOT_INTEGRATIONS_KEY`) |
+| `20261118171254_whatsapp_group_sync_ingest.sql` | `ingest_raw_messages` (atomic, idempotent, active-groups-only batch insert that enqueues one ids-only `whatsapp.extract` job per new text message) and `enqueue_raw_message_extraction` (queues a media message once its file is stored) |
+| `20261119112803_whatsapp_group_sync_pairing_code.sql` | Mobile pairing-code link: status `code_ready`, `whatsapp_sessions.link_method` (`qr`/`pairing_code`), encrypted `phone_enc` / `pairing_code_enc` / `pairing_expires_at` on the secrets table, and the service-role-only RPCs `set/get_whatsapp_pairing_phone` (digits-only E.164, 8-15 digits, validated in SQL), `set/get_whatsapp_pairing_code` (TTL clamped 30-300 s) and `clear_whatsapp_pairing` |
+| `20261119113748_whatsapp_group_sync_pairing_status.sql` | `get_whatsapp_pairing_status(uuid, text)`: the live code AND its expiry (no row once expired; stale values are cleared). Service role only |
+| `qa/whatsapp-group-sync-ingest-check.sql` | Rolled-back SQL proof of the ingest RPCs (active-only, replay no-op, ids-only jobs, owner scoping, grants) |
+| `qa/whatsapp-group-sync-pairing-check.sql` | Rolled-back SQL proof of the pairing RPCs (phone sanitising and rejection, ciphertext at rest, code expiry, clear, grants) |
+| `qa/whatsapp-group-sync-rpc-check.sql` | Rolled-back SQL proof of the session RPCs (round trip, ciphertext at rest, wrong key raises, QR expiry, grants) |
+| `qa/whatsapp-group-sync-schema-check.sql` | Rolled-back SQL proof of the group-sync schema contract (RLS isolation, secrets, provenance locks, purge survival) |
 | `ops/reconcile-legacy-profiles-preflight.sql` | Hosted preflight (rename + drop legacy trigger), run manually after approval |
 | `ops/generate-types.sh` | Regenerate `frontend/lib/supabase/database.types.ts` from the local schema (Task 20.8) |
 | `ops/check-types.sh` | Manual drift check: regenerate and diff against the committed types |

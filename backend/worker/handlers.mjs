@@ -26,6 +26,7 @@
  */
 import { processDocument } from "./documentProcessing.mjs";
 import { reindexDocument } from "./documentReindex.mjs";
+import { whatsappExtract } from "./groupsync/extractMessage.mjs";
 import { exportPresentation, generatePresentation } from "./presentationJobs.mjs";
 import {
   whatsappConnect,
@@ -50,6 +51,11 @@ export const handlers = {
   "whatsapp.push": whatsappPush,
 
   "whatsapp.disconnect": whatsappDisconnect,
+
+  // WhatsApp group live sync (Stage 1): extract deadlines/materials from one
+  // captured message with Gemini. Ids-only payload `{ rawMessageId }`; see
+  // groupsync/extractMessage.mjs.
+  "whatsapp.extract": whatsappExtract,
 
   "noop.test": async (payload, ctx) => {
     ctx.log(`noop.test ran (job ${ctx.jobId}, attempt ${ctx.attempt})`);

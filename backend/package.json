@@ -11,15 +11,18 @@
     "worker:once": "node --env-file=.env worker/run.mjs --once",
     "benchmark": "node worker/benchmark.mjs",
     "search-benchmark": "node --env-file=.env worker/searchBenchmark.mjs",
-    "test:whatsapp": "python -m pytest ../whatsapp"
+    "test:whatsapp": "python -m pytest ../whatsapp",
+    "test:groupsync": "node --test \"worker/groupsync/test/*.test.mjs\"",
+    "test:groupsync:live": "node --env-file=.env --test worker/groupsync/test/repo.live.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
+    "fflate": "^0.8.3",
     "mammoth": "^1.12.2",
-    "pdfjs-dist": "^6.3.289"
+    "pdfjs-dist": "^6.3.289",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "fflate": "^0.8.3",
     "pdf-lib": "^1.17.1"
   }
 }
