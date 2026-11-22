@@ -286,6 +286,9 @@ export default function CalendarScreen() {
                       {item.fromWhatsApp ? (
                         <StatusPill label="From WhatsApp" tone="outline" />
                       ) : null}
+                      {item.fromGoogleCalendar ? (
+                        <StatusPill label="Google Calendar" tone="outline" />
+                      ) : null}
                     </View>
                     <View style={{ justifyContent: "center", paddingRight: theme.spacing.md }}>
                       <ChevronRight size={16} color={theme.colors.mutedForeground} />
@@ -334,7 +337,11 @@ export default function CalendarScreen() {
                   : []),
                 {
                   label: "Source",
-                  value: detail.fromWhatsApp ? "WhatsApp group" : "Manual",
+                  value: detail.fromGoogleCalendar
+                    ? "Google Calendar"
+                    : detail.fromWhatsApp
+                      ? "WhatsApp group"
+                      : "Manual",
                 },
               ]
         }

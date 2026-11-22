@@ -20,7 +20,7 @@ export async function fetchTasks(): Promise<QueryResult<TaskRowInput>> {
   const { data, error } = await supabase
     .from("tasks")
     .select(
-      "id, title, status, due_date, priority, task_type, source, source_message_id, description, confidence_score, subject_id, subject:subjects(id, name, color_tag)",
+      "id, title, status, due_date, priority, task_type, source, source_message_id, description, confidence_score, google_event_id, subject_id, subject:subjects(id, name, color_tag)",
     )
     .order("due_date", { ascending: true, nullsFirst: false })
     .limit(TASK_LIMIT);

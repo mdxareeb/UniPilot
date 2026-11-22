@@ -20,6 +20,7 @@ export type CalendarItem = {
   description: string | null;
   confidence: number | null;
   fromWhatsApp: boolean;
+  fromGoogleCalendar: boolean;
   sourceMessageId: string | null;
 };
 
@@ -50,6 +51,7 @@ export function buildCalendarItems(
     description: row.description?.trim() || null,
     confidence: row.confidence_score ?? null,
     fromWhatsApp: row.source === "whatsapp_group",
+    fromGoogleCalendar: row.source === "google_calendar",
     sourceMessageId: row.source_message_id,
   }));
 
@@ -71,6 +73,7 @@ export function buildCalendarItems(
         description: item.description,
         confidence: item.confidence,
         fromWhatsApp: item.fromWhatsApp,
+        fromGoogleCalendar: false,
         sourceMessageId: item.sourceMessageId,
       };
     });

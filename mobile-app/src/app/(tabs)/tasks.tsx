@@ -327,6 +327,9 @@ export default function TasksScreen() {
                         {item.fromWhatsApp ? (
                           <StatusPill label="From WhatsApp" tone="outline" />
                         ) : null}
+                        {item.onGoogleCalendar ? (
+                          <StatusPill label="Google Calendar" tone="outline" />
+                        ) : null}
                       </View>
                       {item.description !== null ? (
                         <AppText
@@ -394,6 +397,9 @@ export default function TasksScreen() {
                   label: "Source",
                   value: detail.fromWhatsApp ? "WhatsApp group" : "Manual",
                 },
+                ...(detail.onGoogleCalendar
+                  ? [{ label: "Google Calendar", value: "Exported" }]
+                  : []),
               ]
         }
       />

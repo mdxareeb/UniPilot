@@ -60,6 +60,24 @@ describe("buildCalendarItems", () => {
     expect(keys.has("2026-11-24")).toBe(true);
     expect(keys.has("2026-11-25")).toBe(true);
   });
+
+  it("carries Google Calendar provenance on imported events only", () => {
+    const items = buildCalendarItems(
+      [event({ id: "g", source: "google_calendar" })],
+      [
+        task({
+          id: "due",
+          due_date: "2026-11-25T18:29:00Z",
+          google_event_id: "g-1",
+        }),
+      ],
+      "UTC",
+    );
+    expect(items[0].fromGoogleCalendar).toBe(true);
+    expect(items[0].fromWhatsApp).toBe(false);
+    // A task exported to Google is not a Google-sourced row.
+    expect(items[1].fromGoogleCalendar).toBe(false);
+  });
 });
 
 describe("week strip", () => {

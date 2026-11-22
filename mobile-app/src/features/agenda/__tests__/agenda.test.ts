@@ -98,11 +98,25 @@ describe("calendar", () => {
       "UTC",
     );
     expect(timed.fromWhatsApp).toBe(true);
+    expect(timed.fromGoogleCalendar).toBe(false);
     expect(timed.typeLabel).toBe("Exam");
     expect(timed.timeLabel).toBe("9:00 AM");
     expect(timed.subjectColorTag).toBe("PHY101");
     expect(timed.sourceMessageId).toBe("m-1");
     expect(toEventItem(event({ all_day: true }), "UTC").timeLabel).toBe("All day");
+  });
+
+  it("marks Google Calendar imports and exported tasks", () => {
+    const imported = toEventItem(
+      event({ source: "google_calendar", source_message_id: null }),
+      "UTC",
+    );
+    expect(imported.fromGoogleCalendar).toBe(true);
+    expect(imported.fromWhatsApp).toBe(false);
+
+    expect(toTaskItem(task({ google_event_id: "g-1" }), "UTC").onGoogleCalendar).toBe(true);
+    expect(toTaskItem(task({ google_event_id: null }), "UTC").onGoogleCalendar).toBe(false);
+    expect(toTaskItem(task({}), "UTC").onGoogleCalendar).toBe(false);
   });
 
   it("puts an event on the day it falls on in the profile zone", () => {

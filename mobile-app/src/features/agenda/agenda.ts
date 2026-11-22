@@ -1,8 +1,8 @@
 /**
  * Read-only Tasks and Calendar for the mobile app: the row → display mapping.
  * Mirrors the web's rules (dates are formatted in the profile's timezone, never
- * as a raw timestamp) and carries the "From WhatsApp" provenance marker. Pure,
- * so it is testable without a device.
+ * as a raw timestamp) and carries the provenance markers (WhatsApp groups and
+ * Google Calendar). Pure, so it is testable without a device.
  */
 /** A subject joined onto a row; `color_tag` is an optional UI slug, not a hue. */
 export type AgendaSubject = {
@@ -25,6 +25,8 @@ export type TaskRowInput = {
   source_message_id: string | null;
   description?: string | null;
   confidence_score?: number | null;
+  /** Set when this task has been exported to the student's Google Calendar. */
+  google_event_id?: string | null;
   subject_id?: string | null;
   subject: AgendaSubject | null;
 };
@@ -51,6 +53,8 @@ export type TaskListItem = {
   subjectColorTag: string | null;
   sourceMessageId: string | null;
   fromWhatsApp: boolean;
+  /** True when the task already has a matching Google Calendar event. */
+  onGoogleCalendar: boolean;
   typeLabel: string | null;
 };
 
@@ -88,6 +92,8 @@ export type EventListItem = {
   description: string | null;
   confidence: number | null;
   fromWhatsApp: boolean;
+  /** True for events imported from the student's Google Calendar. */
+  fromGoogleCalendar: boolean;
 };
 
 export type EventDayGroup = {
@@ -207,6 +213,8 @@ export function toTaskItem(
     subjectColorTag: row.subject?.color_tag ?? null,
     sourceMessageId: row.source_message_id,
     fromWhatsApp: row.source === "whatsapp_group",
+    onGoogleCalendar:
+      typeof row.google_event_id === "string" && row.google_event_id.trim() !== "",
     typeLabel: row.task_type ? (TASK_TYPE_LABELS[row.task_type] ?? null) : null,
   };
 }
@@ -249,6 +257,7 @@ export function toEventItem(row: EventRowInput, timeZone: string): EventListItem
         : null,
     confidence: row.confidence_score ?? null,
     fromWhatsApp: row.source === "whatsapp_group",
+    fromGoogleCalendar: row.source === "google_calendar",
   };
 }
 
