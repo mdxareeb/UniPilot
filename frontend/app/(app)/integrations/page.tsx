@@ -6,11 +6,16 @@ import {
   getWhatsAppOverview,
   isLiveEnabled,
 } from "@/lib/data/integrations";
+import {
+  getGroupSyncSnapshot,
+  isGroupSyncEnabled,
+} from "@/lib/data/groupSync";
 import { getWorkspaceAccess } from "@/lib/onboarding/gate";
 import { GmailMark } from "./_components/BrandMarks";
 import { IntegrationCard } from "./_components/IntegrationCard";
 import { PresentonCard } from "./_components/PresentonCard";
 import { WhatsAppCard } from "./_components/WhatsAppCard";
+import { WhatsAppGroupsCard } from "./_components/WhatsAppGroupsCard";
 
 /**
  * Integrations (14.13; 46.15 P5.1; F3): the WhatsApp card is real, the
@@ -42,6 +47,11 @@ export default async function IntegrationsPage() {
   const overview = access ? await getWhatsAppOverview(access.id) : null;
   const google = access ? await getGoogleStatus(access.id) : null;
   const liveEnabled = isLiveEnabled();
+  // WhatsApp group live sync: a separate card with its own read, so the
+  // export card's 3 s status poll never carries group data.
+  const groupSyncEnabled = isGroupSyncEnabled();
+  const groupSync =
+    access && groupSyncEnabled ? await getGroupSyncSnapshot(access.id) : null;
 
   return (
     <Container className="flex min-w-0 flex-col gap-6 py-6 md:gap-8 md:py-8">
@@ -61,6 +71,13 @@ export default async function IntegrationsPage() {
             guest={!access}
             liveEnabled={liveEnabled}
             googleStatus={google}
+          />
+        </li>
+        <li className="min-w-0">
+          <WhatsAppGroupsCard
+            initial={groupSync}
+            guest={!access}
+            enabled={groupSyncEnabled}
           />
         </li>
         <li className="min-w-0">

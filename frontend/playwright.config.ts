@@ -392,7 +392,12 @@ export default defineConfig({
       // The raised timeout covers the cross-file worker lock wait (see
       // tests/qa/workerLock.ts), worker startup and the 90 s settle polls.
       name: "qa-whatsapp-flow",
-      testMatch: /whatsapp-(ui|export)\.spec\.ts/,
+      // `whatsapp-groups` is the live group-sync panel (Stage 1); it seeds
+      // `whatsapp_sessions`/`monitored_groups` for QA1 and never touches the
+      // worker, so the shared lock is not needed there.
+      testMatch: /whatsapp-(ui|export|groups|api)\.spec\.ts/,
+      // The groups and api specs share one QA1 session row: never in parallel.
+      workers: 1,
       timeout: 240_000,
       dependencies: [
         "qa-auth-setup",

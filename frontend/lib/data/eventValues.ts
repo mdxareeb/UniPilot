@@ -137,7 +137,7 @@ export type EventItem = {
   location?: string;
   description?: string;
   /** Provenance marker; only WhatsApp-sourced events carry it (P5.3). */
-  source?: "whatsapp";
+  source?: "whatsapp" | "whatsapp_group";
 };
 
 type Read<T> = { ok: true; value: T } | { ok: false };
@@ -375,7 +375,9 @@ export function eventRowToItem(row: EventRow, timeZone: string): EventItem {
   }
   if (row.location !== null) item.location = row.location;
   if (row.description !== null) item.description = row.description;
-  if (row.source === "whatsapp") item.source = "whatsapp";
+  if (row.source === "whatsapp" || row.source === "whatsapp_group") {
+    item.source = row.source;
+  }
 
   return item;
 }

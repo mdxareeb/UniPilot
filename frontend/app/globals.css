@@ -992,3 +992,17 @@ body {
     }
   }
 }
+
+/* --- On/off switches (group sync toggles) ------------------------------ */
+/* CSS-only, like press-feedback and icon-turn: the track fill and the thumb
+   travel use the shared hover duration and --ease-out. Under `reduce` the
+   state lands immediately; the switch's meaning is carried by aria-checked and
+   the fill, never by the motion. */
+@utility switch-motion {
+  transition-property: transform, background-color, border-color;
+  transition-duration: var(--duration-hover);
+  transition-timing-function: var(--ease-out);
+  @media (prefers-reduced-motion: reduce) {
+    transition-duration: 0ms;
+  }
+}

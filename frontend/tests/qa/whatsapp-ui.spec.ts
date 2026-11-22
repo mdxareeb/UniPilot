@@ -76,9 +76,15 @@ function runRow(overrides: Partial<WhatsAppRunRow> = {}): WhatsAppRunRow {
   };
 }
 
+// Export-review candidates always carry a start instant (the group-sync
+// migration made the column nullable for undated live-group task candidates).
+type DatedCandidateRow = Omit<WhatsAppCandidateRow, "start_at"> & {
+  start_at: string;
+};
+
 function candidateRow(
-  overrides: Partial<WhatsAppCandidateRow> = {},
-): WhatsAppCandidateRow {
+  overrides: Partial<DatedCandidateRow> = {},
+): DatedCandidateRow {
   return {
     id: CANDIDATE_ID,
     user_id: USER_ID,
@@ -96,6 +102,16 @@ function candidateRow(
     provider_event_id: null,
     pushed_at: null,
     push_error: null,
+    // WhatsApp group sync columns (all defaults for an export candidate).
+    origin: "export",
+    kind: "event",
+    event_type: null,
+    task_type: null,
+    confidence: null,
+    subject_id: null,
+    proposed_subject_name: null,
+    source_message_id: null,
+    group_name: null,
     created_at: "2026-09-02T09:00:10.000Z",
     updated_at: "2026-09-02T09:00:10.000Z",
     ...overrides,

@@ -35,6 +35,7 @@ import {
   GOOGLE_PUSH_RETRY_WINDOW_MS,
   integrationCandidateRowToItem,
   integrationRunRowToItem,
+  isDatedCandidate,
   parseWhatsAppExport,
   WHATSAPP_ACTIVE_RUN_LIMIT,
   WHATSAPP_ACTIVE_WINDOW_MS,
@@ -163,14 +164,17 @@ export async function getCandidatePoll(
       .from("integration_candidates")
       .select(CANDIDATE_COLUMNS)
       .eq("user_id", userId)
+      // Live group-sync candidates (origin = 'live_group') have their own
+      // review UI (group sync Task 11); this export-review list stays as is.
+      .eq("origin", "export")
       .order("created_at", { ascending: false })
       .order("id", { ascending: true }),
   ]);
 
   if (result.error) throw new Error("Failed to load WhatsApp suggestions.");
-  return (result.data ?? []).map((row) =>
-    integrationCandidateRowToItem(row, timeZone),
-  );
+  return (result.data ?? [])
+    .filter(isDatedCandidate)
+    .map((row) => integrationCandidateRowToItem(row, timeZone));
 }
 
 /** What the integrations page and the status poll render (P5.1/P4.4). */
@@ -377,6 +381,7 @@ export async function backfillGooglePushes(
     .from("integration_candidates")
     .select("id")
     .eq("user_id", userId)
+    .eq("origin", "export")
     .eq("status", "confirmed")
     .not("event_id", "is", null)
     .is("pushed_at", null)
@@ -665,10 +670,17 @@ export async function confirmCandidate(
     )
     .eq("id", candidateId)
     .eq("user_id", userId)
+    // Export candidates only: live group candidates are confirmed by their own
+    // path (group sync Task 10), which knows about tasks and undated items.
+    .eq("origin", "export")
     .maybeSingle();
 
   if (candidate.error) throw new Error("Failed to review the suggestion.");
-  if (!candidate.data || candidate.data.status !== "pending") {
+  if (
+    !candidate.data ||
+    candidate.data.status !== "pending" ||
+    candidate.data.start_at === null
+  ) {
     return { status: "not-found" };
   }
 

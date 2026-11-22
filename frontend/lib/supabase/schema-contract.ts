@@ -97,3 +97,69 @@ export type UsageEventsHaveQuantity = Assert<
 export type UsageEventsHaveOccurredAt = Assert<
   HasKey<Row<"usage_events">, "occurred_at">
 >;
+
+/* WhatsApp group live sync (Stage 1): the tables and columns the bridge, the
+ * extraction worker and the UI depend on. Same rule as above: a regeneration
+ * that drops one fails `tsc`. */
+type GroupSyncTable =
+  | "whatsapp_sessions"
+  | "whatsapp_session_secrets"
+  | "whatsapp_auth_keys"
+  | "monitored_groups"
+  | "raw_messages";
+
+export type GroupSyncTablesPresent = Assert<
+  Exclude<GroupSyncTable, keyof PublicTables> extends never ? true : false
+>;
+
+type GroupRow<T extends GroupSyncTable> = PublicTables[T]["Row"];
+
+export type SessionsHaveDesiredState = Assert<
+  HasKey<GroupRow<"whatsapp_sessions">, "desired_state">
+>;
+export type SessionsHaveHeartbeat = Assert<
+  HasKey<GroupRow<"whatsapp_sessions">, "bridge_heartbeat_at">
+>;
+export type SessionsHaveLinkMethod = Assert<
+  HasKey<GroupRow<"whatsapp_sessions">, "link_method">
+>;
+export type GroupsHaveIsActive = Assert<
+  HasKey<GroupRow<"monitored_groups">, "is_active">
+>;
+export type RawMessagesHaveFingerprint = Assert<
+  HasKey<GroupRow<"raw_messages">, "fingerprint">
+>;
+export type RawMessagesHaveStatus = Assert<
+  HasKey<GroupRow<"raw_messages">, "status">
+>;
+
+export type SubjectsHaveCourseCode = Assert<
+  HasKey<Row<"subjects">, "course_code">
+>;
+export type SubjectsHaveAliases = Assert<HasKey<Row<"subjects">, "aliases">>;
+export type TasksHaveSourceMessage = Assert<
+  HasKey<Row<"tasks">, "source_message_id">
+>;
+export type TasksHaveSubject = Assert<HasKey<Row<"tasks">, "subject_id">>;
+export type EventsHaveSourceMessage = Assert<
+  HasKey<Row<"events">, "source_message_id">
+>;
+export type DocumentsHaveSourceMessage = Assert<
+  HasKey<Row<"documents">, "source_message_id">
+>;
+export type DocumentsHaveFileSha = Assert<
+  HasKey<Row<"documents">, "file_sha256">
+>;
+export type DocumentsHaveSummary = Assert<
+  HasKey<Row<"documents">, "ai_summary">
+>;
+
+type CandidateRow = PublicTables["integration_candidates"]["Row"];
+export type CandidatesHaveOrigin = Assert<HasKey<CandidateRow, "origin">>;
+export type CandidatesHaveKind = Assert<HasKey<CandidateRow, "kind">>;
+export type CandidatesHaveConfidence = Assert<
+  HasKey<CandidateRow, "confidence">
+>;
+export type CandidatesHaveProposedSubject = Assert<
+  HasKey<CandidateRow, "proposed_subject_name">
+>;

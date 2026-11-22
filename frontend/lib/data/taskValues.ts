@@ -107,6 +107,8 @@ export type TaskItem = {
   priorityValue?: TaskPriority;
   /** Display-ready subject/course. Always absent until a subject link exists. */
   subject?: string;
+  /** True when WhatsApp group sync created the task (server-only provenance). */
+  fromWhatsApp?: boolean;
 };
 
 export type TaskDraft = {
@@ -348,7 +350,15 @@ export function parseTaskId(value: unknown): string | null {
  * priority becomes its display word. Optional fields are omitted, never
  * defaulted — the card's rule is "render only when supplied".
  */
-export function taskRowToItem(row: TaskRow, timeZone: string): TaskItem {
+export function taskRowToItem(
+  row: TaskRow & {
+    /** Provenance (group sync): `manual` or `whatsapp_group`. */
+    source?: string;
+    /** The joined course (`subject:subjects(name)`), when the task has one. */
+    subject?: { name: string } | null;
+  },
+  timeZone: string,
+): TaskItem {
   const status: TaskStatus = (TASK_STATUSES as readonly string[]).includes(
     row.status,
   )
@@ -361,6 +371,8 @@ export function taskRowToItem(row: TaskRow, timeZone: string): TaskItem {
     status: STATUS_UI[status],
   };
 
+  if (row.subject?.name) item.subject = row.subject.name;
+  if (row.source === "whatsapp_group") item.fromWhatsApp = true;
   if (row.due_date !== null) {
     item.dueDate = formatTaskDueDate(row.due_date, timeZone);
     item.dueDateValue = instantToDateOnly(row.due_date, timeZone);

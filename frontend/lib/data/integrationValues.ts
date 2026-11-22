@@ -389,7 +389,6 @@ export type WhatsAppCandidateFields = Pick<
   | "id"
   | "title"
   | "status"
-  | "start_at"
   | "end_at"
   | "all_day"
   | "message_sender"
@@ -397,7 +396,25 @@ export type WhatsAppCandidateFields = Pick<
   | "pushed_at"
   | "push_error"
   | "created_at"
->;
+> & {
+  /**
+   * Required here: `integration_candidates.start_at` became nullable for
+   * undated live-group task candidates, but this export-review contract only
+   * ever maps rows that have one (callers filter with `isDatedCandidate`).
+   */
+  start_at: string;
+};
+
+/**
+ * True for a candidate row that carries a start instant. Live-group task
+ * candidates may be undated; the export-review UI has no representation for
+ * them yet, so it skips them (WhatsApp group sync, Task 11 adds that UI).
+ */
+export function isDatedCandidate<T extends { start_at: string | null }>(
+  row: T,
+): row is T & { start_at: string } {
+  return row.start_at !== null;
+}
 
 /**
  * Row → review contract. Dates and times are formatted in the profile's zone

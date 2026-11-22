@@ -167,6 +167,23 @@ export function DocumentCard({
                   Presentation
                 </Badge>
               ) : null}
+              {document.source === "whatsapp_group" ? (
+                <Badge
+                  size="sm"
+                  variant="outline"
+                  data-document-source="whatsapp_group"
+                >
+                  From WhatsApp
+                </Badge>
+              ) : null}
+              {document.subjectName ? (
+                <span
+                  data-document-subject=""
+                  className="font-mono text-label-caps uppercase text-muted-foreground"
+                >
+                  {document.subjectName}
+                </span>
+              ) : null}
             </div>
           )}
 
@@ -192,6 +209,32 @@ export function DocumentCard({
             <span aria-hidden="true">·</span>
             <span>{document.createdLabel}</span>
           </p>
+
+          {/* WhatsApp group sync — the AI summary and topic tags, shown only
+              when the file has them (a plain upload never does). */}
+          {document.summary ? (
+            <p
+              data-document-summary=""
+              className="line-clamp-3 text-label-sm text-muted-foreground"
+            >
+              {document.summary}
+            </p>
+          ) : null}
+          {document.tags && document.tags.length > 0 ? (
+            <ul
+              aria-label="Topics"
+              data-document-tags=""
+              className="flex min-w-0 list-none flex-wrap gap-1.5"
+            >
+              {document.tags.map((tag) => (
+                <li key={tag}>
+                  <Badge size="sm" variant="default">
+                    {tag}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
           {/* Task F2 — the deck's native surface. Rendered only when the
               server found the caller's presentation pointing at this row;

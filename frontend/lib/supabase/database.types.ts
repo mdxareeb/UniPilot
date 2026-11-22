@@ -167,52 +167,83 @@ export type Database = {
       }
       documents: {
         Row: {
+          ai_summary: string | null
           created_at: string
           error_message: string | null
+          file_sha256: string | null
           id: string
           mime_type: string | null
           name: string
           page_count: number | null
           size_bytes: number | null
           source: string
+          source_message_id: string | null
           status: string
           storage_path: string | null
+          subject_id: string | null
+          topic_tags: string[]
           updated_at: string
           user_id: string
         }
         Insert: {
+          ai_summary?: string | null
           created_at?: string
           error_message?: string | null
+          file_sha256?: string | null
           id?: string
           mime_type?: string | null
           name: string
           page_count?: number | null
           size_bytes?: number | null
           source?: string
+          source_message_id?: string | null
           status?: string
           storage_path?: string | null
+          subject_id?: string | null
+          topic_tags?: string[]
           updated_at?: string
           user_id: string
         }
         Update: {
+          ai_summary?: string | null
           created_at?: string
           error_message?: string | null
+          file_sha256?: string | null
           id?: string
           mime_type?: string | null
           name?: string
           page_count?: number | null
           size_bytes?: number | null
           source?: string
+          source_message_id?: string | null
           status?: string
           storage_path?: string | null
+          subject_id?: string | null
+          topic_tags?: string[]
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "documents_source_message_id_fkey"
+            columns: ["source_message_id"]
+            isOneToOne: false
+            referencedRelation: "raw_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "documents_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       events: {
         Row: {
           all_day: boolean
+          confidence_score: number | null
           created_at: string
           description: string | null
           end_at: string | null
@@ -221,6 +252,7 @@ export type Database = {
           source: string
           source_action_id: string | null
           source_document_id: string | null
+          source_message_id: string | null
           source_ref: string | null
           start_at: string
           subject_id: string | null
@@ -231,6 +263,7 @@ export type Database = {
         }
         Insert: {
           all_day?: boolean
+          confidence_score?: number | null
           created_at?: string
           description?: string | null
           end_at?: string | null
@@ -239,6 +272,7 @@ export type Database = {
           source?: string
           source_action_id?: string | null
           source_document_id?: string | null
+          source_message_id?: string | null
           source_ref?: string | null
           start_at: string
           subject_id?: string | null
@@ -249,6 +283,7 @@ export type Database = {
         }
         Update: {
           all_day?: boolean
+          confidence_score?: number | null
           created_at?: string
           description?: string | null
           end_at?: string | null
@@ -257,6 +292,7 @@ export type Database = {
           source?: string
           source_action_id?: string | null
           source_document_id?: string | null
+          source_message_id?: string | null
           source_ref?: string | null
           start_at?: string
           subject_id?: string | null
@@ -278,6 +314,13 @@ export type Database = {
             columns: ["source_document_id"]
             isOneToOne: false
             referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "events_source_message_id_fkey"
+            columns: ["source_message_id"]
+            isOneToOne: false
+            referencedRelation: "raw_messages"
             referencedColumns: ["id"]
           },
           {
@@ -319,60 +362,87 @@ export type Database = {
       integration_candidates: {
         Row: {
           all_day: boolean
+          confidence: number | null
           created_at: string
           end_at: string | null
           event_id: string | null
+          event_type: string | null
           fingerprint: string
+          group_name: string | null
           id: string
+          kind: string
           message_id: string | null
           message_sender: string
           message_text: string
+          origin: string
+          proposed_subject_name: string | null
           provider_event_id: string | null
           push_error: string | null
           pushed_at: string | null
-          run_id: string
-          start_at: string
+          run_id: string | null
+          source_message_id: string | null
+          start_at: string | null
           status: string
+          subject_id: string | null
+          task_type: string | null
           title: string
           updated_at: string
           user_id: string
         }
         Insert: {
           all_day?: boolean
+          confidence?: number | null
           created_at?: string
           end_at?: string | null
           event_id?: string | null
+          event_type?: string | null
           fingerprint: string
+          group_name?: string | null
           id?: string
+          kind?: string
           message_id?: string | null
           message_sender: string
           message_text: string
+          origin?: string
+          proposed_subject_name?: string | null
           provider_event_id?: string | null
           push_error?: string | null
           pushed_at?: string | null
-          run_id: string
-          start_at: string
+          run_id?: string | null
+          source_message_id?: string | null
+          start_at?: string | null
           status?: string
+          subject_id?: string | null
+          task_type?: string | null
           title: string
           updated_at?: string
           user_id: string
         }
         Update: {
           all_day?: boolean
+          confidence?: number | null
           created_at?: string
           end_at?: string | null
           event_id?: string | null
+          event_type?: string | null
           fingerprint?: string
+          group_name?: string | null
           id?: string
+          kind?: string
           message_id?: string | null
           message_sender?: string
           message_text?: string
+          origin?: string
+          proposed_subject_name?: string | null
           provider_event_id?: string | null
           push_error?: string | null
           pushed_at?: string | null
-          run_id?: string
-          start_at?: string
+          run_id?: string | null
+          source_message_id?: string | null
+          start_at?: string | null
           status?: string
+          subject_id?: string | null
+          task_type?: string | null
           title?: string
           updated_at?: string
           user_id?: string
@@ -397,6 +467,20 @@ export type Database = {
             columns: ["run_id"]
             isOneToOne: false
             referencedRelation: "integration_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integration_candidates_source_message_id_fkey"
+            columns: ["source_message_id"]
+            isOneToOne: false
+            referencedRelation: "raw_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integration_candidates_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
         ]
@@ -647,6 +731,42 @@ export type Database = {
           },
         ]
       }
+      monitored_groups: {
+        Row: {
+          activated_at: string | null
+          created_at: string
+          group_jid: string
+          group_name: string
+          id: string
+          is_active: boolean
+          last_synced_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          activated_at?: string | null
+          created_at?: string
+          group_jid: string
+          group_name?: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          activated_at?: string | null
+          created_at?: string
+          group_jid?: string
+          group_name?: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       notifications: {
         Row: {
           body: string | null
@@ -826,8 +946,62 @@ export type Database = {
         }
         Relationships: []
       }
+      raw_messages: {
+        Row: {
+          created_at: string
+          error: string | null
+          file_sha256: string | null
+          fingerprint: string
+          group_jid: string
+          id: string
+          media_type: string
+          raw_text: string
+          sender_name: string
+          sent_at: string
+          status: string
+          updated_at: string
+          user_id: string
+          whatsapp_msg_id: string
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          file_sha256?: string | null
+          fingerprint: string
+          group_jid: string
+          id?: string
+          media_type?: string
+          raw_text?: string
+          sender_name?: string
+          sent_at: string
+          status?: string
+          updated_at?: string
+          user_id: string
+          whatsapp_msg_id: string
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          file_sha256?: string | null
+          fingerprint?: string
+          group_jid?: string
+          id?: string
+          media_type?: string
+          raw_text?: string
+          sender_name?: string
+          sent_at?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+          whatsapp_msg_id?: string
+        }
+        Relationships: []
+      }
       subjects: {
         Row: {
+          aliases: string[]
+          color_tag: string | null
+          course_code: string | null
           created_at: string
           id: string
           name: string
@@ -835,6 +1009,9 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          aliases?: string[]
+          color_tag?: string | null
+          course_code?: string | null
           created_at?: string
           id?: string
           name: string
@@ -842,6 +1019,9 @@ export type Database = {
           user_id: string
         }
         Update: {
+          aliases?: string[]
+          color_tag?: string | null
+          course_code?: string | null
           created_at?: string
           id?: string
           name?: string
@@ -894,43 +1074,61 @@ export type Database = {
       }
       tasks: {
         Row: {
+          confidence_score: number | null
           created_at: string
           description: string | null
           due_date: string | null
           effort_minutes: number | null
           id: string
           priority: string | null
+          source: string
           source_action_id: string | null
           source_document_id: string | null
+          source_message_id: string | null
+          source_ref: string | null
           status: string
+          subject_id: string | null
+          task_type: string | null
           title: string
           updated_at: string
           user_id: string
         }
         Insert: {
+          confidence_score?: number | null
           created_at?: string
           description?: string | null
           due_date?: string | null
           effort_minutes?: number | null
           id?: string
           priority?: string | null
+          source?: string
           source_action_id?: string | null
           source_document_id?: string | null
+          source_message_id?: string | null
+          source_ref?: string | null
           status?: string
+          subject_id?: string | null
+          task_type?: string | null
           title: string
           updated_at?: string
           user_id: string
         }
         Update: {
+          confidence_score?: number | null
           created_at?: string
           description?: string | null
           due_date?: string | null
           effort_minutes?: number | null
           id?: string
           priority?: string | null
+          source?: string
           source_action_id?: string | null
           source_document_id?: string | null
+          source_message_id?: string | null
+          source_ref?: string | null
           status?: string
+          subject_id?: string | null
+          task_type?: string | null
           title?: string
           updated_at?: string
           user_id?: string
@@ -948,6 +1146,20 @@ export type Database = {
             columns: ["source_document_id"]
             isOneToOne: false
             referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_source_message_id_fkey"
+            columns: ["source_message_id"]
+            isOneToOne: false
+            referencedRelation: "raw_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
             referencedColumns: ["id"]
           },
         ]
@@ -1024,6 +1236,102 @@ export type Database = {
         }
         Relationships: []
       }
+      whatsapp_auth_keys: {
+        Row: {
+          key_id: string
+          key_type: string
+          updated_at: string
+          user_id: string
+          value_enc: string
+        }
+        Insert: {
+          key_id: string
+          key_type: string
+          updated_at?: string
+          user_id: string
+          value_enc: string
+        }
+        Update: {
+          key_id?: string
+          key_type?: string
+          updated_at?: string
+          user_id?: string
+          value_enc?: string
+        }
+        Relationships: []
+      }
+      whatsapp_session_secrets: {
+        Row: {
+          creds_enc: string | null
+          pairing_code_enc: string | null
+          pairing_expires_at: string | null
+          phone_enc: string | null
+          qr_enc: string | null
+          qr_expires_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          creds_enc?: string | null
+          pairing_code_enc?: string | null
+          pairing_expires_at?: string | null
+          phone_enc?: string | null
+          qr_enc?: string | null
+          qr_expires_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          creds_enc?: string | null
+          pairing_code_enc?: string | null
+          pairing_expires_at?: string | null
+          phone_enc?: string | null
+          qr_enc?: string | null
+          qr_expires_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      whatsapp_sessions: {
+        Row: {
+          bridge_heartbeat_at: string | null
+          connected_at: string | null
+          created_at: string
+          desired_state: string
+          last_error: string | null
+          link_method: string
+          requested_at: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bridge_heartbeat_at?: string | null
+          connected_at?: string | null
+          created_at?: string
+          desired_state?: string
+          last_error?: string | null
+          link_method?: string
+          requested_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bridge_heartbeat_at?: string | null
+          connected_at?: string | null
+          created_at?: string
+          desired_state?: string
+          last_error?: string | null
+          link_method?: string
+          requested_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -1054,8 +1362,20 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      clear_whatsapp_pairing: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
       clear_whatsapp_qr: {
         Args: { p_connection_id: string }
+        Returns: undefined
+      }
+      clear_whatsapp_session: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
+      clear_whatsapp_session_qr: {
+        Args: { p_user_id: string }
         Returns: undefined
       }
       complete_onboarding: {
@@ -1075,6 +1395,10 @@ export type Database = {
       delete_google_credentials: {
         Args: { p_user_id: string }
         Returns: undefined
+      }
+      enqueue_raw_message_extraction: {
+        Args: { p_message_id: string; p_user_id: string }
+        Returns: boolean
       }
       finish_job: {
         Args: {
@@ -1115,9 +1439,58 @@ export type Database = {
           scope: string
         }[]
       }
+      get_whatsapp_auth_keys: {
+        Args: {
+          p_ids: string[]
+          p_key: string
+          p_key_type: string
+          p_user_id: string
+        }
+        Returns: {
+          key_id: string
+          value: string
+        }[]
+      }
+      get_whatsapp_creds: {
+        Args: { p_key: string; p_user_id: string }
+        Returns: string
+      }
+      get_whatsapp_pairing_code: {
+        Args: { p_key: string; p_user_id: string }
+        Returns: string
+      }
+      get_whatsapp_pairing_phone: {
+        Args: { p_key: string; p_user_id: string }
+        Returns: string
+      }
+      get_whatsapp_pairing_status: {
+        Args: { p_key: string; p_user_id: string }
+        Returns: {
+          code: string
+          expires_at: string
+        }[]
+      }
       get_whatsapp_qr: {
         Args: { p_connection_id: string; p_key: string }
         Returns: string
+      }
+      get_whatsapp_session_qr: {
+        Args: { p_key: string; p_user_id: string }
+        Returns: string
+      }
+      ingest_raw_messages: {
+        Args: { p_rows: Json; p_user_id: string }
+        Returns: {
+          group_jid: string
+          media_type: string
+          message_id: string
+          status: string
+          whatsapp_msg_id: string
+        }[]
+      }
+      purge_expired_raw_messages: {
+        Args: { p_retention_days?: number; p_user_id?: string }
+        Returns: number
       }
       rotate_google_token_key: {
         Args: { p_new_key: string; p_old_key: string }
@@ -1142,12 +1515,42 @@ export type Database = {
           snippet: string
         }[]
       }
+      set_whatsapp_auth_keys: {
+        Args: { p_entries: Json; p_key: string; p_user_id: string }
+        Returns: undefined
+      }
+      set_whatsapp_creds: {
+        Args: { p_creds: string; p_key: string; p_user_id: string }
+        Returns: undefined
+      }
+      set_whatsapp_pairing_code: {
+        Args: {
+          p_code: string
+          p_key: string
+          p_ttl_seconds?: number
+          p_user_id: string
+        }
+        Returns: undefined
+      }
+      set_whatsapp_pairing_phone: {
+        Args: { p_key: string; p_phone: string; p_user_id: string }
+        Returns: undefined
+      }
       set_whatsapp_qr: {
         Args: {
           p_connection_id: string
           p_key: string
           p_qr: string
           p_ttl_seconds?: number
+        }
+        Returns: undefined
+      }
+      set_whatsapp_session_qr: {
+        Args: {
+          p_key: string
+          p_qr: string
+          p_ttl_seconds?: number
+          p_user_id: string
         }
         Returns: undefined
       }

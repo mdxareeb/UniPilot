@@ -440,3 +440,22 @@ IP. With an elevated shell, check `netsh interface ipv4 show excludedportrange
 protocol=tcp` first: any port inside a listed range cannot be forwarded into
 Windows. To return to the standard port later, free it (`net stop winnat &&
 net start winnat` or an explicit exclusion) and revert `config.toml` + the env.
+
+## WhatsApp group live sync (Stage 1)
+
+What each layer proves, and what it cannot:
+
+| Layer | Command | Proves | Does NOT prove |
+| --- | --- | --- | --- |
+| Schema/RPC SQL checks | `Get-Content backend\supabase\qa\whatsapp-group-sync-{schema,rpc,ingest,pairing}-check.sql \| wsl -d kali-linux -u root -e docker exec -i supabase_db_unipilot psql -U postgres -d postgres -v ON_ERROR_STOP=1` | RLS isolation, secrets unreachable, provenance locks, per-user fingerprint, purge survival, idempotent ingest | any application code |
+| Extraction worker | `npm run test:groupsync` (fakes) · `npm run test:groupsync:live -w backend` (real local DB, fake Gemini, `UNIPILOT_GROUPSYNC_DB_TEST=1`) | date resolver, subject matcher, routing/threshold, idempotency, rejected-is-final, document and image paths, repository SQL | the real Gemini API (no key was available: **unverified**) |
+| Bridge | `npm run bridge:test` (fakes) · `UNIPILOT_BRIDGE_DB_TEST=1` adds the live-store test · `npm run smoke -w whatsapp-bridge` (needs the bridge running) | read-only wrapper and source scan, session lifecycle, ingestion, media capture, encrypted store round trip | **real WhatsApp**: scanning, groups, files arriving (needs a spare number; see `whatsapp/README.md` checklist) |
+| Bearer API (mobile) | `npx playwright test --project=qa-auth-setup --project=qa-whatsapp-flow --no-deps --workers=1 -g "bearer|whatsapp-groups API|group sync"` with `UNIPILOT_WHATSAPP_BRIDGE=1` (the project is pinned to one worker: the groups and api specs share QA1's session row; the code-expiry test waits 30 s on purpose) | 401 without detail, 403 before onboarding, GET shape and `no-store`, no QR, link 400/429/409, number stored encrypted, own rows only, confirm/reject, 404 for foreign ids | the mobile app itself (jest covers its pure logic; no device run) |
+| Panel | `tests/qa/whatsapp-groups.spec.ts` (project `qa-whatsapp-flow`), run with `UNIPILOT_WHATSAPP_BRIDGE=1` in the shell that starts the suite | every panel state against seeded rows, toggles, review add/dismiss, task/document markers, reduced motion, guest | a running bridge (none runs in QA; "Bridge not running" is the honest state) |
+
+Notes:
+
+- The committed server has the flag off, so the flag-on specs skip with their reason and the flag-off spec asserts the disabled state. Run the suite twice (flag off, then on) for the full set.
+- Tests that need the service-role or integrations key read them through Node's `--env-file` (never print or copy them). `UNIPILOT_INTEGRATIONS_KEY` lives in `frontend/.env`; the bridge and worker need the same value in `backend/.env`.
+- When `winnat` reserves the API port's range (see "WSL2 port-forwarding workaround"), host-side processes cannot reach the stack; point `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL` for the run at a reachable `127.0.0.1` forwarder or move the port as documented there.
+- QA1 only: every spec cleans the rows it seeds (group-sync provenance, the live queue, its own `Groups Spec *` subjects).

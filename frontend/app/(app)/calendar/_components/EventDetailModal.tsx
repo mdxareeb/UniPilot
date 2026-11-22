@@ -99,9 +99,11 @@ export function EventDetailModal({
             ) : null}
           </dl>
 
-          {event.source === "whatsapp" ? (
+          {event.source ? (
             <p className="font-mono text-label-caps text-muted-foreground">
-              via WhatsApp
+              {event.source === "whatsapp_group"
+                ? "via a WhatsApp group"
+                : "via WhatsApp"}
             </p>
           ) : null}
 

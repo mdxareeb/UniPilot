@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The tasks service (Task 21.1) â€” the only module that reads or writes a
  * student's task rows.
  *
@@ -34,7 +34,8 @@ import {
 } from "./taskValues";
 import { zonedDateOnlyToInstant } from "./taskDates";
 
-const TASK_COLUMNS = "id, title, status, due_date, priority";
+const TASK_COLUMNS =
+  "id, title, status, due_date, priority, source, subject:subjects(name)";
 
 type TaskUpdate = Database["public"]["Tables"]["tasks"]["Update"];
 

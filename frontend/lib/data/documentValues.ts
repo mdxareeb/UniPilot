@@ -99,7 +99,11 @@ export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
  * generator stored. The `/documents` provenance badge reads `presentation`
  * only; an unknown stored value is omitted rather than defaulted (Task F2).
  */
-export const DOCUMENT_SOURCES = ["upload", "presentation"] as const;
+export const DOCUMENT_SOURCES = [
+  "upload",
+  "presentation",
+  "whatsapp_group",
+] as const;
 export type DocumentSource = (typeof DOCUMENT_SOURCES)[number];
 
 /**
@@ -125,6 +129,12 @@ export type DocumentItem = {
    * so the card badges only what the row actually claims.
    */
   source?: DocumentSource;
+  /** A short AI-written summary (WhatsApp group sync); omitted for plain uploads. */
+  summary?: string;
+  /** AI-written topic tags (WhatsApp group sync). */
+  tags?: string[];
+  /** The course the file was sorted into, when it has one. */
+  subjectName?: string;
   /**
    * Sanitized processing failure copy (24.12) — set only for `failed` rows,
    * written by the worker; the UI renders it verbatim, never a raw error.
@@ -269,7 +279,12 @@ export function formatDocumentSize(bytes: number): string {
  * a legacy row without a size renders no size line, never "0 B".
  */
 export function documentRowToItem(
-  row: DocumentRow,
+  row: DocumentRow & {
+    ai_summary?: string | null;
+    topic_tags?: string[] | null;
+    /** The joined course (`subject:subjects(name)`). */
+    subject?: { name: string } | null;
+  },
   timeZone: string,
 ): DocumentItem {
   const status = (DOCUMENT_STATUSES as readonly string[]).includes(row.status)
@@ -284,6 +299,9 @@ export function documentRowToItem(
     createdLabel: formatTaskDueDate(row.created_at, timeZone),
   };
 
+  if (row.ai_summary) item.summary = row.ai_summary;
+  if (row.topic_tags && row.topic_tags.length > 0) item.tags = row.topic_tags;
+  if (row.subject?.name) item.subjectName = row.subject.name;
   if (row.storage_path !== null) item.storagePath = row.storage_path;
   if ((DOCUMENT_SOURCES as readonly string[]).includes(row.source)) {
     item.source = row.source as DocumentSource;

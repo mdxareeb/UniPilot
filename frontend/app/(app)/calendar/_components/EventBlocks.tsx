@@ -50,6 +50,7 @@ export function eventAccessibleName(event: EventItem): string {
   if (when) parts.push(when);
   parts.push(event.dateLabel);
   if (event.source === "whatsapp") parts.push("From WhatsApp");
+  if (event.source === "whatsapp_group") parts.push("From a WhatsApp group");
   return parts.join(", ");
 }
 
@@ -106,7 +107,7 @@ function EventBlock({
         <span className="min-w-0 truncate text-label-sm font-medium text-foreground">
           {event.title}
         </span>
-        {event.source === "whatsapp" ? <WhatsAppMarker /> : null}
+        {event.source ? <WhatsAppMarker /> : null}
       </span>
       {/* Metadata is demoted by duration: a 20-minute block keeps its title,
           a class-length block earns its line of quiet context. */}
@@ -181,7 +182,7 @@ export function EventChip({
       <span className="min-w-0 truncate text-label-sm text-foreground">
         {event.title}
       </span>
-      {event.source === "whatsapp" ? <WhatsAppMarker /> : null}
+      {event.source ? <WhatsAppMarker /> : null}
     </button>
   );
 }

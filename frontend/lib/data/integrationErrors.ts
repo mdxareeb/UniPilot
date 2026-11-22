@@ -51,3 +51,19 @@ export const WHATSAPP_LIVE_DISABLED_ERROR =
 
 export const WHATSAPP_LIVE_CHAT_ERROR =
   "Enter the chat name to scan (up to 100 characters).";
+
+/**
+ * WhatsApp group live sync (Stage 1). Client-safe copy only: the bridge and the
+ * database never leak raw text to the browser, and every state below is an
+ * honest description of what is (or is not) running.
+ */
+export const WHATSAPP_GROUPS_DISABLED_ERROR =
+  "Live group sync isn't enabled on this server.";
+export const WHATSAPP_GROUPS_NOT_FOUND_ERROR =
+  "That group is no longer available. Refresh to see the latest list.";
+export const WHATSAPP_GROUPS_BRIDGE_OFFLINE_NOTE =
+  "The WhatsApp bridge isn't running, so nothing is being captured. Your link and your group choices are kept.";
+export const WHATSAPP_GROUPS_FORGOTTEN_NOTE =
+  "Removed from UniPilot. The bridge wasn't running, so also remove UniPilot from WhatsApp > Linked devices on your phone.";
+export const WHATSAPP_GROUPS_CAPTURE_NOTE =
+  "Turning this on captures messages from that moment forward.";

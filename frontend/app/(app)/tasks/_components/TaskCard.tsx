@@ -91,7 +91,12 @@ export function TaskCard({
     onFocusHandled?.();
   }, [focusOnMount, onFocusHandled]);
 
-  const meta = [task.subject, task.dueDate, task.priority].filter(
+  const meta = [
+    task.subject,
+    task.dueDate,
+    task.priority,
+    task.fromWhatsApp ? "From WhatsApp" : null,
+  ].filter(
     (value): value is string => Boolean(value),
   );
 
