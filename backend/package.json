@@ -13,7 +13,8 @@
     "search-benchmark": "node --env-file=.env worker/searchBenchmark.mjs",
     "test:whatsapp": "python -m pytest ../whatsapp",
     "test:groupsync": "node --test \"worker/groupsync/test/*.test.mjs\"",
-    "test:groupsync:live": "node --env-file=.env --test worker/groupsync/test/repo.live.test.mjs"
+    "test:groupsync:live": "node --env-file=.env --test worker/groupsync/test/repo.live.test.mjs",
+    "test:gcal": "node --test \"worker/gcal/test/*.test.mjs\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

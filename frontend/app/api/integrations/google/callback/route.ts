@@ -38,12 +38,14 @@ import {
   storeGoogleCredentials,
 } from "@/lib/data/integrations";
 import { createServiceClient } from "@/lib/supabase/service";
+import { consumeGoogleOAuthState } from "@/lib/data/googleCalendar";
 
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 
 const NOT_CONFIGURED_REDIRECT = "/integrations?google=not_configured";
 const ERROR_REDIRECT = "/integrations?google=error";
 const CONNECTED_REDIRECT = "/integrations?google=connected";
+const APP_CALLBACK_BASE = "unipilot://oauth/google";
 
 /**
  * A same-origin redirect, expressed as a relative `Location` (the auth
@@ -54,6 +56,85 @@ function sameOriginRedirect(path: string): NextResponse {
   return new NextResponse(null, { status: 302, headers: { location: path } });
 }
 
+/**
+ * The mobile path's entire second half: exchange the code for the owner the
+ * state row names, store the refresh token through the service-only RPC,
+ * settle the connection, enqueue the first sync (best-effort), and send the
+ * browser back to the app with only a status word.
+ */
+async function completeMobileConnect(
+  code: string,
+  userId: string,
+): Promise<Response> {
+  let refreshToken = "";
+  let scope = GOOGLE_CALENDAR_SCOPE;
+  try {
+    const origin = await getTrustedSiteOrigin();
+    const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: process.env.GOOGLE_OAUTH_CLIENT_ID ?? "",
+        client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "",
+        redirect_uri: `${origin}${GOOGLE_OAUTH_CALLBACK_PATH}`,
+        grant_type: "authorization_code",
+      }),
+    });
+    if (!response.ok) return appRedirect("error");
+
+    const payload = (await response.json()) as {
+      refresh_token?: unknown;
+      scope?: unknown;
+    };
+    if (typeof payload.refresh_token !== "string" || payload.refresh_token === "") {
+      return appRedirect("error");
+    }
+    refreshToken = payload.refresh_token;
+    if (typeof payload.scope === "string" && payload.scope.trim() !== "") {
+      scope = payload.scope;
+    }
+  } catch {
+    return appRedirect("error");
+  }
+
+  try {
+    await storeGoogleCredentials(userId, refreshToken, scope);
+    const service = createServiceClient();
+    const connection = await service.from("integration_connections").upsert(
+      {
+        user_id: userId,
+        provider: "google",
+        mode: null,
+        status: "connected",
+        last_error: null,
+      },
+      { onConflict: "user_id,provider" },
+    );
+    if (connection.error) throw new Error("Failed to store the connection.");
+  } catch {
+    return appRedirect("error");
+  }
+
+  try {
+    const service = createServiceClient();
+    await service.rpc("enqueue_gcal_sync", { p_user_id: userId });
+  } catch {
+    /* best-effort after a real connect; Sync Now or the next run heals it */
+  }
+
+  revalidatePath("/integrations");
+  return appRedirect("connected");
+}
+
+/** The app's return: an absolute deep link with only a status word. */
+function appRedirect(status: "connected" | "error"): NextResponse {
+  return new NextResponse(null, {
+    status: 302,
+    headers: { location: `${APP_CALLBACK_BASE}?status=${status}` },
+  });
+}
+
 export async function GET(request: Request) {
   if (!isGoogleConfigured()) {
     return sameOriginRedirect(NOT_CONFIGURED_REDIRECT);
@@ -62,6 +143,14 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");
+
+  /* The mobile path first: a state that belongs to a hashed state row needs
+     no cookie and no web session - the row's user owns the code. A miss
+     falls through to the unchanged cookie-bound web flow. */
+  if (code && state) {
+    const mobileUser = await consumeGoogleOAuthState(state);
+    if (mobileUser !== null) return completeMobileConnect(code, mobileUser);
+  }
 
   const cookieStore = await cookies();
   const cookieValue = cookieStore.get(GOOGLE_OAUTH_STATE_COOKIE)?.value ?? "";

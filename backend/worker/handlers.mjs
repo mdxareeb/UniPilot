@@ -27,6 +27,7 @@
 import { processDocument } from "./documentProcessing.mjs";
 import { reindexDocument } from "./documentReindex.mjs";
 import { whatsappExtract } from "./groupsync/extractMessage.mjs";
+import { gcalSync } from "./gcal/sync.mjs";
 import { exportPresentation, generatePresentation } from "./presentationJobs.mjs";
 import {
   whatsappConnect,
@@ -56,6 +57,10 @@ export const handlers = {
   // captured message with Gemini. Ids-only payload `{ rawMessageId }`; see
   // groupsync/extractMessage.mjs.
   "whatsapp.extract": whatsappExtract,
+
+  // Google Calendar sync (P-gcal): one incremental inbound pass plus the
+  // opt-in outbound export, ids-only payload `{ userId }`; see gcal/sync.mjs.
+  "gcal.sync": gcalSync,
 
   "noop.test": async (payload, ctx) => {
     ctx.log(`noop.test ran (job ${ctx.jobId}, attempt ${ctx.attempt})`);
