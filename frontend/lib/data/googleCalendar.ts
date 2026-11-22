@@ -81,6 +81,15 @@ export async function mintGoogleOAuthState(
 
   const state = crypto.randomUUID() + crypto.randomUUID();
   const service = createServiceClient();
+  // Best-effort hygiene: an abandoned connect leaves its expired row behind.
+  try {
+    await service
+      .from("google_oauth_states")
+      .delete()
+      .lt("expires_at", new Date().toISOString());
+  } catch {
+    /* the new state is still usable */
+  }
   const { error } = await service.from("google_oauth_states").insert({
     state_hash: await sha256Hex(state),
     user_id: userId,
