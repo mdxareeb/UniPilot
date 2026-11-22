@@ -56,10 +56,13 @@ function permanent(message) {
   return error;
 }
 
-/** RFC3339 from a Google dateTime; all-day `date` stays a midnight instant. */
+/** RFC3339 from a Google dateTime; all-day `date` sits at noon UTC so the
+ * calendar day survives the profile-zone rendering for the common offsets. */
 function toInstant(googleWhen) {
   if (typeof googleWhen?.dateTime === "string") return googleWhen.dateTime;
-  if (typeof googleWhen?.date === "string") return `${googleWhen.date}T00:00:00.000Z`;
+  if (typeof googleWhen?.date === "string") {
+    return `${googleWhen.date}T12:00:00.000Z`;
+  }
   return null;
 }
 

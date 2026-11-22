@@ -200,6 +200,13 @@ describe("gcalSync", () => {
               start: { dateTime: new Date(Date.now() + 86400000).toISOString() },
               end: { dateTime: new Date(Date.now() + 2 * 86400000).toISOString() },
             },
+            {
+              id: "gevent-allday",
+              status: "confirmed",
+              summary: "Study break",
+              start: { date: "2026-11-25" },
+              end: { date: "2026-11-26" },
+            },
             { id: "gevent-cancelled", status: "cancelled" },
           ],
           nextSyncToken: "next-primary",
@@ -241,6 +248,11 @@ describe("gcalSync", () => {
       (row) => row.source === "google_calendar" && row.source_ref === "gevent-1",
     );
     assert.ok(imported, "the new Google event was imported");
+    const allDay = client.state.tables.events.find(
+      (row) => row.source_ref === "gevent-allday",
+    );
+    assert.ok(allDay?.all_day === true);
+    assert.equal(allDay.start_at, "2026-11-25T12:00:00.000Z", "date-only stays the same day");
     assert.equal(
       client.state.tables.events.some((row) => row.source_ref === "gevent-cancelled"),
       false,
