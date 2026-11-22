@@ -4,7 +4,8 @@
   "workspaces": [
     "frontend",
     "backend",
-    "mobile-app"
+    "mobile-app",
+    "whatsapp-bridge"
   ],
   "scripts": {
     "dev": "node scripts/start-env.mjs",
@@ -16,6 +17,7 @@
     "test": "npm run test -w frontend",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:whatsapp": "npm run test:whatsapp -w backend",
+    "test:groupsync": "npm run test:groupsync -w backend",
     "db:reset": "npm run db:reset -w backend",
     "db:lint": "npm run db:lint -w backend",
     "db:types": "npm run db:types -w backend",
@@ -27,6 +29,9 @@
     "mobile:lint": "npm run lint -w mobile-app",
     "mobile:typecheck": "npm run typecheck -w mobile-app",
     "mobile:test": "npm run test -w mobile-app",
-    "mobile:preview": "npm run build:preview -w mobile-app"
+    "mobile:preview": "npm run build:preview -w mobile-app",
+    "bridge": "npm run start -w whatsapp-bridge",
+    "bridge:typecheck": "npm run typecheck -w whatsapp-bridge",
+    "bridge:test": "npm run test -w whatsapp-bridge"
   }
 }

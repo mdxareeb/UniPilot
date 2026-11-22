@@ -1,0 +1,26 @@
+{
+  "name": "@unipilot/whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only Baileys bridge: WhatsApp group live sync for UniPilot (Stage 1).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node --env-file=../backend/.env --import tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node --import tsx scripts/smoke-link.ts",
+    "test": "node --import tsx --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.19.0",
+    "typescript": "^5"
+  }
+}

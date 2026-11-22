@@ -10,6 +10,17 @@
   (plus `requirements-google.txt` for push; `requirements-live.txt` only on the
   self-host live host); live mode is single-tenant (Chrome + phone QR). See
   `whatsapp/README.md`.
+- `whatsapp-bridge/` — the read-only Baileys listener behind WhatsApp group
+  live sync (Stage 1): a separate long-running TypeScript process (`npm run
+  bridge`, loads `backend/.env`) that links a user's WhatsApp by QR and captures
+  messages/files from the groups the user switched on. It never sends, marks
+  read or sets presence (an allowlist socket wrapper plus a source-scan test
+  enforce it); session secrets are pgcrypto-encrypted behind service-role RPCs;
+  the web app commands it through `whatsapp_sessions.desired_state` (Realtime is
+  off locally, so it polls). Its tests use fakes: `npm run bridge:test` is not
+  evidence about real WhatsApp, and live verification needs a spare number (see
+  `whatsapp-bridge/README.md`). Baileys is unofficial: account restrictions are
+  possible, so never test with a personal number.
 - Root scripts orchestrate the workspaces:
   `npm run dev` = the one-command local environment (`scripts/start-env.mjs`:
   WSL/Docker → Presenton → Supabase → worker → Next; `npm run dev:web` is Next
