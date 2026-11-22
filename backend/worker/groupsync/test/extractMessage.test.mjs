@@ -44,6 +44,22 @@ describe("text messages", () => {
     assert.deepEqual(repo.state.usage, [{ kind: "gemini_extract", quantity: 1 }]);
   });
 
+  it("accepts an answer that omits relevant but carries items (live-model tolerance)", async () => {
+    const repo = createMemoryRepo();
+    const answer = extraction(undefined, { relevant: undefined });
+    const result = await run(repo, createFakeGemini([answer]));
+    assert.equal(result.outcome, "processed");
+    assert.equal(repo.state.tasks.length, 1);
+  });
+
+  it("still treats an empty answer with no relevant flag as noise", async () => {
+    const repo = createMemoryRepo();
+    const answer = extraction([], { relevant: undefined });
+    const result = await run(repo, createFakeGemini([answer]));
+    assert.equal(result.outcome, "noise");
+    assert.deepEqual(repo.state.outcomes, [{ status: "ignored_noise", error: null }]);
+  });
+
   it("puts an exam on the calendar as an event with the right type", async () => {
     const repo = createMemoryRepo({
       message: makeMessage({ raw_text: "CS305 midterm on 5 Dec at 10am" }),

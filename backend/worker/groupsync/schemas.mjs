@@ -12,7 +12,14 @@
  */
 import { z } from "zod";
 
-const WEEKDAY = z.enum([
+/** Live models often capitalise enum values ("Monday", "Assignment"). */
+const lowerEnum = (values) =>
+  z.preprocess(
+    (value) => (typeof value === "string" ? value.trim().toLowerCase() : value),
+    z.enum(values),
+  );
+
+const WEEKDAY = lowerEnum([
   "monday",
   "tuesday",
   "wednesday",
@@ -34,9 +41,13 @@ export const WhenSchema = z.object({
   month: z.number().int().min(1).max(12).nullable().optional(),
   year: z.number().int().min(2000).max(2100).nullable().optional(),
   weekday: WEEKDAY.nullable().optional(),
-  week_ref: z.enum(["this", "next"]).nullable().optional(),
-  relative: z
-    .enum(["today", "tonight", "tomorrow", "day_after_tomorrow"])
+  week_ref: lowerEnum(["this", "next"]).nullable().optional(),
+  relative: lowerEnum([
+    "today",
+    "tonight",
+    "tomorrow",
+    "day_after_tomorrow",
+  ])
     .nullable()
     .optional(),
   in_days: z.number().int().min(1).max(365).nullable().optional(),
@@ -50,7 +61,7 @@ export const ITEM_TYPES = ["assignment", "quiz", "exam", "lab", "event"];
 export const TASK_TYPES = new Set(["assignment", "quiz"]);
 
 export const ItemSchema = z.object({
-  type: z.enum(ITEM_TYPES),
+  type: lowerEnum(ITEM_TYPES),
   title: z.string().trim().min(1).max(200),
   course_hint: z
     .string()
@@ -72,10 +83,15 @@ export const ItemSchema = z.object({
 export const ExtractionSchema = z.object({
   relevant: z
     .boolean()
+    .optional()
     .describe("False for chatter, jokes, logistics unrelated to coursework, greetings."),
   items: z.array(ItemSchema).max(25),
   summary: z.string().max(600).nullable().optional(),
-  topic_tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
+  topic_tags: z
+    .array(z.string().trim().min(1).max(40))
+    .max(8)
+    .nullable()
+    .optional(),
 });
 
 export const IMAGE_CATEGORIES = [
@@ -95,7 +111,7 @@ export const USEFUL_IMAGE_CATEGORIES = new Set([
 ]);
 
 export const ImageClassSchema = z.object({
-  category: z.enum(IMAGE_CATEGORIES),
+  category: lowerEnum(IMAGE_CATEGORIES),
   confidence: z.number().min(0).max(1),
 });
 

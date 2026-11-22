@@ -46,7 +46,10 @@ CONFIDENCE (0 to 1)
 "evidence" is the shortest phrase from the message that supports the item.
 "summary" (at most 3 sentences) and "topic_tags" (at most 8 short tags) describe an attached DOCUMENT; set them to null for a plain message.
 
-Return ONLY a JSON object that matches the provided schema.`;
+Return ONLY a JSON object of exactly this shape (no markdown, no commentary):
+{"relevant": true, "items": [{"type": "assignment", "title": "Assignment 5", "course_hint": "CS301", "proposed_subject_name": null, "when": {"date_text": null, "day": 12, "month": 12, "year": 2026, "weekday": null, "week_ref": null, "relative": null, "in_days": null, "in_weeks": null, "time": "23:59", "end_time": null}, "confidence": 0.95, "evidence": "due on December 12, 2026 at 11:59 PM"}], "summary": null, "topic_tags": []}
+
+"when" is ALWAYS a nested object; never put day/month/year/time at the item's top level. "title" is required for every item. Use "relevant": false with "items": [] for chatter.`;
 
 export const IMAGE_CLASSIFY_SYSTEM = `You look at ONE image posted in a college class WhatsApp group and say what kind of image it is.
 

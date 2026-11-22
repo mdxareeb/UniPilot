@@ -221,7 +221,14 @@ export async function extractMessage(deps, rawMessageId, attempt = {}) {
     });
     addUsage(extraction.usage);
 
-    const plans = planItems(extraction.data, {
+    /* Live models sometimes omit `relevant`. Items are the real evidence:
+       an answer with items is relevant; an empty one is noise. */
+    const data = {
+      ...extraction.data,
+      relevant: extraction.data.relevant ?? extraction.data.items.length > 0,
+    };
+
+    const plans = planItems(data, {
       sentAt,
       timeZone: ctx.timeZone,
       dateOrder: ctx.dateOrder,
@@ -298,8 +305,8 @@ export async function extractMessage(deps, rawMessageId, attempt = {}) {
         subjects: ctx.subjects,
       });
       await repo.updateDocument(doc.id, {
-        ai_summary: extraction.data.summary ?? null,
-        topic_tags: (extraction.data.topic_tags ?? []).slice(0, 8),
+        ai_summary: data.summary ?? null,
+        topic_tags: (data.topic_tags ?? []).slice(0, 8),
         subject_id: subjectId,
       });
       // Searchable text for the Documents page: PDFs and DOCX only (the
@@ -308,7 +315,7 @@ export async function extractMessage(deps, rawMessageId, attempt = {}) {
       if (kind === "pdf" || kind === "docx") await repo.enqueueIndexing(message.user_id, doc.id);
     }
 
-    const noise = !doc && !extraction.data.relevant && plans.length === 0;
+    const noise = !doc && !data.relevant && plans.length === 0;
     await repo.setMessage(message.id, noise ? "ignored_noise" : "processed", null);
     await recordUsage();
     log(

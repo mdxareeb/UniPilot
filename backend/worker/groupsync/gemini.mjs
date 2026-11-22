@@ -22,6 +22,11 @@
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
+/* Google rejects some generated schemas ("too many states"). The worker runs
+   one model per process, so remember the rejection here: the first job pays one
+   400, every later job goes straight to prompt-carried JSON. */
+let schemaSupported = true;
+
 export class GeminiError extends Error {
   /**
    * @param {string} code  not_configured | rate_limited | unavailable | rejected | blocked | invalid_response
@@ -144,12 +149,15 @@ export function createGeminiClient({ config, fetchImpl = globalThis.fetch, timeo
         },
       });
 
-      let response = await post(build(true));
+      let response = await post(
+        build(schemaSupported && jsonSchema !== undefined),
+      );
 
-      // The schema field has changed names across API revisions. If it is the
-      // thing being rejected, retry once with the schema carried in the prompt
-      // alone; Zod validates the answer either way.
-      if (response.status === 400 && jsonSchema) {
+      // The schema field has changed names across API revisions, and some
+      // models reject complex schemas outright. Fall back once, then remember
+      // that this process must carry the schema in the prompt instead.
+      if (response.status === 400 && jsonSchema !== undefined && schemaSupported) {
+        schemaSupported = false;
         response = await post(build(false));
       }
 

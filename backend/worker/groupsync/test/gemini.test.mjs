@@ -82,13 +82,22 @@ describe("generateJson", () => {
     assert.deepEqual((await gemini.generateJson(request)).value, { a: 1 });
   });
 
-  it("retries once without the schema when the schema field itself is rejected", async () => {
-    const { gemini, calls } = client([reply(400, {}), reply(200, okBody('{"a":1}'))]);
+  it("retries once without the schema when the schema field itself is rejected, then remembers", async () => {
+    const { gemini, calls } = client([
+      reply(400, {}),
+      reply(200, okBody('{"a":1}')),
+      reply(200, okBody('{"a":2}')),
+    ]);
     const out = await gemini.generateJson(request);
     assert.deepEqual(out.value, { a: 1 });
     assert.equal(calls.length, 2);
     assert.ok("responseJsonSchema" in calls[0].body.generationConfig);
     assert.ok(!("responseJsonSchema" in calls[1].body.generationConfig));
+
+    const again = await gemini.generateJson(request);
+    assert.deepEqual(again.value, { a: 2 });
+    assert.equal(calls.length, 3);
+    assert.ok(!("responseJsonSchema" in calls[2].body.generationConfig));
   });
 
   it("maps statuses to retryable / permanent with fixed copy", async () => {
@@ -169,6 +178,35 @@ describe("schemas", () => {
       ],
     });
     assert.equal(parsed.items[0].title, "Quiz 2");
+  });
+
+  it("tolerates a live answer that omits relevant", () => {
+    const parsed = ExtractionSchema.parse({ items: [] });
+    assert.equal(parsed.relevant, undefined);
+    assert.deepEqual(parsed.items, []);
+  });
+
+  it("accepts capitalised enums from a live model", () => {
+    const parsed = ExtractionSchema.parse({
+      relevant: true,
+      items: [
+        {
+          type: "Assignment",
+          title: "Assignment 5",
+          when: { weekday: "Monday", week_ref: "Next" },
+          confidence: 0.9,
+          evidence: "due Monday",
+        },
+      ],
+    });
+    assert.equal(parsed.items[0].type, "assignment");
+    assert.equal(parsed.items[0].when.weekday, "monday");
+    assert.equal(parsed.items[0].when.week_ref, "next");
+  });
+
+  it("tolerates null topic_tags from a live answer", () => {
+    const parsed = ExtractionSchema.parse({ relevant: true, items: [], topic_tags: null });
+    assert.equal(parsed.topic_tags, null);
   });
 
   it("rejects an unknown item type, a bad time and an out-of-range confidence", () => {
