@@ -11,13 +11,21 @@ the existing `whatsapp.push` path keep their behavior.
 
 ## Decisions (approved)
 
-1. **OAuth client:** a Google **Web application** client; the redirect URIs are
-   `http://localhost:3000/api/integrations/google/callback` and the
-   `127.0.0.1` equivalent for local work. The same client pair is readable by
-   the worker host (`frontend/.env` and `backend/.env`).
-2. **Scope:** `https://www.googleapis.com/auth/calendar.events` — one grant
-   covers reading events (`events.list`) and writing them
-   (`events.insert`/`events.patch`).
+1. **OAuth client:** a Google **Web application** client. The registered
+   redirect URI proven live is
+   `http://localhost:3000/api/integrations/google/callback`; the server builds
+   it from `NEXT_PUBLIC_SITE_URL` (set locally to `http://localhost:3000`).
+   The `127.0.0.1` equivalent must be registered too if that origin is used —
+   the live pass hit `redirect_uri_mismatch` for it. The same client pair is
+   readable by the worker host (`frontend/.env` and `backend/.env`).
+2. **Scopes (recorded deviation, proven necessary live):** three scopes in one
+   grant — `calendar.events` (event read/write),
+   `calendar.calendarlist.readonly` (`calendarList.list`), and
+   `calendar.app.created` (create the dedicated UniPilot calendar). The initial
+   `calendar.events`-only decision was insufficient: Google answers
+   `calendarList.list` and `calendars.insert` with 403
+   `insufficientPermissions`. The full `calendar` scope is deliberately not
+   requested.
 3. **Defaults:** the primary calendar starts **ON**; secondary, holiday and
    birthday calendars start **OFF**, so personal noise is not auto-imported.
 4. **Deletion semantics:** a Google event with `status = "cancelled"` deletes
@@ -131,7 +139,9 @@ The service layer is `frontend/lib/data/googleCalendar.ts`.
   `syncToken`/`410`, find-or-create the export calendar, `events.insert`,
   `events.patch`. Error mapping: `400/401/403` → permanent `revoked`; `429`/`5xx`/
   network → retryable `unavailable`; malformed bodies → retryable
-  `invalid_response`. Google bodies are never logged.
+  `invalid_response`. A 403 is also Google's answer for a missing scope, so the
+  reconnect copy is the honest next action for both. Google bodies are never
+  logged.
 - `repo.mjs` — the DB half (connection gate, encrypted credential read,
   calendar upserts, event upsert/delete, cursors, export sets, run/usage rows).
 - `sync.mjs` — the `gcal.sync` handler (`backend/worker/handlers.mjs`). The job
@@ -142,8 +152,11 @@ The service layer is `frontend/lib/data/googleCalendar.ts`.
 
 The first run is bounded (`-30d…+365d`) instead of crawling the whole calendar.
 Later runs use the stored cursor; a `410` clears it and re-syncs that bounded
-window once. Export is capped at 100 inserts + 100 patches per pass. Every
-exported event carries `extendedProperties.private.unipilotSource`.
+window once. Export is capped at 100 inserts + 100 patches per pass; a deadline
+exports as a 30-minute timed event (or a one-day all-day event if it ever
+reaches the worker without a date), and an all-day event's Google end is the
+next day because Google treats it as exclusive. Every exported event carries
+`extendedProperties.private.unipilotSource`.
 
 ## Mobile
 
@@ -186,25 +199,79 @@ exported event carries `extendedProperties.private.unipilotSource`.
   the job settled `failed` (permanent), the connection became `error` with the
   reconnect copy, and one `integration_runs(mode='sync', status='failed')` row
   was written. This proves the handler registration, encrypted-credential read,
-  real HTTP error mapping and settlement path. It is **not** a successful
-  import/export.
+  real HTTP error mapping and settlement path (the live pass below covers the
+  success path).
 
 ## Live verification status
 
-- [!] **Not yet exercised against live Google.** The OAuth client pair is set
-  in `frontend/.env`/`backend/.env`, but a real consent round trip, a real
-  calendar list and a real import/export have not been run in this session.
-  Until that happens, the only evidence is the mocked-fetch suite and the
-  schema contract. The device legs (connect → consent → deep-link return,
-  calendar toggles, Sync Now import, auto-export round trip, disconnect) are
-  also pending.
-- Live E2E requires: a registered Web-application OAuth client with the two
-  localhost redirect URIs, a Google account on its Test users list, the local
-  stack up, and `npm run worker` (or `worker:once`) running with the same
-  client pair.
+**Verified against live Google on 2026-11-22** (local stack, Android emulator
+`Pixel7_API36`, APK 108,277,629 bytes, signer `bc51cd50…`, cleartext on,
+installed in place). Test identity: `lets.thryvee@gmail.com` (a Google Test
+user; not the founder account).
+
+- **Consent + connect:** the server-mediated flow reached Google's account
+  picker, the unverified-app warning, and the three-scope consent; the callback
+  exchanged the code, stored the refresh token encrypted, and returned through
+  `unipilot://oauth/google`. The first attempt failed with
+  `redirect_uri_mismatch` for `127.0.0.1`; setting
+  `NEXT_PUBLIC_SITE_URL=http://localhost:3000` made the callback use the
+  registered `localhost` URI.
+- **Calendar list + defaults:** the connection became `Connected`,
+  `calendarList.list` mirrored two calendars, the primary started **Importing**
+  and "Holidays in India" started **Off** with no cursor.
+- **Inbound + cancellation:** a real event created 2026-11-23 10:00 UTC in the
+  primary was imported by `gcal.sync` (`source='google_calendar'`,
+  `source_ref` = Google id), rendered on the Calendar tab with an EVENT +
+  **GOOGLE CALENDAR** pill and `Source: Google Calendar` in the sheet. Deleting
+  the event in Google and syncing again removed the local row (0 matches for
+  that `source_ref`).
+- **Calendar toggle:** switching "Holidays in India" on persisted
+  `is_active=true` with `activated_at`; the list re-sorted it above the primary.
+  It was switched back off during cleanup (the UI tap and persistence are the
+  evidence; cleanup used the service role).
+- **Export:** enabling auto-export and syncing created the dedicated **UniPilot**
+  calendar (`calendar.app.created`), exported the local deadline with
+  `extendedProperties.private.unipilotSource=task:<id>`, and set
+  `tasks.google_event_id`. The Tasks tab showed the **GOOGLE CALENDAR** pill and
+  `Google Calendar: Exported`. A title edit followed by another sync PATCHed the
+  same Google event id (summary updated, no duplicate). The calendar also
+  exported four pre-existing local events in the same pass, which is the
+  designed opt-in behavior.
+- **Throttle:** tapping Sync Now within five minutes rendered
+  "A sync just ran. Wait a few seconds and try again."
+- **Disconnect:** the confirm sheet's Disconnect wiped the refresh token
+  (credentials 0), the calendar rows/cursors (0), cleared
+  `auto_export_to_gcal`/`export_calendar_id`/`last_synced_at`, and settled the
+  connection as `disconnected`.
+- **Mobile states:** the More row rendered **Not linked**, **Connected** (with
+  relative sync time), and **Needs reconnect** in their real states; the screen
+  rendered its not-linked, connected (preferences + calendars), and disconnect
+  states. Dark mode and reduced motion (scales 0/0/0, cold start) showed every
+  element.
+- **Cold-start deep link:** `unipilot://oauth/google?status=connected` launched
+  the dead process straight into the Google Calendar screen (the same Android
+  launch-URL hazard as the auth callback).
+
+**Not exercised live:** a recurring series instance, a real all-day event, and
+calendar-list pagination. Their behavior is covered by the worker tests and the
+recorded limits below. The exported test calendar and its events were deleted
+after the pass, and local smoke rows/ids were cleared; no live Google data is
+left behind.
+
+Reproduce with: the local stack, `npm run dev:web`, `npm run worker`, a
+registered Web-application client whose Test users include the account, and
+`NEXT_PUBLIC_SITE_URL=http://localhost:3000` (or the matching registered
+origin).
 
 ## Known gaps and risks
 
+- A 403 is Google's answer for both a revoked grant and a missing scope; the
+  worker correctly settles it as "needs reconnect", but a distinct
+  "permission missing" copy would need the response body (deliberately not
+  read). Re-consent is the fix in both cases.
+- The local `127.0.0.1` callback must be registered on the Google client if
+  that origin is used; the verified local setup builds `localhost` from
+  `NEXT_PUBLIC_SITE_URL`.
 - Google is not a stable test double: quota, consent-screen changes and
   verification status can change behavior without a code change.
 - The export calendar is found by name (`UniPilot`) or by the stored id. If a
@@ -214,6 +281,10 @@ exported event carries `extendedProperties.private.unipilotSource`.
   placed at noon UTC so the common profile zones keep the same calendar day;
   zones beyond +12 can still show the next day. A date-only column would be
   the structural fix.
+- `singleEvents=true` expands recurring series into instances; `maxResults=2500`
+  covers a normal student year in one page. `nextPageToken` is not followed, so
+  a calendar/window with more than 2,500 instances would be truncated; a
+  pagination loop is a future item. First-run window is `-30d…+365d`.
 - Export is idempotent per row, but a Google-side deletion of an exported
   event is not detected; the next PATCH re-creates nothing and reports the
   missing event as a rejected request. A reconciliation pass is a future item.
