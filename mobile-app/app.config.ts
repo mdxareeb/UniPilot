@@ -65,6 +65,9 @@ const config: ExpoConfig = {
   },
   android: {
     package: "com.unipilot.app",
+    // Camera capture for Image to PDF. Media selection uses the system photo
+    // picker; microphone is explicitly blocked by the image-picker plugin.
+    permissions: ["CAMERA"],
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
