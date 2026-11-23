@@ -55,7 +55,12 @@ describe("HOME_TOOL_GROUPS", () => {
     const studyTools = HOME_TOOL_GROUPS.find(
       (group) => group.id === "study-tools",
     ) as HomeToolsGroup;
-    expect(liveTools(fileTools).map((item) => item.id)).toEqual(["materials"]);
+    expect(liveTools(fileTools).map((item) => item.id)).toEqual([
+      "image-to-pdf",
+      "convert",
+      "pdf-utils",
+      "materials",
+    ]);
     expect(liveTools(studyTools).map((item) => item.id)).toEqual(["ask-ai"]);
     expect(fileTools.items).toHaveLength(4);
     expect(studyTools.items).toHaveLength(2);
@@ -67,10 +72,10 @@ describe("home group pills", () => {
     const fileTools = HOME_TOOL_GROUPS.find(
       (group) => group.id === "file-tools",
     ) as HomeToolsGroup;
-    expect(toolGroupPill(fileTools)).toBe("1 live");
+    expect(toolGroupPill(fileTools)).toBe("4 live");
     expect(connectedIntegrationCount(context)).toBe(2);
     expect(integrationGroupPill(context)).toBe("2 connected");
-    expect(groupPill(fileTools, context)).toBe("1 live");
+    expect(groupPill(fileTools, context)).toBe("4 live");
   });
 
   it("says Set up when nothing is connected", () => {

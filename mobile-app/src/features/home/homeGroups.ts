@@ -1,7 +1,12 @@
 import type { RegistryIcon } from "@/features/workspace/registries";
 
 /** The Home hub routes that exist today; new tools extend this union. */
-export type HomeRoute = "/materials" | "/ask";
+export type HomeRoute =
+  | "/materials"
+  | "/ask"
+  | "/tools/image-to-pdf"
+  | "/tools/pdf-utils"
+  | "/tools/convert";
 
 export type HomeToolItem = {
   id: string;
@@ -42,24 +47,27 @@ const FILE_TOOLS: HomeToolItem[] = [
     name: "Image to PDF",
     description: "Pick photos, order the pages and export one PDF.",
     icon: "image",
-    status: "planned",
-    note: "This tool lands with the file-tools phase.",
+    status: "live",
+    route: "/tools/image-to-pdf",
+    note: "Open Image to PDF.",
   },
   {
     id: "convert",
     name: "Document Converter",
     description: "Turn DOCX, PPTX or TXT into a text-clean PDF.",
     icon: "convert",
-    status: "planned",
-    note: "This tool lands with the file-tools phase.",
+    status: "live",
+    route: "/tools/convert",
+    note: "Open the Document Converter.",
   },
   {
     id: "pdf-utils",
     name: "PDF Utilities",
     description: "Merge PDFs or keep only the pages you need.",
     icon: "pdf",
-    status: "planned",
-    note: "This tool lands with the file-tools phase.",
+    status: "live",
+    route: "/tools/pdf-utils",
+    note: "Open PDF Utilities.",
   },
   {
     id: "materials",
@@ -127,4 +135,10 @@ export const HOME_TOOL_GROUPS = [
   },
 ] as const satisfies readonly HomeToolGroup[];
 
-export const HOME_ROUTES: readonly HomeRoute[] = ["/materials", "/ask"];
+export const HOME_ROUTES: readonly HomeRoute[] = [
+  "/materials",
+  "/ask",
+  "/tools/image-to-pdf",
+  "/tools/pdf-utils",
+  "/tools/convert",
+];

@@ -18,6 +18,18 @@ const allowCleartext = process.env.EXPO_PUBLIC_ALLOW_CLEARTEXT === "1";
 const plugins: NonNullable<ExpoConfig["plugins"]> = [
   "expo-router",
   "expo-secure-store",
+  "expo-document-picker",
+  "expo-sharing",
+  [
+    "expo-image-picker",
+    {
+      photosPermission:
+        "Allow UniPilot to choose photos for your Image to PDF pages.",
+      cameraPermission:
+        "Allow UniPilot to take photos for your Image to PDF pages.",
+      microphonePermission: false,
+    },
+  ],
   [
     "expo-splash-screen",
     {

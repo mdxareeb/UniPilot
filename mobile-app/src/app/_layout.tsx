@@ -136,6 +136,9 @@ function ThemedShell() {
           <Stack.Screen name="whatsapp-groups" />
           <Stack.Screen name="google-calendar" />
           <Stack.Screen name="materials" />
+          <Stack.Screen name="tools/image-to-pdf" />
+          <Stack.Screen name="tools/pdf-utils" />
+          <Stack.Screen name="tools/convert" />
           <Stack.Screen name="onboarding" />
         </Stack.Protected>
         <Stack.Protected guard={status !== "signed_in"}>
