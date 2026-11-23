@@ -491,6 +491,7 @@ export async function runStudyChatTurn(options: {
     documentId: session.scope_document_id ?? undefined,
     subjectId: session.scope_subject_id ?? undefined,
     fallback: "recent",
+    client,
   });
   const chunks = selectContextChunks(hits);
   const sources = buildStudyChatSources(hits, chunks);

@@ -15,6 +15,8 @@
  * markers around the matched terms, and the match kind.
  */
 import { createClient } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/supabase/database.types";
 import {
   RECENT_FALLBACK_LIMIT,
   SEARCH_LIMIT,
@@ -83,12 +85,14 @@ function toHit(row: SearchRow): SearchHit {
 type RecentRow = SearchRow;
 
 /** One bounded recency read; RLS is the authority, exactly as for FTS. */
-async function recentDocumentChunks(options: {
-  documentId?: string;
-  subjectId?: string;
-}): Promise<SearchHit[]> {
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc("recent_document_chunks", {
+async function recentDocumentChunks(
+  client: SupabaseClient<Database>,
+  options: {
+    documentId?: string;
+    subjectId?: string;
+  },
+): Promise<SearchHit[]> {
+  const { data, error } = await client.rpc("recent_document_chunks", {
     p_limit: RECENT_FALLBACK_LIMIT,
     p_document_id: options.documentId,
     p_subject_id: options.subjectId,
@@ -130,6 +134,12 @@ export async function searchDocumentChunks(options: {
   page?: number;
   /** `"recent"` = Ask AI's bounded summary fallback; omitted = literal search. */
   fallback?: "recent";
+  /**
+   * The caller-scoped client. Web pages/actions omit it and use cookies; the
+   * mobile Bearer route passes its own JWT-scoped client so the RPC runs as
+   * `authenticated`, never as `anon`.
+   */
+  client?: SupabaseClient<Database>;
 }): Promise<SearchHit[]> {
   const query = options.query.trim();
   if (
@@ -140,7 +150,7 @@ export async function searchDocumentChunks(options: {
   }
 
   const limit = options.limit ?? SEARCH_LIMIT;
-  const supabase = await createClient();
+  const supabase = options.client ?? (await createClient());
 
   const { data, error } = await supabase.rpc("search_document_chunks", {
     p_query: query,
@@ -161,7 +171,7 @@ export async function searchDocumentChunks(options: {
   const broad = isBroadSummaryQuery(query);
   if (hits.length > 0 && !broad) return hits;
 
-  const recent = await recentDocumentChunks({
+  const recent = await recentDocumentChunks(supabase, {
     documentId: options.documentId,
     subjectId: options.subjectId,
   });

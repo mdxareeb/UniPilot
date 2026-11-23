@@ -82,9 +82,12 @@ export function createFileToolsApi(deps: {
 
   async function call(
     path: string,
-    init: { method: "GET" | "POST"; body?: BodyInit | Record<string, unknown> } = {
-      method: "GET",
-    },
+    init: {
+      method: "GET" | "POST";
+      body?: BodyInit | Record<string, unknown>;
+      /** FormData must never be JSON-stringified by the auto-detection. */
+      json?: boolean;
+    } = { method: "GET" },
   ): Promise<Response> {
     if (base === "") {
       throw new FileToolApiError("config", FILE_TOOL_COPY.NOT_CONNECTED);
@@ -95,11 +98,12 @@ export function createFileToolsApi(deps: {
     }
 
     const isJson =
-      init.body !== undefined &&
-      !(init.body instanceof FormData) &&
-      typeof init.body === "object" &&
-      !(init.body instanceof ArrayBuffer) &&
-      !(init.body instanceof Blob);
+      init.json ??
+      (init.body !== undefined &&
+        !(init.body instanceof FormData) &&
+        typeof init.body === "object" &&
+        !(init.body instanceof ArrayBuffer) &&
+        !(init.body instanceof Blob));
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
@@ -240,6 +244,7 @@ export function createFileToolsApi(deps: {
       const response = await call("/api/mobile/tools/ocr", {
         method: "POST",
         body: form,
+        json: false,
       });
       const body = (await requireJson(response)) as Partial<OcrResponse>;
       if (typeof body.configured !== "boolean") {
@@ -262,6 +267,7 @@ export function createFileToolsApi(deps: {
       const response = await call("/api/mobile/tools/convert", {
         method: "POST",
         body: form,
+        json: false,
       });
       if (!response.ok) {
         throw errorFrom(response.status, await jsonOrNull(response));

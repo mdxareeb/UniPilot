@@ -386,6 +386,17 @@ test.describe("Ask AI retrieval scoping", () => {
       (bySubject.data ?? []).map((row: { document_id: string }) => row.document_id),
     ).toEqual([documentA]);
 
+    // Regression: the shared search service must run through the caller's
+    // Bearer client, not the cookie client (which has no session in a native
+    // route and therefore runs as anon → permission denied).
+    const { searchDocumentChunks } = await import("../../lib/data/search");
+    const bearerHits = await searchDocumentChunks({
+      query: "zephyrneedlealpha",
+      subjectId: subjectA,
+      client: qa1,
+    });
+    expect(bearerHits.map((hit) => hit.documentId)).toEqual([documentA]);
+
     const byDocument = await qa1.rpc("search_document_chunks", {
       p_query: "zephyrneedlebeta",
       p_limit: 10,

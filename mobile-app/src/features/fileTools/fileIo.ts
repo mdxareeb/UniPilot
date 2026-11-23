@@ -127,6 +127,16 @@ export async function takeImageWithCamera(): Promise<PickImagesResult> {
   }
 }
 
+async function cachePickedFile(uri: string, name: string): Promise<string> {
+  if (uri.startsWith("file://")) return uri;
+  const directory = FileSystem.cacheDirectory;
+  if (directory === null) return uri;
+  const safeName = name.replace(/[^A-Za-z0-9._-]/g, "-").slice(-80);
+  const destination = `${directory}picked-${Date.now()}-${safeName}`;
+  await FileSystem.copyAsync({ from: uri, to: destination });
+  return destination;
+}
+
 export async function pickPdfFiles(): Promise<QueryResult<PickedPdf>> {
   try {
     const result = await DocumentPicker.getDocumentAsync({
@@ -145,7 +155,7 @@ export async function pickPdfFiles(): Promise<QueryResult<PickedPdf>> {
       }
       rows.push({
         id: `${Date.now()}-${rows.length}`,
-        uri: asset.uri,
+        uri: await cachePickedFile(asset.uri, asset.name),
         name: asset.name,
         sizeBytes: asset.size ?? null,
       });
@@ -177,7 +187,7 @@ export async function pickConvertFile(): Promise<{
     }
     return {
       file: {
-        uri: asset.uri,
+        uri: await cachePickedFile(asset.uri, asset.name),
         name: asset.name,
         sizeBytes: asset.size ?? null,
         mimeType: asset.mimeType ?? null,

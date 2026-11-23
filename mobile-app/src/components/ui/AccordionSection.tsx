@@ -66,15 +66,11 @@ export function AccordionSection({
   }, [open, progress, reduced]);
 
   const bodyStyle = useAnimatedStyle(() => ({
-    // Until the content has been measured, an open panel must lay out
-    // naturally (height undefined) so its child can report a real height.
-    // A closed panel stays at zero; once measured, the animation has a target.
-    height:
-      contentHeight > 0
-        ? contentHeight * progress.value
-        : open
-          ? undefined
-          : 0,
+    // The content is an absolutely positioned natural-height child, so the
+    // parent can animate between 0 and the measured height without ever
+    // constraining the child's measurement. This keeps closed content mounted
+    // and makes reopening work after the first collapse.
+    height: contentHeight * progress.value,
     opacity: progress.value,
   }));
 
@@ -137,7 +133,13 @@ export function AccordionSection({
         pointerEvents={open ? "auto" : "none"}
         style={[{ overflow: "hidden" }, bodyStyle]}
       >
-        <View onLayout={(event) => setContentHeight(event.nativeEvent.layout.height)}>
+        <View
+          onLayout={(event) => {
+            const height = event.nativeEvent.layout.height;
+            if (height > 0) setContentHeight(height);
+          }}
+          style={{ position: "absolute", top: 0, left: 0, right: 0 }}
+        >
           <Divider />
           <View
             style={{
