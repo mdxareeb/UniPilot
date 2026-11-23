@@ -94,6 +94,7 @@ export async function runDocumentOcr(options: {
 
   const limits = await checkOcrLimits(userId, pageCount);
   if (!limits.ok) {
+    await markDocumentOcrFailed(client, userId, documentId, limits.copy);
     return {
       status: "limited",
       error: limits.copy,

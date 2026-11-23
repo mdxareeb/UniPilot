@@ -310,6 +310,27 @@ search and recency ordering with QA1/QA2 RLS isolation; session CRUD with
 layer is also proven by
 `backend/supabase/qa/study-chat-schema-check.sql` (rolled-back SQL).
 
+### Mobile File Tools (Phase 4)
+
+No schema change: the tools reuse the private `documents` bucket, owner-folder
+storage policies, `documents`/`document_chunks`, the 29.1 job queue and the
+open `usage_events` taxonomy.
+
+| Piece | Decision |
+| --- | --- |
+| Reserve | `POST /api/mobile/documents/reserve`: validates name/MIME/size (25 MiB, the launch set), verifies an optional subject belongs to `auth.uid()`, applies the same 50-file/250 MiB free guard, and returns `{ documentId, uploadPath }`. The client uploads to that owner-folder path directly; the service role is never used for the upload. |
+| Finalize | `POST /api/mobile/documents/{id}/finalize`: verifies the object exists, re-checks real size and magic bytes, updates `size_bytes`, flips `indexing`, and either enqueues `document.process` (`mode: "process"`) or returns `ocr_required` (`mode: "ocr"`). A rejected reservation removes the object and row. |
+| OCR | `POST /api/mobile/tools/ocr`: multipart page images or JSON `{documentId}` (stored PDF). Bounds: 20 pages, 4 MiB/page, 16 MiB total/PDF. Gemini Vision (`GEMINI_API_KEY` + `GEMINI_MODEL`, `x-goog-api-key`, temperature 0, bounded output) returns page text; the route normalizes it, replaces `document_chunks` with one page-provenance chunk per readable page, and only then marks `documents.indexed` + `page_count`. Unconfigured or provider failure leaves an honest `failed` row. |
+| OCR ledger | `usage_events` kinds `ocr_page` (provider pages) and `ocr_tokens` (observability). Guards: **20 pages/minute** and **500 pages/month**; over-limit answers 429 with `Retry-After`, without a provider call. |
+| Convert | `POST /api/mobile/tools/convert`: multipart DOCX/PPTX/TXT (10 MiB cap), mammoth/fflate extraction, A4 Helvetica PDF via pdf-lib. The result is a real text layer for `document.process`. The standard font is WinAnsi, so common typography is normalized and unsupported scripts become `?` rather than breaking the document. |
+| Mobile | Image-to-PDF normalizes orientation/quality with expo-image-manipulator, reorders pages, assembles with pdf-lib, shares/saves via expo-sharing + Android SAF, and opts into OCR when saved to Course Materials. PDF Utilities merges/reorders/extracts; the converter posts to this route. |
+
+**Proof:** `frontend/tests/qa/mobile-file-tools.spec.ts` (real stack, 13/13):
+401/403/400/404/413/503, reserve + real upload + finalize + queued job, missing
+object discard, subject ownership, OCR multipart bounds/foreign id/503/
+unconfigured, and TXT/DOCX/PPTX → `%PDF-` conversion. Mobile pure tests cover
+page ranges, reorder/remove, filename sanitization and base64 encoding.
+
 ### Assistant action engine (Task 27.x)
 
 Two migrations: `20260923083919_assistant_actions.sql` (the log) and
