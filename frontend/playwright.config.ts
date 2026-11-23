@@ -292,6 +292,19 @@ export default defineConfig({
       ],
     },
     {
+      // Phase 4 — File Tools Bearer routes: reserve/finalize, OCR bounds,
+      // conversion and the 401/403/400/404/413/503 mapping. It seeds and
+      // sweeps its own documents/jobs, so it runs after the Ask AI channel.
+      name: "qa-mobile-file-tools",
+      testMatch: /mobile-file-tools\.spec\.ts/,
+      workers: 1,
+      timeout: 120_000,
+      dependencies: ["qa-auth-setup", "qa-onboarding", "qa-mobile-chat"],
+      use: {
+        storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
+      },
+    },
+    {
       // Task 19.x — the assistant chat UI. C1 ships the pure frame
       // vocabulary/parser/reducer; later C tasks add the live panel cases.
       // It runs after the assistant backend pass whose contract it consumes
@@ -299,7 +312,7 @@ export default defineConfig({
       name: "qa-assistant-ui",
       testMatch: /assistant-ui\.spec\.ts/,
       timeout: 120_000,
-      dependencies: ["qa-assistant-backend", "qa-mobile-chat"],
+      dependencies: ["qa-assistant-backend", "qa-mobile-chat", "qa-mobile-file-tools"],
       use: {
         storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
       },
@@ -325,6 +338,7 @@ export default defineConfig({
         "qa-documents-search",
         "qa-assistant-backend",
         "qa-mobile-chat",
+        "qa-mobile-file-tools",
       ],
     },
     {
@@ -478,6 +492,7 @@ export default defineConfig({
         "qa-documents-search",
         "qa-assistant-backend",
         "qa-mobile-chat",
+        "qa-mobile-file-tools",
         "qa-assistant-ui",
         "qa-jobs-runner",
         "qa-whatsapp-security",
