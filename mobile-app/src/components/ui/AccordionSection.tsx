@@ -66,7 +66,15 @@ export function AccordionSection({
   }, [open, progress, reduced]);
 
   const bodyStyle = useAnimatedStyle(() => ({
-    height: contentHeight * progress.value,
+    // Until the content has been measured, an open panel must lay out
+    // naturally (height undefined) so its child can report a real height.
+    // A closed panel stays at zero; once measured, the animation has a target.
+    height:
+      contentHeight > 0
+        ? contentHeight * progress.value
+        : open
+          ? undefined
+          : 0,
     opacity: progress.value,
   }));
 
