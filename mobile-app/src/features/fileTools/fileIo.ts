@@ -127,7 +127,7 @@ export async function takeImageWithCamera(): Promise<PickImagesResult> {
   }
 }
 
-async function cachePickedFile(uri: string, name: string): Promise<string> {
+export async function cachePickedFile(uri: string, name: string): Promise<string> {
   if (uri.startsWith("file://")) return uri;
   const directory = FileSystem.cacheDirectory;
   if (directory === null) return uri;
@@ -273,17 +273,25 @@ export async function savePdfToDevice(
   }
 }
 
-export async function uploadPdf(
+export async function uploadDocument(
   uploadPath: string,
   bytes: Uint8Array,
+  mimeType: string,
 ): Promise<{ error: string | null }> {
   if (supabase === null) return { error: "This build isn't configured." };
   const { error } = await supabase.storage
     .from("documents")
     .upload(uploadPath, bytesToArrayBuffer(bytes), {
-      contentType: PDF_MIME,
+      contentType: mimeType,
       upsert: false,
     });
-  if (error) return { error: "The PDF couldn't be uploaded. Try again." };
+  if (error) return { error: "The file couldn't be uploaded. Try again." };
   return { error: null };
+}
+
+export async function uploadPdf(
+  uploadPath: string,
+  bytes: Uint8Array,
+): Promise<{ error: string | null }> {
+  return uploadDocument(uploadPath, bytes, PDF_MIME);
 }

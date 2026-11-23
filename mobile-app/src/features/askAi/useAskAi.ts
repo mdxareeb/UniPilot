@@ -63,6 +63,7 @@ export function useAskAi() {
   const [documents, setDocuments] = useState<ScopeDocument[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [scopeReady, setScopeReady] = useState(false);
 
   const [session, setSession] = useState<ChatSessionSummary | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -180,6 +181,7 @@ export function useAskAi() {
 
     initialized.current = workspace.error === null;
     initializing.current = false;
+    setScopeReady(true);
   }, [applyWorkspace]);
 
   const refreshWorkspace = useCallback(async () => {
@@ -446,6 +448,7 @@ export function useAskAi() {
     indexedCount: documents.length,
     workspaceLoading,
     workspaceError,
+    scopeReady,
     refreshWorkspace,
 
     session,

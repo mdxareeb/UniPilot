@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Image, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowDown, ArrowUp, Camera, Images, Trash2 } from "lucide-react-native";
 
 import { AppText } from "@/components/AppText";
@@ -27,6 +27,11 @@ import {
   type GeneratedPdf,
   type PdfImagePage,
 } from "@/features/fileTools/fileValues";
+import {
+  normalizeRouteParam,
+  withExtension,
+} from "@/features/fileTools/fileInspector";
+import { prepareImageForPdf } from "@/features/fileTools/fileStudio";
 import { GeneratedPdfCard, type PdfActionBusy } from "@/features/fileTools/components/GeneratedPdfCard";
 import { IconAction } from "@/features/fileTools/components/IconAction";
 import { SaveToMaterialsSheet } from "@/features/fileTools/components/SaveToMaterialsSheet";
@@ -51,6 +56,43 @@ export default function ImageToPdfScreen() {
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const params = useLocalSearchParams<{ imageUri?: string; name?: string }>();
+
+  /** A studio preload becomes the first page once, after the first paint. */
+  useEffect(() => {
+    const uri = normalizeRouteParam(params.imageUri);
+    if (uri === null) return;
+    const name = normalizeRouteParam(params.name) ?? "image.jpg";
+    let active = true;
+    const load = async () => {
+      setBusy("gallery");
+      const result = await prepareImageForPdf(uri, name);
+      if (!active) return;
+      setBusy(null);
+      if (result.page === null) {
+        setError(result.error ?? "That image couldn't be prepared.");
+        return;
+      }
+      setPages([
+        {
+          id: `preload-${Date.now()}`,
+          uri: result.page.uri,
+          base64: result.page.base64,
+          width: result.page.width,
+          height: result.page.height,
+          fileName: result.page.fileName,
+          mimeType: "image/jpeg",
+        },
+      ]);
+      setFileName(withExtension(name, "pdf").replace(/\.pdf$/i, ""));
+      setBuilt(null);
+      setNotice(null);
+    };
+    void Promise.resolve().then(load);
+    return () => {
+      active = false;
+    };
+  }, [params.imageUri, params.name]);
 
   const invalidate = useCallback(() => {
     setBuilt(null);

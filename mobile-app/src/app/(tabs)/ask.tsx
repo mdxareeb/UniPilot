@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { FileText, History, Sparkles } from "lucide-react-native";
 import Animated from "react-native-reanimated";
 
@@ -35,6 +35,7 @@ import type { CitationGroup } from "@/features/askAi/citations";
 import { CHAT_COPY } from "@/features/askAi/chatValues";
 import { ALL_SCOPE } from "@/features/askAi/scope";
 import { useAskAi } from "@/features/askAi/useAskAi";
+import { normalizeRouteParam } from "@/features/fileTools/fileInspector";
 
 /**
  * Ask AI — a grounded study chat over the student's indexed materials.
@@ -55,6 +56,7 @@ export default function AskScreen() {
     indexedCount,
     workspaceLoading,
     workspaceError,
+    scopeReady,
     refreshWorkspace,
     session,
     messages,
@@ -82,8 +84,53 @@ export default function AskScreen() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [scopePicker, setScopePicker] = useState<ScopePickerKind | null>(null);
   const [source, setSource] = useState<CitationGroup | null>(null);
+  const [handoffNotice, setHandoffNotice] = useState<string | null>(null);
+  const params = useLocalSearchParams<{
+    documentId?: string;
+    name?: string;
+    indexing?: string;
+  }>();
+  const preloadApplied = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
   const historyPress = usePressScale(!sending);
+
+  /** Apply a studio handoff once, after the indexed workspace is known. */
+  useEffect(() => {
+    if (preloadApplied.current || workspaceLoading || !scopeReady) return;
+    const documentId = normalizeRouteParam(params.documentId);
+    if (documentId === null) {
+      preloadApplied.current = true;
+      return;
+    }
+    preloadApplied.current = true;
+    const label = normalizeRouteParam(params.name) ?? "This file";
+    const indexing = normalizeRouteParam(params.indexing) === "1";
+    void Promise.resolve().then(() => {
+      if (indexing) {
+        setHandoffNotice(
+          `${label} is still indexing. It will appear in the document scope as soon as the worker finishes.`,
+        );
+        return;
+      }
+      const document = documents.find((entry) => entry.id === documentId);
+      if (document === undefined) {
+        setHandoffNotice(
+          `${label} isn't indexed yet. It will be selectable once indexing finishes.`,
+        );
+        return;
+      }
+      chooseScope({ kind: "document", id: document.id, name: document.name });
+      setHandoffNotice(null);
+    });
+  }, [
+    chooseScope,
+    documents,
+    params.documentId,
+    params.indexing,
+    params.name,
+    scopeReady,
+    workspaceLoading,
+  ]);
 
   const aiBlocked = aiConfigured === false;
   const noMaterials =
@@ -147,6 +194,7 @@ export default function AskScreen() {
   const chooseScopeKind = useCallback(
     (kind: "all" | "subject" | "document") => {
       if (sending) return;
+      setHandoffNotice(null);
       if (kind === "all") {
         chooseScope(ALL_SCOPE);
         return;
@@ -234,6 +282,10 @@ export default function AskScreen() {
               gap: theme.spacing.xl,
             }}
           >
+            {handoffNotice !== null ? (
+              <Notice>{handoffNotice}</Notice>
+            ) : null}
+
             {notice !== null ? (
               <View style={{ gap: theme.spacing.sm }}>
                 <Notice tone={notice.tone}>{notice.message}</Notice>

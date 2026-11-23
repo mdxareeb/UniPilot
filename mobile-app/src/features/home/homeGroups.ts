@@ -53,12 +53,12 @@ const FILE_TOOLS: HomeToolItem[] = [
   },
   {
     id: "convert",
-    name: "Document Converter",
-    description: "Turn DOCX, PPTX or TXT into a text-clean PDF.",
+    name: "Universal File Studio",
+    description: "Inspect any file, convert it, and save it where it belongs.",
     icon: "convert",
     status: "live",
     route: "/tools/convert",
-    note: "Open the Document Converter.",
+    note: "Open the Universal File Studio.",
   },
   {
     id: "pdf-utils",

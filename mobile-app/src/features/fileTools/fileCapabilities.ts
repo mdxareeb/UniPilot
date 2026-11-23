@@ -304,7 +304,7 @@ function actionsFor(
       },
       {
         id: "image-to-pdf",
-        label: "Build a PDF",
+        label: "Build a multi-page PDF",
         description: "Open Image to PDF with this page.",
       },
       {
@@ -387,6 +387,7 @@ export function fileCapabilitiesFor(
     if (category === "image" && target === "txt") {
       return {
         ...option,
+        label: "Extracted Text",
         executor: "provider" as const,
         description: "Read the image with AI OCR, then copy or share the text.",
       };

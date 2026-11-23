@@ -53,7 +53,7 @@ export function SaveToMaterialsSheet({
         <View style={{ gap: theme.spacing.md }}>
           <Notice tone={result.status === "saved_not_searchable" ? "error" : "info"}>
             {result.status === "indexed"
-              ? "Saved and indexed. Ask AI can cite this PDF now."
+              ? "Saved and indexed. Ask AI can cite this file now."
               : result.status === "indexing"
                 ? "Saved. The worker is indexing it; Ask AI will pick it up shortly."
                 : result.error ?? "Saved, but it isn't searchable yet."}
@@ -67,8 +67,13 @@ export function SaveToMaterialsSheet({
         </View>
       ) : (
         <>
+          {result?.status === "error" ? (
+            <Notice tone="error">
+              {result.error ?? "The file couldn't be saved. Try again."}
+            </Notice>
+          ) : null}
           <AppText variant="bodyMd" color={theme.colors.mutedForeground}>
-            The PDF is stored privately in your Course Materials. A course is
+            The file is stored privately in your Course Materials. A course is
             optional; you can sort it later.
           </AppText>
 

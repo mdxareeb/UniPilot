@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { ArrowDown, ArrowUp, FileText, Trash2 } from "lucide-react-native";
 
 import { AppText } from "@/components/AppText";
@@ -29,6 +30,10 @@ import {
   type PickedPdf,
 } from "@/features/fileTools/fileValues";
 import {
+  normalizeRouteParam,
+  parsePdfMode,
+} from "@/features/fileTools/fileInspector";
+import {
   GeneratedPdfCard,
   type PdfActionBusy,
 } from "@/features/fileTools/components/GeneratedPdfCard";
@@ -44,15 +49,56 @@ type Mode = "merge" | "extract";
 export default function PdfUtilsScreen() {
   const theme = useTheme();
   const save = useSaveToMaterials();
-  const [mode, setMode] = useState<Mode>("merge");
-  const [pdfs, setPdfs] = useState<PickedPdf[]>([]);
-  const [extractFile, setExtractFile] = useState<PickedPdf | null>(null);
+  const params = useLocalSearchParams<{
+    mode?: string;
+    uri?: string;
+    name?: string;
+  }>();
+  const preload = useMemo(() => {
+    const modeParam = parsePdfMode(params.mode);
+    const uri = normalizeRouteParam(params.uri);
+    if (modeParam === null || uri === null) return null;
+    return {
+      mode: modeParam,
+      file: {
+        id: `preload-${uri}`,
+        uri,
+        name: normalizeRouteParam(params.name) ?? "preloaded.pdf",
+        sizeBytes: null,
+      } satisfies PickedPdf,
+    };
+  }, [params.mode, params.name, params.uri]);
+
+  const [mode, setMode] = useState<Mode>(preload?.mode ?? "merge");
+  const [pdfs, setPdfs] = useState<PickedPdf[]>(
+    preload?.mode === "merge" ? [preload.file] : [],
+  );
+  const [extractFile, setExtractFile] = useState<PickedPdf | null>(
+    preload?.mode === "extract" ? preload.file : null,
+  );
   const [extractPages, setExtractPages] = useState<number | null>(null);
   const [range, setRange] = useState("");
   const [built, setBuilt] = useState<GeneratedPdf | null>(null);
   const [busy, setBusy] = useState<"pick" | "build" | PdfActionBusy>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  /** Count the preloaded PDF's pages after the first paint. */
+  useEffect(() => {
+    if (preload?.mode !== "extract") return;
+    let active = true;
+    void readBase64(preload.file.uri)
+      .then((base64) => pdfPageCount(base64))
+      .then((count) => {
+        if (active) setExtractPages(count);
+      })
+      .catch(() => {
+        if (active) setError("That PDF couldn't be read. Try another file.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [preload]);
 
   const rangeCheck = useMemo(
     () =>

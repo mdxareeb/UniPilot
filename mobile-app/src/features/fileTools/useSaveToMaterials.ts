@@ -2,7 +2,8 @@ import { useCallback, useState } from "react";
 
 import {
   fileToolsApi,
-  savePdfToMaterials,
+  saveFileToMaterials,
+  type MaterialsMimeType,
   type OcrPageFile,
   type SaveToMaterialsResult,
 } from "./fileToolsApi";
@@ -31,18 +32,46 @@ export function useSaveToMaterials() {
     async (input: {
       bytes: Uint8Array;
       name: string;
+      mimeType?: MaterialsMimeType;
       mode: "ocr" | "process";
       pages?: OcrPageFile[];
     }) => {
       if (saving) return;
       setSaving(true);
       setResult(null);
-      const saved = await savePdfToMaterials(fileToolsApi, {
+      const saved = await saveFileToMaterials(fileToolsApi, {
         ...input,
+        mimeType: input.mimeType ?? "application/pdf",
         subjectId,
       });
       setSaving(false);
       setResult(saved);
+    },
+    [saving, subjectId],
+  );
+
+  /** A caller-owned save pipeline (PDF probe, OCR prep) with sheet state. */
+  const saveCustom = useCallback(
+    async (
+      run: (subjectId: string | null) => Promise<SaveToMaterialsResult>,
+    ) => {
+      if (saving) return;
+      setSaving(true);
+      setResult(null);
+      try {
+        setResult(await run(subjectId));
+      } catch (error) {
+        setResult({
+          status: "error",
+          error:
+            error instanceof Error && error.message !== ""
+              ? error.message
+              : "The file couldn't be saved. Try again.",
+          documentId: null,
+        });
+      } finally {
+        setSaving(false);
+      }
     },
     [saving, subjectId],
   );
@@ -59,5 +88,6 @@ export function useSaveToMaterials() {
     open,
     close,
     save,
+    saveCustom,
   };
 }
