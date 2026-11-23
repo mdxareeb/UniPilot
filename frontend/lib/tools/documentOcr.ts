@@ -20,6 +20,7 @@ import {
 } from "@/lib/ai/geminiVision";
 import {
   OCR_COPY,
+  OCR_MAX_PAGES,
   buildOcrChunks,
   type OcrPage,
 } from "@/lib/ai/ocr";
@@ -66,6 +67,47 @@ export type OcrRunResult =
   | { status: "too_large" | "empty"; error: string }
   | { status: "provider_error"; error: string; retryable: boolean };
 
+/**
+ * The transient preview result: the same provider bounds and ledger as the
+ * indexing path, but no `documents` or `document_chunks` writes. The studio
+ * uses it to show OCR text without saving the file first.
+ */
+export type TransientOcrResult =
+  | {
+      status: "ok";
+      configured: true;
+      text: string;
+      charCount: number;
+      pages: number;
+      tokens: number;
+    }
+  | {
+      status: "ok";
+      configured: false;
+      text: "";
+      charCount: 0;
+      error: string;
+    }
+  | { status: "limited"; error: string; retryAfterSeconds: number }
+  | { status: "too_large" | "empty"; error: string }
+  | { status: "provider_error"; error: string; retryable: boolean };
+
+function providerFailure(error: unknown): { copy: string; retryable: boolean } {
+  const provider =
+    error instanceof GeminiChatError
+      ? error
+      : new GeminiChatError("unavailable", OCR_COPY.UNAVAILABLE, true);
+  const copy =
+    provider.code === "not_configured"
+      ? OCR_COPY.NOT_CONFIGURED
+      : provider.code === "rate_limited"
+        ? OCR_COPY.RATE_LIMITED
+        : provider.code === "unavailable" || provider.code === "invalid_response"
+          ? OCR_COPY.UNAVAILABLE
+          : OCR_COPY.REJECTED;
+  return { copy, retryable: provider.retryable };
+}
+
 export async function runDocumentOcr(options: {
   client: Client;
   userId: string;
@@ -88,7 +130,7 @@ export async function runDocumentOcr(options: {
 
   const pageCount =
     input.kind === "images" ? input.images.length : input.pageCount;
-  if (pageCount < 1 || pageCount > 20) {
+  if (pageCount < 1 || pageCount > OCR_MAX_PAGES) {
     return { status: "too_large", error: OCR_COPY.TOO_LARGE };
   }
 
@@ -147,27 +189,12 @@ export async function runDocumentOcr(options: {
       usage = result.usage;
     }
   } catch (error) {
-    const provider =
-      error instanceof GeminiChatError
-        ? error
-        : new GeminiChatError(
-            "unavailable",
-            OCR_COPY.UNAVAILABLE,
-            true,
-          );
-    const copy =
-      provider.code === "not_configured"
-        ? OCR_COPY.NOT_CONFIGURED
-        : provider.code === "rate_limited"
-          ? OCR_COPY.RATE_LIMITED
-          : provider.code === "unavailable" || provider.code === "invalid_response"
-            ? OCR_COPY.UNAVAILABLE
-            : OCR_COPY.REJECTED;
+    const { copy, retryable } = providerFailure(error);
     await markDocumentOcrFailed(client, userId, documentId, copy);
     return {
       status: "provider_error",
       error: copy,
-      retryable: provider.retryable,
+      retryable,
     };
   }
 
@@ -224,5 +251,88 @@ export async function runDocumentOcr(options: {
     characters,
     tokens,
     alreadyIndexed: false,
+  };
+}
+
+/**
+ * OCR page images for a preview without touching `documents`.
+ *
+ * The page bound, `usage_events` window/month ceiling, provider configuration
+ * check and sanitized error vocabulary are identical to `runDocumentOcr`; only
+ * the persistence step differs. Callers should treat `configured: false` as an
+ * honest, retryable-later condition rather than an empty result.
+ */
+export async function runTransientOcr(options: {
+  userId: string;
+  input: OcrImagesInput;
+}): Promise<TransientOcrResult> {
+  const { userId, input } = options;
+  const pageCount = input.images.length;
+  if (pageCount < 1 || pageCount > OCR_MAX_PAGES) {
+    return { status: "too_large", error: OCR_COPY.TOO_LARGE };
+  }
+
+  const limits = await checkOcrLimits(userId, pageCount);
+  if (!limits.ok) {
+    return {
+      status: "limited",
+      error: limits.copy,
+      retryAfterSeconds: limits.retryAfterSeconds,
+    };
+  }
+
+  if (readGeminiChatConfig() === null) {
+    return {
+      status: "ok",
+      configured: false,
+      text: "",
+      charCount: 0,
+      error: OCR_COPY.NOT_CONFIGURED,
+    };
+  }
+
+  let pages: OcrPage[];
+  let usage: VisionUsage;
+  try {
+    const results: OcrPage[] = [];
+    let promptTokens = 0;
+    let completionTokens = 0;
+    for (const image of [...input.images].sort((a, b) => a.page - b.page)) {
+      const result = await extractImageText({
+        base64: image.base64,
+        mimeType: image.mimeType,
+      });
+      results.push({ page: image.page, text: result.text });
+      promptTokens += result.usage.promptTokens;
+      completionTokens += result.usage.completionTokens;
+    }
+    pages = results;
+    usage = { promptTokens, completionTokens };
+  } catch (error) {
+    const { copy, retryable } = providerFailure(error);
+    return { status: "provider_error", error: copy, retryable };
+  }
+
+  let chunks: ReturnType<typeof buildOcrChunks>;
+  try {
+    chunks = buildOcrChunks(pages);
+  } catch {
+    return { status: "too_large", error: OCR_COPY.TOO_LARGE };
+  }
+  if (chunks.length === 0) {
+    return { status: "empty", error: OCR_COPY.EMPTY };
+  }
+
+  const text = chunks.map((chunk) => chunk.content).join("\n\n");
+  const tokens = usage.promptTokens + usage.completionTokens;
+  await recordOcrUsage(userId, { pages: pageCount, tokens });
+
+  return {
+    status: "ok",
+    configured: true,
+    text,
+    charCount: text.length,
+    pages: pageCount,
+    tokens,
   };
 }

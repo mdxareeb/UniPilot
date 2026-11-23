@@ -21,7 +21,11 @@ import {
   createOcrPost,
 } from "../../app/api/mobile/tools/ocr/route";
 import { createConvertPost } from "../../app/api/mobile/tools/convert/route";
-import type { runDocumentOcr } from "../../lib/tools/documentOcr";
+import { createPdfProbePost } from "../../app/api/mobile/tools/pdf-probe/route";
+import type {
+  runDocumentOcr,
+  runTransientOcr,
+} from "../../lib/tools/documentOcr";
 import {
   ConvertError,
   type convertDocument,
@@ -145,7 +149,7 @@ test.afterEach(async () => {
 });
 
 test.describe("mobile file tools access", () => {
-  test("all four routes require a Bearer token and onboarding", async ({
+  test("all five routes require a Bearer token and onboarding", async ({
     request,
   }) => {
     const documentId = randomUUID();
@@ -160,6 +164,7 @@ test.describe("mobile file tools access", () => {
         data: { documentId },
       }),
       request.post("/api/mobile/tools/convert"),
+      request.post("/api/mobile/tools/pdf-probe"),
     ];
     for (const response of await Promise.all(cases)) {
       expect(response.status()).toBe(401);
@@ -625,6 +630,99 @@ test.describe("convert", () => {
   });
 });
 
+test.describe("pdf probe", () => {
+  test("reports a text layer and a scan honestly", async ({ request }) => {
+    const text = await request.post("/api/mobile/tools/pdf-probe", {
+      headers: bearer(qa1Token),
+      multipart: {
+        file: {
+          name: "text-layer.pdf",
+          mimeType: "application/pdf",
+          buffer: await tinyPdf(),
+        },
+      },
+    });
+    expect(text.status()).toBe(200);
+    await expect(text.json()).resolves.toMatchObject({
+      hasText: true,
+      pageCount: 1,
+    });
+
+    const blankPdf = await PDFDocument.create();
+    blankPdf.addPage([595, 842]);
+    const blank = await request.post("/api/mobile/tools/pdf-probe", {
+      headers: bearer(qa1Token),
+      multipart: {
+        file: {
+          name: "scan.pdf",
+          mimeType: "application/pdf",
+          buffer: Buffer.from(await blankPdf.save()),
+        },
+      },
+    });
+    expect(blank.status()).toBe(200);
+    const body = (await blank.json()) as { hasText: boolean; characters: number };
+    expect(body.hasText).toBe(false);
+    expect(body.characters).toBe(0);
+  });
+
+  test("rejects a non-PDF and enforces the 10 MB bound", async ({ request }) => {
+    const wrong = await request.post("/api/mobile/tools/pdf-probe", {
+      headers: bearer(qa1Token),
+      multipart: {
+        file: {
+          name: "notes.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("not a pdf"),
+        },
+      },
+    });
+    expect(wrong.status()).toBe(415);
+
+    const oversized = await request.post("/api/mobile/tools/pdf-probe", {
+      headers: bearer(qa1Token),
+      multipart: {
+        file: {
+          name: "huge.pdf",
+          mimeType: "application/pdf",
+          buffer: Buffer.alloc(10 * 1024 * 1024 + 1, 0x25),
+        },
+      },
+    });
+    expect(oversized.status()).toBe(413);
+  });
+
+  test("an unreadable PDF is a sanitized 400", async () => {
+    const post = createPdfProbePost({
+      authenticate: authenticateBearer,
+      extract: async () => {
+        throw new Error("pdfjs exploded");
+      },
+    });
+    const response = await post(
+      new Request("http://localhost/api/mobile/tools/pdf-probe", {
+        method: "POST",
+        headers: bearer(qa1Token),
+        body: (() => {
+          const form = new FormData();
+          form.append(
+            "file",
+            new File([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d])], "bad.pdf", {
+              type: "application/pdf",
+            }),
+          );
+          return form;
+        })(),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("readable text"),
+    });
+  });
+});
+
 test.describe("ocr", () => {
   async function seedOcrDocument(
     userId: string,
@@ -744,5 +842,170 @@ test.describe("ocr", () => {
       configured: false,
       status: "saved_not_searchable",
     });
+  });
+
+  function transientForm(
+    options: { type?: string; bytes?: Uint8Array } = {},
+  ): FormData {
+    const form = new FormData();
+    const bytes = options.bytes ?? new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    form.append(
+      "image",
+      new File([bytes as unknown as BlobPart], "preview.jpg", {
+        type: options.type ?? "image/jpeg",
+      }),
+    );
+    return form;
+  }
+
+  test("transient preview returns text without a document row", async () => {
+    let received: { page: number; mimeType: string } | null = null;
+    const transient: typeof runTransientOcr = async ({ input }) => {
+      received = {
+        page: input.images[0]?.page ?? 0,
+        mimeType: input.images[0]?.mimeType ?? "",
+      };
+      return {
+        status: "ok",
+        configured: true,
+        text: "Week 9\nNormalisation",
+        charCount: 19,
+        pages: 1,
+        tokens: 42,
+      };
+    };
+    const post = createOcrPost({
+      authenticate: authenticateBearer,
+      runOcr: async () => {
+        throw new Error("indexed OCR must not run for a preview");
+      },
+      runTransientOcr: transient,
+    });
+    const response = await post(
+      new Request("http://localhost/api/mobile/tools/ocr", {
+        method: "POST",
+        headers: bearer(qa1Token),
+        body: transientForm(),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      configured: true,
+      text: "Week 9\nNormalisation",
+      charCount: 19,
+      pages: 1,
+    });
+    expect(received).toEqual({ page: 1, mimeType: "image/jpeg" });
+  });
+
+  test("transient preview rejects a missing or non-image payload", async () => {
+    const post = createOcrPost({
+      authenticate: authenticateBearer,
+      runOcr: async () => {
+        throw new Error("unreachable");
+      },
+      runTransientOcr: async () => {
+        throw new Error("unreachable");
+      },
+    });
+    const missing = await post(
+      new Request("http://localhost/api/mobile/tools/ocr", {
+        method: "POST",
+        headers: bearer(qa1Token),
+        body: new FormData(),
+      }),
+    );
+    expect(missing.status).toBe(400);
+
+    const wrongType = await post(
+      new Request("http://localhost/api/mobile/tools/ocr", {
+        method: "POST",
+        headers: bearer(qa1Token),
+        body: transientForm({ type: "application/pdf" }),
+      }),
+    );
+    expect(wrongType.status).toBe(400);
+  });
+
+  test("transient preview enforces the per-image size bound", async () => {
+    const post = createOcrPost({
+      authenticate: authenticateBearer,
+      runOcr: async () => {
+        throw new Error("unreachable");
+      },
+      runTransientOcr: async () => {
+        throw new Error("unreachable");
+      },
+    });
+    const response = await post(
+      new Request("http://localhost/api/mobile/tools/ocr", {
+        method: "POST",
+        headers: bearer(qa1Token),
+        body: transientForm({
+          bytes: new Uint8Array(4 * 1024 * 1024 + 1),
+        }),
+      }),
+    );
+    expect(response.status).toBe(413);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  test("transient preview maps unconfigured, 429 and 503 honestly", async () => {
+    const invoke = async (transient: typeof runTransientOcr) => {
+      const post = createOcrPost({
+        authenticate: authenticateBearer,
+        runOcr: async () => {
+          throw new Error("unreachable");
+        },
+        runTransientOcr: transient,
+      });
+      return post(
+        new Request("http://localhost/api/mobile/tools/ocr", {
+          method: "POST",
+          headers: bearer(qa1Token),
+          body: transientForm(),
+        }),
+      );
+    };
+
+    const unconfigured = await invoke(async () => ({
+      status: "ok",
+      configured: false,
+      text: "",
+      charCount: 0,
+      error: "The AI OCR service isn't configured on this server.",
+    }));
+    expect(unconfigured.status).toBe(200);
+    await expect(unconfigured.json()).resolves.toMatchObject({
+      configured: false,
+      text: "",
+      charCount: 0,
+    });
+
+    const limited = await invoke(async () => ({
+      status: "limited",
+      error: "You've reached the OCR limit for now. Try again in a minute.",
+      retryAfterSeconds: 60,
+    }));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+
+    const unavailable = await invoke(async () => ({
+      status: "provider_error",
+      error: "The AI OCR service is temporarily unavailable.",
+      retryable: true,
+    }));
+    expect(unavailable.status).toBe(503);
+    await expect(unavailable.json()).resolves.toMatchObject({
+      retryable: true,
+    });
+
+    const rejected = await invoke(async () => ({
+      status: "provider_error",
+      error: "The AI OCR service rejected the request.",
+      retryable: false,
+    }));
+    expect(rejected.status).toBe(502);
   });
 });

@@ -19,14 +19,16 @@ import { GeminiChatError } from "@/lib/ai/geminiChat";
 import { extractPdfPageText } from "@/lib/ai/geminiVision";
 import { OCR_COPY, OCR_MAX_PAGES } from "@/lib/ai/ocr";
 import { checkOcrLimits, recordOcrUsage } from "@/lib/data/toolUsage";
-import { extractPdfTextPages } from "./pdfText";
+import {
+  PDF_TEXT_MIN_CHARS,
+  extractPdfTextPages,
+} from "./pdfText";
 
 export const CONVERT_MAX_INPUT_BYTES = 10 * 1024 * 1024;
 export const CONVERT_MAX_TEXT_CHARS = 2_000_000;
 const PPTX_MAX_ENTRIES = 5_000;
 const PPTX_MAX_PART_BYTES = 8 * 1024 * 1024;
 const PPTX_MAX_SLIDES = 500;
-const SCANNED_TEXT_THRESHOLD = 4;
 
 const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
@@ -290,7 +292,7 @@ async function extractPdfPages(
     throw new ConvertError("unreadable", "The PDF couldn't be read.");
   }
 
-  if (readableLength(extraction.pages) >= SCANNED_TEXT_THRESHOLD) {
+  if (readableLength(extraction.pages) >= PDF_TEXT_MIN_CHARS) {
     return extraction.pages;
   }
 

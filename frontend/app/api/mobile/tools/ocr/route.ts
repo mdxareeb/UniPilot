@@ -26,9 +26,11 @@ import {
 import { loadOcrDocument, type OcrDocumentRow } from "@/lib/data/mobileDocuments";
 import {
   runDocumentOcr,
+  runTransientOcr,
   type OcrImagesInput,
   type OcrPdfInput,
   type OcrRunResult,
+  type TransientOcrResult,
 } from "@/lib/tools/documentOcr";
 
 const UUID_PATTERN =
@@ -38,11 +40,13 @@ const MAX_REQUEST_BYTES = OCR_MAX_TOTAL_BYTES + 1024 * 1024;
 export type OcrRouteDependencies = {
   authenticate: typeof authenticateBearer;
   runOcr: typeof runDocumentOcr;
+  runTransientOcr?: typeof runTransientOcr;
 };
 
 const defaults: OcrRouteDependencies = {
   authenticate: authenticateBearer,
   runOcr: runDocumentOcr,
+  runTransientOcr,
 };
 
 type ParsedInput =
@@ -51,6 +55,58 @@ type ParsedInput =
 
 function bad(status: 400 | 404 | 413, error: string): ParsedInput {
   return { ok: false, response: noStoreJson({ error }, status) };
+}
+
+/**
+ * The preview shape: a single JPEG/PNG under the existing per-page bound.
+ * It deliberately has no `documentId`, so the route never loads a row.
+ */
+async function readTransientForm(form: FormData): Promise<ParsedInput> {
+  const entries = form.getAll("image");
+  if (entries.length === 0) {
+    return bad(400, MOBILE_TOOL_COPY.INVALID_PAGES);
+  }
+  if (entries.length > 1) {
+    return bad(400, MOBILE_TOOL_COPY.OCR_TOO_MANY_PAGES);
+  }
+  const entry = entries[0];
+  if (
+    typeof entry !== "object" ||
+    entry === null ||
+    typeof (entry as Blob).arrayBuffer !== "function"
+  ) {
+    return bad(400, MOBILE_TOOL_COPY.INVALID_PAGES);
+  }
+  const file = entry as File;
+  const mimeType =
+    file.type === "image/jpg"
+      ? "image/jpeg"
+      : file.type === "image/jpeg" || file.type === "image/png"
+        ? file.type
+        : null;
+  if (mimeType === null) {
+    return bad(400, MOBILE_TOOL_COPY.OCR_INVALID_TYPE);
+  }
+  if (file.size <= 0) {
+    return bad(400, MOBILE_TOOL_COPY.INVALID_PAGES);
+  }
+  if (file.size > OCR_MAX_PAGE_BYTES) {
+    return bad(413, MOBILE_TOOL_COPY.OCR_TOO_LARGE);
+  }
+  const bytes = Buffer.from(await file.arrayBuffer());
+  return {
+    ok: true,
+    input: {
+      kind: "images",
+      images: [
+        {
+          base64: bytes.toString("base64"),
+          mimeType,
+          page: 1,
+        },
+      ],
+    },
+  };
 }
 
 async function readMultipartForm(
@@ -183,6 +239,50 @@ function objectResponse(result: OcrRunResult): Response {
   });
 }
 
+function transientResponse(result: TransientOcrResult): Response {
+  if (result.status === "limited") {
+    return Response.json(
+      { error: result.error },
+      {
+        status: 429,
+        headers: {
+          "Cache-Control": "no-store",
+          "Retry-After": String(result.retryAfterSeconds),
+        },
+      },
+    );
+  }
+  if (result.status === "too_large") {
+    return noStoreJson({ error: result.error }, 413);
+  }
+  if (result.status === "empty") {
+    return noStoreJson({ error: result.error }, 400);
+  }
+  if (result.status === "provider_error") {
+    return noStoreJson(
+      { error: result.error, retryable: result.retryable },
+      result.retryable ? 503 : 502,
+    );
+  }
+  if (result.status !== "ok") {
+    return noStoreJson({ error: result.error }, 400);
+  }
+  if (!result.configured) {
+    return noStoreJson({
+      configured: false,
+      text: "",
+      charCount: 0,
+      error: result.error,
+    });
+  }
+  return noStoreJson({
+    configured: true,
+    text: result.text,
+    charCount: result.charCount,
+    pages: result.pages,
+  });
+}
+
 export function createOcrPost(
   dependencies: OcrRouteDependencies = defaults,
 ): (request: Request) => Promise<Response> {
@@ -211,11 +311,22 @@ export function createOcrPost(
       ? form?.get("documentId")
       : (jsonBody as { documentId?: unknown })?.documentId;
     const documentId = typeof rawId === "string" ? rawId.trim() : "";
-    if (!UUID_PATTERN.test(documentId)) {
-      return noStoreJson({ error: MOBILE_TOOL_COPY.INVALID_DOCUMENT }, 400);
-    }
 
     try {
+      if (isMultipart && form !== null && rawId == null) {
+        const parsed = await readTransientForm(form);
+        if (!parsed.ok) return parsed.response;
+        const result = await (dependencies.runTransientOcr ?? runTransientOcr)({
+          userId: auth.user.id,
+          input: parsed.input as OcrImagesInput,
+        });
+        return transientResponse(result);
+      }
+
+      if (!UUID_PATTERN.test(documentId)) {
+        return noStoreJson({ error: MOBILE_TOOL_COPY.INVALID_DOCUMENT }, 400);
+      }
+
       const document = await loadOcrDocument(
         auth.user.client,
         auth.user.id,

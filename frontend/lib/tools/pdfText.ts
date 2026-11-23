@@ -10,6 +10,20 @@ export type PdfTextExtraction = {
   pageCount: number;
 };
 
+/** The converter's scanned-text threshold, shared with the probe route. */
+export const PDF_TEXT_MIN_CHARS = 4;
+
+export function pdfTextStats(pages: readonly string[]): {
+  characters: number;
+  hasText: boolean;
+} {
+  const characters = pages.reduce(
+    (total, page) => total + page.replace(/\s/g, "").length,
+    0,
+  );
+  return { characters, hasText: characters >= PDF_TEXT_MIN_CHARS };
+}
+
 export async function extractPdfTextPages(
   bytes: Uint8Array,
 ): Promise<PdfTextExtraction> {
