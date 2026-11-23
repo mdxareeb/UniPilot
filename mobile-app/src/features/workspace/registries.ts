@@ -9,7 +9,12 @@ export type RegistryIcon =
   | "desk"
   | "google"
   | "microsoft"
-  | "moodle";
+  | "moodle"
+  | "image"
+  | "convert"
+  | "pdf"
+  | "sparkles"
+  | "integrations";
 
 export type ToolDefinition = {
   id: string;

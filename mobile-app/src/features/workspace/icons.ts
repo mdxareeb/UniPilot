@@ -4,8 +4,13 @@ import {
   CalendarClock,
   CalendarDays,
   Cpu,
+  FileText,
   FolderOpen,
+  Image,
+  Layers,
   MessageCircle,
+  Plug,
+  Sparkles,
   Timer,
 } from "lucide-react-native";
 
@@ -22,4 +27,9 @@ export const REGISTRY_ICONS: Record<RegistryIcon, IconComponent> = {
   google: CalendarDays,
   microsoft: CalendarClock,
   moodle: BookOpen,
+  image: Image,
+  convert: FileText,
+  pdf: Layers,
+  sparkles: Sparkles,
+  integrations: Plug,
 };

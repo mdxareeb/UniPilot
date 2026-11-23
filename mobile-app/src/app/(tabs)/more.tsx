@@ -1,43 +1,46 @@
-import { useCallback, useState } from "react";
-import { Pressable, View } from "react-native";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
+import { View } from "react-native";
+import { useFocusEffect } from "expo-router";
 import {
-  ChevronRight,
   LogOut,
+  Palette,
   Pencil,
-
+  Plug,
+  RefreshCw,
   ShieldCheck,
+  UserRound,
 } from "lucide-react-native";
 
 import { useAuth } from "@/auth/AuthProvider";
 import { AppText } from "@/components/AppText";
 import { Divider } from "@/components/Divider";
 import { Input } from "@/components/Input";
-import { ListRow } from "@/components/ListRow";
 import { Notice } from "@/components/Notice";
 import { PageHeading } from "@/components/PageHeading";
 import { Screen } from "@/components/Screen";
+import { AccordionSection } from "@/components/ui/AccordionSection";
 import { AppButton } from "@/components/ui/AppButton";
 import { BottomSheet } from "@/components/ui/BottomSheet";
 import { Card } from "@/components/ui/Card";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { parseProfileEdit } from "@/features/profile/profileEdit";
-import { REGISTRY_ICONS } from "@/features/workspace/icons";
+import { IntegrationRows } from "@/features/workspace/IntegrationRows";
+import { probeApiHealth, type ApiHealth } from "@/features/workspace/health";
+import { useIntegrationStatuses } from "@/features/workspace/useIntegrationStatuses";
+import { useWorkspaceCounts } from "@/features/workspace/useWorkspaceCounts";
+import { statValue } from "@/features/home/homeValues";
 import {
-  INTEGRATIONS_REGISTRY,
-  relativeTime,
-  TOOLS_REGISTRY,
-  type GoogleStatus,
-  type WhatsAppStatus,
-} from "@/features/workspace/registries";
-import { isGcalApiConfigured, gcalApi } from "@/features/googleCalendar/gcalClient";
-import { isApiConfigured, whatsappApi } from "@/features/whatsappGroups/client";
-import { confirmFeedback } from "@/lib/haptics";
-import { appIdentity, isSupabaseConfigured, supabase } from "@/lib/supabase";
+  AI_SCOPE_LABELS,
+  AI_SCOPE_MODES,
+  loadAiScopeMode,
+  saveAiScopeMode,
+  THEME_MODES,
+  type AiScopeMode,
+  type ThemeMode,
+} from "@/lib/preferences";
+import { appIdentity, isSupabaseConfigured } from "@/lib/supabase";
 import { MotionEnter } from "@/motion/MotionEnter";
-import { THEME_MODES, type ThemeMode } from "@/lib/preferences";
 import { useTheme } from "@/theme/ThemeProvider";
 
 const THEME_LABELS: Record<ThemeMode, string> = {
@@ -57,23 +60,72 @@ function initialsOf(name: string | null, email: string | undefined): string {
   return email?.slice(0, 2).toUpperCase() ?? "UP";
 }
 
+function Stat({ label, value }: { label: string; value: string }) {
+  const theme = useTheme();
+  return (
+    <View style={{ flex: 1, gap: theme.spacing.xxs }}>
+      <AppText variant="headlineMd">{value}</AppText>
+      <AppText variant="caps" color={theme.colors.mutedForeground}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  subtitle,
+}: {
+  label: string;
+  value: string;
+  subtitle?: string;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={{ gap: theme.spacing.xxs }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: theme.spacing.md,
+        }}
+      >
+        <AppText variant="bodyMd">{label}</AppText>
+        <AppText variant="mono" color={theme.colors.mutedForeground}>
+          {value}
+        </AppText>
+      </View>
+      {subtitle ? (
+        <AppText variant="mono" color={theme.colors.mutedForeground}>
+          {subtitle}
+        </AppText>
+      ) : null}
+    </View>
+  );
+}
+
 /**
- * More: the workspace and account hub. Profile, tools, integrations and
- * settings are registry/entry driven so a new tool or provider is one entry,
- * never a layout rewrite.
+ * More: a compact profile summary over four accordions. The registry still
+ * owns integrations, the settings are the same tokens, and nothing is hidden
+ * behind a fake success: counts show an em dash when a read fails, and the
+ * health probe only turns green after the Bearer route answers.
  */
 export default function MoreScreen() {
   const theme = useTheme();
-  const router = useRouter();
   const { user, profile, profileError, signOut, saveProfile } = useAuth();
+  const counts = useWorkspaceCounts();
+  const { whatsapp, google, checkedAt } = useIntegrationStatuses();
+  const [health, setHealth] = useState<ApiHealth | null>(null);
+  const [healthBusy, setHealthBusy] = useState(false);
+  const [aiScope, setAiScope] = useState<AiScopeMode>("all");
+  const [planned, setPlanned] = useState<{
+    name: string;
+    description: string;
+    note: string;
+  } | null>(null);
 
-  const [docCount, setDocCount] = useState<number | null>(null);
-  const [whatsapp, setWhatsapp] = useState<WhatsAppStatus | null>(null);
-  const [google, setGoogle] = useState<GoogleStatus | null>(null);
-  const [checkedAt, setCheckedAt] = useState(0);
-  const [planned, setPlanned] = useState<{ name: string; description: string } | null>(
-    null,
-  );
   const [signOutOpen, setSignOutOpen] = useState(false);
   const [signOutBusy, setSignOutBusy] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -89,79 +141,32 @@ export default function MoreScreen() {
   const [editBusy, setEditBusy] = useState(false);
   const [editSaveError, setEditSaveError] = useState<string | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    void loadAiScopeMode().then((mode) => {
+      if (active) setAiScope(mode);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const checkHealth = useCallback(async () => {
+    setHealthBusy(true);
+    const result = await probeApiHealth();
+    setHealth(result);
+    setHealthBusy(false);
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      setCheckedAt(Date.now());
-      if (supabase === null) {
-        setDocCount(null);
-      } else {
-        void supabase
-          .from("documents")
-          .select("id", { count: "exact", head: true })
-          .then(({ count, error }) => {
-            if (active && error === null) setDocCount(count ?? 0);
-          });
-      }
-
-      if (!isApiConfigured) {
-        setWhatsapp({
-          configured: false,
-          state: "unknown",
-          pending: 0,
-          lastSyncedAt: null,
-          checkedAt: Date.now(),
-        });
-      } else {
-        void whatsappApi
-          .getSnapshot()
-          .then((snapshot) => {
-            if (!active) return;
-            const stamps = snapshot.groups
-              .map((group) => group.lastSyncedAt)
-              .filter((value): value is string => value !== null)
-              .sort();
-            setWhatsapp({
-              configured: true,
-              state: snapshot.state,
-              pending: snapshot.review.length,
-              lastSyncedAt: stamps.length > 0 ? stamps[stamps.length - 1] : null,
-              checkedAt: Date.now(),
-            });
-          })
-          .catch(() => {
-            if (active) {
-              setWhatsapp({
-                configured: true,
-                state: "unknown",
-                pending: 0,
-                lastSyncedAt: null,
-                checkedAt: Date.now(),
-              });
-            }
-          });
-      }
-
-      if (!isGcalApiConfigured) {
-        setGoogle({ configured: false, status: "not_configured", lastSyncedAt: null });
-      } else {
-        void gcalApi
-          .getSnapshot()
-          .then((snapshot) => {
-            if (!active) return;
-            setGoogle({
-              configured: snapshot.configured,
-              status: snapshot.status,
-              lastSyncedAt: snapshot.lastSyncedAt,
-            });
-          })
-          .catch(() => {
-            if (active) {
-              setGoogle({ configured: true, status: "unknown", lastSyncedAt: null });
-            }
-          });
-      }
-
+      setHealthBusy(true);
+      void probeApiHealth().then((result) => {
+        if (!active) return;
+        setHealth(result);
+        setHealthBusy(false);
+      });
       return () => {
         active = false;
       };
@@ -201,7 +206,6 @@ export default function MoreScreen() {
       setEditSaveError(result.error);
       return;
     }
-    confirmFeedback();
     setEditOpen(false);
   };
 
@@ -218,12 +222,26 @@ export default function MoreScreen() {
     setSignOutOpen(false);
   };
 
+  const chooseAiScope = (mode: AiScopeMode) => {
+    setAiScope(mode);
+    void saveAiScopeMode(mode);
+  };
+
+  const healthStatus = (() => {
+    if (health === null) return { label: "Checking…", tone: "outline" as const };
+    if (health.status === "online") return { label: "Online", tone: "solid" as const };
+    if (health.status === "offline") {
+      return { label: "Unavailable", tone: "danger" as const };
+    }
+    return { label: "Not configured", tone: "outline" as const };
+  })();
+
   return (
     <Screen>
       <PageHeading
         eyebrow="Workspace"
         title="More"
-        description="Your profile, tools and connections."
+        description="Your account, preferences and connections."
       />
 
       <MotionEnter index={1}>
@@ -238,9 +256,9 @@ export default function MoreScreen() {
             >
               <View
                 style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: 28,
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
                   backgroundColor: theme.colors.inverted,
                   alignItems: "center",
                   justifyContent: "center",
@@ -255,35 +273,13 @@ export default function MoreScreen() {
                   {profile?.fullName ?? "Your account"}
                 </AppText>
                 <AppText variant="mono" color={theme.colors.mutedForeground}>
-                  {academic.length > 0 ? academic.join(" · ") : "Academic details not set"}
+                  {academic.length > 0
+                    ? academic.join(" · ")
+                    : "Academic details not set"}
                 </AppText>
-                {profile?.institution ? (
-                  <AppText variant="mono" color={theme.colors.mutedForeground}>
-                    {profile.institution}
-                  </AppText>
-                ) : null}
-              </View>
-            </View>
-
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: theme.spacing.md,
-                borderTopWidth: 1,
-                borderTopColor: theme.colors.border,
-                paddingTop: theme.spacing.md,
-              }}
-            >
-              <View style={{ flex: 1, gap: theme.spacing.xxs }}>
                 <AppText variant="mono" color={theme.colors.mutedForeground}>
                   {user?.email ?? "No email"}
                 </AppText>
-                <StatusPill
-                  label={profile?.onboardingComplete ? "Setup complete" : "Setup unfinished"}
-                  tone={profile?.onboardingComplete ? "neutral" : "warning"}
-                />
               </View>
               <AppButton
                 label="Edit"
@@ -299,223 +295,200 @@ export default function MoreScreen() {
         </Card>
       </MotionEnter>
 
-      <MotionEnter index={2} style={{ gap: theme.spacing.sm }}>
-        <SectionHeader label="Tools" />
-        <View
-          style={{
-            flexDirection: "row",
-            flexWrap: "wrap",
-            gap: theme.spacing.md,
-          }}
+      <MotionEnter index={2}>
+        <AccordionSection
+          title="Profile & academic details"
+          subtitle="Who you are and what you study"
+          icon={<UserRound size={18} color={theme.colors.foreground} />}
+          defaultOpen
         >
-          {TOOLS_REGISTRY.map((tool) => {
-            const Icon = REGISTRY_ICONS[tool.icon];
-            const badge =
-              tool.badge === "materials"
-                ? docCount === null
-                  ? null
-                  : `${docCount} ${docCount === 1 ? "file" : "files"}`
-                : null;
-            return (
-              <Pressable
-                key={tool.id}
-                onPress={() => {
-                  if (tool.route) {
-                    router.push(tool.route);
-                  } else {
-                    setPlanned({ name: tool.name, description: tool.description });
-                  }
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={`${tool.name}${tool.status === "planned" ? ", planned" : ""}`}
-                style={{ flexGrow: 1, flexBasis: "46%" }}
-              >
-                <Card>
-                  <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm }}>
-                    <View
-                      style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 18,
-                        backgroundColor: theme.colors.muted,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Icon size={18} color={theme.colors.foreground} />
-                    </View>
-                    <AppText variant="bodyMd">{tool.name}</AppText>
-                    <AppText
-                      variant="mono"
-                      color={theme.colors.mutedForeground}
-                      numberOfLines={2}
-                    >
-                      {tool.description}
-                    </AppText>
-                    <View style={{ marginTop: "auto", paddingTop: theme.spacing.xs }}>
-                      {tool.status === "planned" ? (
-                        <StatusPill label="Planned" tone="planned" />
-                      ) : badge !== null ? (
-                        <StatusPill label={badge} tone="outline" />
-                      ) : (
-                        <StatusPill label="Live" tone="neutral" />
-                      )}
-                    </View>
-                  </View>
-                </Card>
-              </Pressable>
-            );
-          })}
-        </View>
-      </MotionEnter>
-
-      <MotionEnter index={3} style={{ gap: theme.spacing.sm }}>
-        <SectionHeader label="Integrations & devices" />
-        <Card>
-          {INTEGRATIONS_REGISTRY.map((integration, index) => {
-            const Icon = REGISTRY_ICONS[integration.icon];
-            const status = integration.statusResolver({ whatsapp, google });
-            const lastSynced =
-              integration.lastSyncedAt?.({ whatsapp, google }) ?? null;
-            const live = integration.route !== undefined;
-            return (
-              <View key={integration.id}>
-                {index > 0 ? <Divider /> : null}
-                <Pressable
-                  onPress={() => {
-                    if (live && integration.route) {
-                      router.push(integration.route);
-                    } else {
-                      setPlanned({
-                        name: integration.name,
-                        description: integration.description,
-                      });
-                    }
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${integration.name}, ${status.label}`}
-                >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: theme.spacing.md,
-                      paddingHorizontal: theme.spacing.lg,
-                      paddingVertical: theme.spacing.md,
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 18,
-                        backgroundColor: theme.colors.muted,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Icon size={18} color={theme.colors.foreground} />
-                    </View>
-                    <View style={{ flex: 1, gap: theme.spacing.xxs }}>
-                      <AppText variant="bodyMd">{integration.name}</AppText>
-                      <AppText
-                        variant="mono"
-                        color={theme.colors.mutedForeground}
-                        numberOfLines={1}
-                      >
-                        {integration.description}
-                      </AppText>
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: theme.spacing.sm,
-                          marginTop: theme.spacing.xxs,
-                        }}
-                      >
-                        <StatusPill label={status.label} tone={status.tone} />
-                        {lastSynced !== null || live ? (
-                          <AppText variant="mono" color={theme.colors.mutedForeground}>
-                            {relativeTime(
-                              lastSynced,
-                              checkedAt,
-                              profile?.timezone ?? "UTC",
-                            )}
-                          </AppText>
-                        ) : null}
-                      </View>
-                    </View>
-                    <ChevronRight size={16} color={theme.colors.mutedForeground} />
-                  </View>
-                </Pressable>
-              </View>
-            );
-          })}
-        </Card>
-      </MotionEnter>
-
-      <MotionEnter index={4} style={{ gap: theme.spacing.sm }}>
-        <SectionHeader label="Academic & sync" />
-        <Card>
-          <ListRow
-            title="Timezone"
-            subtitle="Every date the app renders uses this zone"
-            value={profile?.timezone ?? "UTC"}
-            disabled
-            showChevron={false}
+          <InfoRow label="Email" value={user?.email ?? "No email"} />
+          <Divider />
+          <InfoRow
+            label="Institution"
+            value={profile?.institution ?? "Not set"}
           />
           <Divider />
-          <ListRow
-            title="WhatsApp review"
-            subtitle="Items under 85% confidence wait for your review"
-            value="Manual"
-            disabled
-            showChevron={false}
+          <InfoRow
+            label="Program"
+            value={profile?.courseProgram ?? "Not set"}
           />
           <Divider />
-          <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm }}>
-            <AppText variant="bodyMd">Appearance</AppText>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: theme.spacing.sm }}>
-              {THEME_MODES.map((mode) => (
-                <FilterChip
-                  key={mode}
-                  label={THEME_LABELS[mode]}
-                  active={theme.mode === mode}
-                  onPress={() => theme.setMode(mode)}
-                  accessibilityLabel={`${THEME_LABELS[mode]} theme`}
-                />
-              ))}
-            </View>
+          <InfoRow
+            label="Year & semester"
+            value={
+              profile?.academicYear !== null &&
+              profile?.academicYear !== undefined
+                ? `Year ${profile.academicYear} · Semester ${profile.semester ?? "—"}`
+                : "Not set"
+            }
+          />
+          <Divider />
+          <InfoRow label="Timezone" value={profile?.timezone ?? "UTC"} />
+          <Divider />
+          <View
+            style={{
+              flexDirection: "row",
+              gap: theme.spacing.md,
+              paddingVertical: theme.spacing.xs,
+            }}
+          >
+            <Stat label="Subjects" value={statValue(counts.subjects)} />
+            <Stat label="Synced tasks" value={statValue(counts.syncedTasks)} />
+            <Stat label="Indexed docs" value={statValue(counts.indexedDocs)} />
           </View>
-        </Card>
+          <AppButton
+            label="Edit profile"
+            variant="secondary"
+            fullWidth
+            leading={<Pencil size={14} color={theme.colors.foreground} />}
+            onPress={openEdit}
+          />
+        </AccordionSection>
       </MotionEnter>
 
-      <MotionEnter index={5} style={{ gap: theme.spacing.sm }}>
-        <SectionHeader label="Account & diagnostics" />
-        <Card>
-          <ListRow title="Supabase" value={isSupabaseConfigured ? "Connected" : "Not configured"} disabled showChevron={false} />
+      <MotionEnter index={3}>
+        <AccordionSection
+          title="Appearance & app preferences"
+          subtitle="Theme, Ask AI and review behaviour"
+          icon={<Palette size={18} color={theme.colors.foreground} />}
+        >
+          <AppText variant="bodyMd">Appearance</AppText>
+          <View
+            style={{
+              flexDirection: "row",
+              flexWrap: "wrap",
+              gap: theme.spacing.sm,
+            }}
+          >
+            {THEME_MODES.map((mode) => (
+              <FilterChip
+                key={mode}
+                label={THEME_LABELS[mode]}
+                active={theme.mode === mode}
+                onPress={() => theme.setMode(mode)}
+                accessibilityLabel={`${THEME_LABELS[mode]} theme`}
+              />
+            ))}
+          </View>
           <Divider />
-          <ListRow
-            title="WhatsApp service"
-            value={isApiConfigured ? "Configured" : "No API address"}
-            disabled
-            showChevron={false}
+          <AppText variant="bodyMd">Ask AI opening scope</AppText>
+          <AppText variant="mono" color={theme.colors.mutedForeground}>
+            Start every conversation with all materials, or resume the scope you
+            used last.
+          </AppText>
+          <View
+            style={{
+              flexDirection: "row",
+              flexWrap: "wrap",
+              gap: theme.spacing.sm,
+            }}
+          >
+            {AI_SCOPE_MODES.map((mode) => (
+              <FilterChip
+                key={mode}
+                label={AI_SCOPE_LABELS[mode]}
+                active={aiScope === mode}
+                onPress={() => chooseAiScope(mode)}
+                accessibilityLabel={`Ask AI scope: ${AI_SCOPE_LABELS[mode]}`}
+              />
+            ))}
+          </View>
+          <Divider />
+          <InfoRow
+            label="WhatsApp review"
+            value="Manual"
+            subtitle="Items under 85% confidence wait for your review."
+          />
+        </AccordionSection>
+      </MotionEnter>
+
+      <MotionEnter index={4}>
+        <AccordionSection
+          title="Connected accounts & sync"
+          subtitle="WhatsApp, Google Calendar and reserved providers"
+          icon={<Plug size={18} color={theme.colors.foreground} />}
+        >
+          <IntegrationRows
+            context={{ whatsapp, google }}
+            checkedAt={checkedAt}
+            timeZone={profile?.timezone ?? "UTC"}
+            onPlanned={setPlanned}
+          />
+        </AccordionSection>
+      </MotionEnter>
+
+      <MotionEnter index={5}>
+        <AccordionSection
+          title="Account, diagnostics & support"
+          subtitle="Health, retention, version and sign out"
+          icon={<ShieldCheck size={18} color={theme.colors.foreground} />}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: theme.spacing.md,
+            }}
+          >
+            <View style={{ flex: 1, gap: theme.spacing.xxs }}>
+              <AppText variant="bodyMd">Backend health</AppText>
+              <View
+                style={{
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: theme.spacing.sm,
+                }}
+              >
+                <StatusPill label={healthStatus.label} tone={healthStatus.tone} />
+                <AppText variant="mono" color={theme.colors.mutedForeground}>
+                  {health === null
+                    ? "Checking the API"
+                    : health.aiConfigured
+                      ? "AI ready"
+                      : "AI not configured"}
+                </AppText>
+              </View>
+            </View>
+            <AppButton
+              label="Check"
+              variant="secondary"
+              size="sm"
+              loading={healthBusy}
+              leading={<RefreshCw size={14} color={theme.colors.foreground} />}
+              onPress={() => void checkHealth()}
+              accessibilityLabel="Check backend health"
+            />
+          </View>
+          <Divider />
+          <InfoRow
+            label="Supabase"
+            value={isSupabaseConfigured ? "Configured" : "Not configured"}
           />
           <Divider />
-          <ListRow title="Version" value={appIdentity.version} disabled showChevron={false} />
+          <InfoRow
+            label="Raw messages"
+            value="30-day retention"
+            subtitle="Captured WhatsApp text is purged after 30 days; deadlines and documents stay."
+          />
           <Divider />
-          <ListRow title="Package" value={appIdentity.packageId} disabled showChevron={false} />
-        </Card>
-        <AppButton
-          label="Sign out"
-          variant="destructive"
-          fullWidth
-          leading={<LogOut size={16} color={theme.colors.onDestructive} />}
-          onPress={() => {
-            setSignOutError(null);
-            setSignOutOpen(true);
-          }}
-        />
+          <InfoRow label="Version" value={appIdentity.version} />
+          <Divider />
+          <InfoRow label="Package" value={appIdentity.packageId} />
+          <Divider />
+          <AppButton
+            label="Sign out"
+            variant="destructive"
+            fullWidth
+            leading={<LogOut size={16} color={theme.colors.onDestructive} />}
+            onPress={() => {
+              setSignOutError(null);
+              setSignOutOpen(true);
+            }}
+          />
+        </AccordionSection>
       </MotionEnter>
 
       <MotionEnter index={6}>
@@ -524,7 +497,7 @@ export default function MoreScreen() {
           color={theme.colors.mutedForeground}
           style={{ textAlign: "center" }}
         >
-          UniPilot mobile · M3
+          UniPilot mobile · Home hub
         </AppText>
       </MotionEnter>
 
@@ -577,8 +550,7 @@ export default function MoreScreen() {
           {planned?.description ?? ""}
         </AppText>
         <AppText variant="mono" color={theme.colors.mutedForeground}>
-          This surface is reserved. It will appear here without changing the
-          workspace layout.
+          {planned?.note ?? ""}
         </AppText>
         <AppButton
           label="Got it"
@@ -594,9 +566,19 @@ export default function MoreScreen() {
         title="Sign out?"
         subtitle="This device will need your credentials again"
       >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: theme.spacing.sm,
+          }}
+        >
           <ShieldCheck size={18} color={theme.colors.mutedForeground} />
-          <AppText variant="mono" color={theme.colors.mutedForeground} style={{ flex: 1 }}>
+          <AppText
+            variant="mono"
+            color={theme.colors.mutedForeground}
+            style={{ flex: 1 }}
+          >
             Tasks, events and files stay in your account; only the session on
             this phone ends.
           </AppText>

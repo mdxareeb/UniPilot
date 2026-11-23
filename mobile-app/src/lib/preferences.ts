@@ -5,6 +5,41 @@ export const THEME_MODES = ["system", "light", "dark"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
 
 const KEY = "unipilot.theme-mode";
+/** The Ask AI opening scope: always all materials, or resume the last scope. */
+export const AI_SCOPE_MODES = ["all", "last"] as const;
+export type AiScopeMode = (typeof AI_SCOPE_MODES)[number];
+
+export const AI_SCOPE_LABELS: Record<AiScopeMode, string> = {
+  all: "All materials",
+  last: "Remember last used",
+};
+
+const AI_SCOPE_KEY = "unipilot.ai-scope-mode";
+
+export function isAiScopeMode(value: unknown): value is AiScopeMode {
+  return (
+    typeof value === "string" && (AI_SCOPE_MODES as readonly string[]).includes(value)
+  );
+}
+
+/** A stored preference, or `all` when absent/unreadable. */
+export async function loadAiScopeMode(): Promise<AiScopeMode> {
+  try {
+    const stored = await SecureStore.getItemAsync(AI_SCOPE_KEY);
+    return isAiScopeMode(stored) ? stored : "all";
+  } catch {
+    return "all";
+  }
+}
+
+/** Persist the preference; a storage failure keeps the in-memory choice. */
+export async function saveAiScopeMode(mode: AiScopeMode): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(AI_SCOPE_KEY, mode);
+  } catch {
+    /* the session still uses the chosen scope; it just won't survive a restart */
+  }
+}
 
 export function isThemeMode(value: unknown): value is ThemeMode {
   return (
