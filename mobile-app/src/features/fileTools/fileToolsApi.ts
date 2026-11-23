@@ -1,7 +1,10 @@
+import { File } from "expo-file-system";
+
 import { supabase } from "@/lib/supabase";
 
 import { bytesToBase64 } from "./fileBytes";
 import { uploadDocument } from "./fileIo";
+import { withExtension } from "./fileInspector";
 
 /**
  * The Bearer client for mobile File Tools.
@@ -393,12 +396,19 @@ export function createFileToolsApi(deps: {
       if (bytes.length === 0) {
         throw new FileToolApiError("parse", FILE_TOOL_COPY.PARSE);
       }
+      const target = file.targetFormat ?? "pdf";
+      const extension =
+        target === "docx"
+          ? "docx"
+          : target === "md"
+            ? "md"
+            : target === "txt"
+              ? "txt"
+              : "pdf";
       return {
         bytes,
         base64: bytesToBase64(bytes),
-        name:
-          response.headers.get("X-Unipilot-Filename") ??
-          file.name.replace(/\.[^.]+$/, "") + ".pdf",
+        name: withExtension(file.name, extension),
         mimeType:
           response.headers.get("Content-Type") ?? "application/octet-stream",
       };
@@ -560,10 +570,9 @@ function appendFile(
   field: string,
   file: { uri: string; name: string; type: string },
 ): void {
-  (form as unknown as { append(name: string, value: unknown): void }).append(
-    field,
-    { uri: file.uri, name: file.name, type: file.type },
-  );
+  // Expo's fetch replaces React Native's multipart path and only understands
+  // Blob/File parts; `{ uri }` parts throw "Unsupported FormDataPart".
+  form.append(field, new File(file.uri), file.name);
 }
 
 const apiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").trim();
