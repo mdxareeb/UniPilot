@@ -1,22 +1,22 @@
 # Graph Report - unipilot  (2026-11-23)
 
 ## Corpus Check
-- 781 files · ~809,768 words
+- 781 files · ~809,761 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 6093 nodes · 14722 edges · 280 communities (228 shown, 52 thin omitted)
+- 6093 nodes · 14722 edges · 278 communities (226 shown, 52 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 134 edges (avg confidence: 0.6)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `da020081`
+- Built from commit: `9b28b3cb`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- constants.ts
-- groupSync.ts
+- assistantActionLog.ts
+- WhatsAppGroupsCard.tsx
 - presentationJobs.mjs
 - GlobalSearch.tsx
 - OnboardingFlow.tsx
@@ -28,7 +28,7 @@
 - taskValues.ts
 - presentations-renderer.spec.ts
 - agenda.ts
-- chatValues.ts
+- useTheme
 - TASK.md
 - (app)/layout.tsx
 - integrationValues.ts
@@ -41,10 +41,10 @@
 - ServiceError
 - Presenton fork + re-theme â€” Implementation Plan
 - useAskAi.ts
-- GenerateHero.tsx
+- PresentationWorkspace.tsx
 - useGroupSync.ts
 - TableElement.tsx
-- WhatsAppGroupsCard.tsx
+- OnboardingForm.tsx
 - FeatureGrid.tsx
 - test_sync.py
 - ContainerElement.tsx
@@ -56,14 +56,14 @@
 - textRuns.ts
 - integrationActions.ts
 - ChatPanel.tsx
-- assistantActionLog.ts
-- DecksList.tsx
-- OnboardingForm.tsx
+- actionSchema.ts
+- TaskBoard.tsx
+- AuthProvider.tsx
 - ProPlanCard.tsx
 - test_reader.py
 - RLS policy pattern
 - WhatsApp integration — design
-- WhatsAppCard.tsx
+- expo-constants
 - schema-contract.ts
 - tableOps.ts
 - ui/Button.tsx
@@ -99,7 +99,7 @@
 - Presenton UI fork — re-theme and surface — design
 - integrations.spec.ts
 - assistant-backend.spec.ts
-- assistantValues.ts
+- assistant-ui.spec.ts
 - authenticateBearer
 - api.ts
 - whatsapp-jobs.spec.ts
@@ -108,7 +108,7 @@
 - homeValues.ts
 - specimen/page.tsx
 - TransformHandles.tsx
-- useTheme
+- AppText.tsx
 - seed-qa-identity.mjs
 - onboarding.ts
 - SessionRunner
@@ -197,7 +197,6 @@
 - extractMessage.mjs
 - components/motion/presets.ts
 - whatsapp-bridge/package.json
-- FormattedMessage.tsx
 - motionIndex
 - integrations.ts
 - more.tsx
@@ -223,7 +222,6 @@
 - eslint.config.js
 - A. Decision — framework
 - B. Architecture boundary
-- expo-build-properties
 - @expo-google-fonts/bricolage-grotesque
 - whenResolver.mjs
 - @expo-google-fonts/geist-mono
@@ -300,15 +298,15 @@
 ## Import Cycles
 - None detected.
 
-## Communities (280 total, 52 thin omitted)
+## Communities (278 total, 52 thin omitted)
 
-### Community 0 - "constants.ts"
-Cohesion: 0.05
-Nodes (54): AIInsightCard(), AIInsightCardProps, DashboardInsight, DashboardGreeting(), DashboardGreetingProps, DashboardStudent, isPresent(), DashboardDeadline (+46 more)
-
-### Community 1 - "groupSync.ts"
+### Community 0 - "assistantActionLog.ts"
 Cohesion: 0.06
-Nodes (33): POST(), ConfirmGroupCandidateResult, DisconnectOutcome, getGroupSyncSnapshot(), GROUP_LINK_MIN_INTERVAL_MS, GroupAlreadyLinkedError, GroupLinkRequest, GroupLinkThrottledError (+25 more)
+Nodes (57): AssistantActionCard(), AssistantActionCardProps, AssistantAvatar(), AssistantPanelChatProps, AssistantBubble(), AssistantBubbleProps, BubbleStatus, MessageBubble() (+49 more)
+
+### Community 1 - "WhatsAppGroupsCard.tsx"
+Cohesion: 0.05
+Nodes (59): POST(), POST(), GET(), GUEST_SNAPSHOT, WhatsAppGroupsCard(), WhatsAppGroupsCardProps, Switch(), SwitchProps (+51 more)
 
 ### Community 2 - "presentationJobs.mjs"
 Cohesion: 0.20
@@ -336,7 +334,7 @@ Nodes (34): ChatRaceTarget, clipboardScratchComponent(), createdDocumentIds, cre
 
 ### Community 8 - "DeckEditor.tsx"
 Cohesion: 0.05
-Nodes (79): DeckEditor(), DeckEditorProps, freshId(), HitBox, ROOT_COMPONENT, SavedBaseline, swatchColors(), TransformGesture (+71 more)
+Nodes (78): DeckEditor(), DeckEditorProps, freshId(), HitBox, ROOT_COMPONENT, SavedBaseline, swatchColors(), TransformGesture (+70 more)
 
 ### Community 9 - "hydrateSlide.ts"
 Cohesion: 0.07
@@ -351,24 +349,24 @@ Cohesion: 0.04
 Nodes (37): clearElementClipboard(), ELEMENT_CLIPBOARD_MIME, ELEMENT_CLIPBOARD_PREFIX, ELEMENT_DUPLICATE_OFFSET, ELEMENT_PASTE_OFFSET, resetElementPasteSequence(), normalizeRotation(), pointerAngle() (+29 more)
 
 ### Community 12 - "agenda.ts"
-Cohesion: 0.07
-Nodes (45): accentForItem(), CalendarScreen(), toneForItem(), TasksScreen(), AgendaSubject, dayKeyOf(), DueState, EVENT_TYPE_LABELS (+37 more)
+Cohesion: 0.08
+Nodes (42): accentForItem(), CalendarScreen(), toneForItem(), TasksScreen(), AgendaSubject, dayKeyOf(), DueState, EVENT_TYPE_LABELS (+34 more)
 
-### Community 13 - "chatValues.ts"
-Cohesion: 0.07
-Nodes (46): ChatApi, createChatApi(), call(), ChatApiError, ChatApiErrorKind, chatErrorFromConfig(), chatErrorFromNetwork(), chatErrorFromParse() (+38 more)
+### Community 13 - "useTheme"
+Cohesion: 0.08
+Nodes (35): TabsLayout(), WhatsAppGroupsScreen(), Switch(), SwitchProps, CardBody(), CardFooter(), CardHeader(), CardHeaderProps (+27 more)
 
 ### Community 14 - "TASK.md"
 Cohesion: 0.04
 Nodes (55): 10. FAQ `/faq`, 11. Dev's Note `/devs-note`, 12. Authentication, 14. AUTHENTICATED APP SHELL, 16. TASKS `/tasks`, 17. CALENDAR `/calendar`, 18. DOCUMENTS `/documents`, 19. ASSISTANT `/assistant` (+47 more)
 
 ### Community 15 - "(app)/layout.tsx"
-Cohesion: 0.07
-Nodes (36): metadata, metadata, SidebarUser(), SidebarUserFallback(), WorkspaceMobileNav(), isActiveNavPath(), WORKSPACE_NAV, WorkspaceNavItem (+28 more)
+Cohesion: 0.12
+Nodes (20): metadata, SidebarUser(), SidebarUserFallback(), WorkspaceMobileNav(), isActiveNavPath(), WORKSPACE_NAV, WorkspaceNavItem, WorkspaceNavList() (+12 more)
 
 ### Community 16 - "integrationValues.ts"
-Cohesion: 0.05
-Nodes (51): REVIEW_MODE_SENTENCES, IntegrationsContext, IntegrationsContextValue, putObjectWithProgress(), WhatsAppUploadPhase, MODE_LABELS, RunHistory(), createExportRunAction() (+43 more)
+Cohesion: 0.04
+Nodes (69): BrandMarkProps, GmailMark(), WhatsAppMark(), CandidateList(), confirm(), focusAfterRemoval(), ExportDropzone(), onDrop() (+61 more)
 
 ### Community 17 - "presenton.ts"
 Cohesion: 0.06
@@ -403,12 +401,12 @@ Cohesion: 0.04
 Nodes (44): Execution log, File Structure (created / modified), Global Constraints, P0 â€” completed 2026-09-15 (except a founder-gated provider fix), P0 â€” Fork, wiring, baseline (no styling), P1 â€” completed 2026-09-15, P1 â€” Theme foundation, P2 â€” completed 2026-09-15 (+36 more)
 
 ### Community 25 - "useAskAi.ts"
-Cohesion: 0.10
-Nodes (38): apiBaseUrl, askAiApi, isAskAiApiConfigured, titleFromQuestion(), HistorySheet(), ScopeBar(), ScopeKind, StarterPrompts() (+30 more)
+Cohesion: 0.05
+Nodes (73): SectionHeader(), ChatApi, createChatApi(), call(), apiBaseUrl, askAiApi, isAskAiApiConfigured, ChatApiError (+65 more)
 
-### Community 26 - "GenerateHero.tsx"
-Cohesion: 0.08
-Nodes (28): FORMAT_OPTIONS, GenerateHero(), GenerateHeroProps, LANGUAGE_OPTIONS, SLIDE_COUNT_OPTIONS, togglePillClasses(), TONE_LABELS, TONE_OPTIONS (+20 more)
+### Community 26 - "PresentationWorkspace.tsx"
+Cohesion: 0.04
+Nodes (61): DeckDeleteModal(), DeckRow(), DecksList(), onDelete(), onDownload(), DecksListProps, deleteDescription(), slideCountLabel() (+53 more)
 
 ### Community 27 - "useGroupSync.ts"
 Cohesion: 0.14
@@ -418,9 +416,9 @@ Nodes (21): useReviewQueue(), WhatsAppApi, WhatsAppApiError, apiBaseUrl, isApiCo
 Cohesion: 0.13
 Nodes (29): NormalizedRun, normalizeTextRun(), TextRuns(), DeckStageContext, DeckStageContextValue, useDeckFontFamily(), useDeckStage(), cssFamilyName() (+21 more)
 
-### Community 29 - "WhatsAppGroupsCard.tsx"
-Cohesion: 0.12
-Nodes (29): POST(), POST(), GUEST_SNAPSHOT, WhatsAppGroupsCard(), WhatsAppGroupsCardProps, Switch(), SwitchProps, confirmGroupCandidate() (+21 more)
+### Community 29 - "OnboardingForm.tsx"
+Cohesion: 0.09
+Nodes (21): Notice_, SignInScreen(), Button(), ButtonProps, ButtonSize, ButtonVariant, Choice, ChoiceRow() (+13 more)
 
 ### Community 30 - "FeatureGrid.tsx"
 Cohesion: 0.05
@@ -456,27 +454,27 @@ Nodes (28): bigrams(), DEFAULT_DIR, extractText(), HERE, main(), parseArgs(), si
 
 ### Community 38 - "textRuns.ts"
 Cohesion: 0.11
-Nodes (40): captureRange(), focusCaretEnd(), InlineRunsEditor(), InlineRunsEditorProps, readRuns(), renderRuns(), restoreRange(), RUN_KEY_CHORDS (+32 more)
+Nodes (41): captureRange(), focusCaretEnd(), InlineRunsEditor(), InlineRunsEditorProps, readRuns(), renderRuns(), restoreRange(), RUN_KEY_CHORDS (+33 more)
 
 ### Community 39 - "integrationActions.ts"
-Cohesion: 0.14
-Nodes (28): IntegrationsWorkspace(), IntegrationsPage(), abortExportRunAction(), confirmCandidateAction(), disconnectWhatsAppAction(), finalizeExportRunAction(), parseId(), rejectCandidateAction() (+20 more)
+Cohesion: 0.11
+Nodes (35): POST(), IntegrationsWorkspace(), IntegrationsPage(), abortExportRunAction(), confirmCandidateAction(), createExportRunAction(), disconnectWhatsAppAction(), finalizeExportRunAction() (+27 more)
 
 ### Community 40 - "ChatPanel.tsx"
 Cohesion: 0.09
 Nodes (47): jsonError(), POST(), ChatConversationsActionResult, ChatDeckActionResult, chatFailureCopy(), ChatMessagesActionResult, getChatMessagesAction(), getPresentationDeckAction() (+39 more)
 
-### Community 41 - "assistantActionLog.ts"
-Cohesion: 0.06
-Nodes (58): ASSISTANT_ACTION_STATUSES, ASSISTANT_ACTION_TYPES, AssistantAction, AssistantActionExecution, AssistantActionStatus, AssistantActionType, EventCreatePayload, formatClock() (+50 more)
-
-### Community 42 - "DecksList.tsx"
+### Community 41 - "actionSchema.ts"
 Cohesion: 0.07
-Nodes (30): QuickAddTask(), COLUMNS, FILTERS, StatusFilter, TaskBoard(), handleDrop(), handleMove(), NEXT (+22 more)
+Nodes (40): ASSISTANT_ACTION_STATUSES, ASSISTANT_ACTION_TYPES, AssistantAction, AssistantActionExecution, AssistantActionStatus, AssistantActionType, EventCreatePayload, formatClock() (+32 more)
 
-### Community 43 - "OnboardingForm.tsx"
-Cohesion: 0.04
-Nodes (61): AuthCallbackScreen(), Notice_, SignInScreen(), styles, ThemedShell(), AUTH_COPY, AuthErrorLike, isNetworkFailure() (+53 more)
+### Community 42 - "TaskBoard.tsx"
+Cohesion: 0.11
+Nodes (16): QuickAddTask(), COLUMNS, FILTERS, StatusFilter, TaskBoard(), handleDrop(), handleMove(), NEXT (+8 more)
+
+### Community 43 - "AuthProvider.tsx"
+Cohesion: 0.07
+Nodes (39): AuthCallbackScreen(), styles, ThemedShell(), AUTH_COPY, AuthErrorLike, isNetworkFailure(), signInErrorMessage(), text() (+31 more)
 
 ### Community 44 - "ProPlanCard.tsx"
 Cohesion: 0.12
@@ -494,10 +492,6 @@ Nodes (44): ACL audit (Task 24.x step 0), Ask AI study chat (Phase 2), Assistant
 Cohesion: 0.06
 Nodes (31): 10.1 Data layer (documents split), 10.2 Page and components (`frontend/app/(app)/integrations/`), 10.3 Calendar marker, 10. Frontend, 11. Testing, 12. Verification plan (real Chromium via Playwright MCP), 13. Docs and task updates, 14. Risks and blocked items (+23 more)
 
-### Community 48 - "WhatsAppCard.tsx"
-Cohesion: 0.08
-Nodes (25): BrandMarkProps, GmailMark(), WhatsAppMark(), CandidateList(), confirm(), focusAfterRemoval(), ExportDropzone(), onDrop() (+17 more)
-
 ### Community 49 - "schema-contract.ts"
 Cohesion: 0.03
 Nodes (67): AllRequiredTablesPresent, Assert, CandidateRow, CandidatesHaveConfidence, CandidatesHaveKind, CandidatesHaveOrigin, CandidatesHaveProposedSubject, ConnectionRow (+59 more)
@@ -507,8 +501,8 @@ Cohesion: 0.17
 Nodes (29): TableControls(), TableControlsProps, addTableColumn(), addTableRow(), clamp(), declaredBound(), locateCell(), LocatedCell (+21 more)
 
 ### Community 51 - "ui/Button.tsx"
-Cohesion: 0.04
-Nodes (70): ConversationPanelHeaderProps, EventDeleteModalProps, EventFormModalProps, DocumentCard(), DocumentCardProps, DocumentsHub(), FILTERS, PreviewState (+62 more)
+Cohesion: 0.05
+Nodes (63): ConversationPanelHeaderProps, EventDeleteModalProps, EventFormModalProps, DocumentCard(), DocumentCardProps, DocumentsHub(), FILTERS, PreviewState (+55 more)
 
 ### Community 52 - "studyChat.ts"
 Cohesion: 0.07
@@ -540,7 +534,7 @@ Nodes (19): cssString(), DeckFontFace(), fontFormat(), ComponentFrame(), DECK_ST
 
 ### Community 59 - "eventValues.ts"
 Cohesion: 0.06
-Nodes (59): deleteEventAction(), EventActionResult, EventDeleteResult, getEventAction(), parseEventId(), updateEventAction(), EVENT_DELETE_ERROR, EVENT_INVALID_INPUT_ERROR (+51 more)
+Nodes (61): deleteEventAction(), EventActionResult, EventDeleteResult, getEventAction(), parseEventId(), updateEventAction(), EVENT_DELETE_ERROR, EVENT_INVALID_INPUT_ERROR (+53 more)
 
 ### Community 60 - "presentation/icons.ts"
 Cohesion: 0.14
@@ -638,13 +632,13 @@ Nodes (5): expectHonestPage(), expectMarkAspect(), GOOGLE_CONFIGURED, integratio
 Cohesion: 0.12
 Nodes (20): CHARS_PER_TOKEN_APPROX, CONTEXT_MAX_CHARS, CONTEXT_MAX_CHUNKS, CONTEXT_TOKEN_BUDGET, contextUsage(), selectContextChunks(), truncateAtWord(), ASSISTANT_SYSTEM_PROMPT (+12 more)
 
-### Community 84 - "assistantValues.ts"
-Cohesion: 0.04
-Nodes (75): AssistantActionCard(), AssistantActionCardProps, AssistantAvatar(), AssistantPanelChatProps, AssistantBubble(), AssistantBubbleProps, BubbleStatus, MessageBubble() (+67 more)
+### Community 84 - "assistant-ui.spec.ts"
+Cohesion: 0.07
+Nodes (34): ASSISTANT_TURN_DEADLINE_MS, belongsToSelection(), composeDeadline(), hasParsedAssistantAction(), readErrorCopy(), useAssistantTurn(), UseAssistantTurnOptions, collectStructuredActions() (+26 more)
 
 ### Community 85 - "authenticateBearer"
-Cohesion: 0.11
-Nodes (35): POST(), POST(), POST(), POST(), GET(), POST(), GET(), GET() (+27 more)
+Cohesion: 0.14
+Nodes (21): POST(), POST(), GET(), POST(), GET(), POST(), GET(), ApiAuthResult (+13 more)
 
 ### Community 86 - "api.ts"
 Cohesion: 0.20
@@ -674,9 +668,9 @@ Nodes (12): metadata, BentoGrid(), BentoGridProps, BentoItem(), BentoItemProps, 
 Cohesion: 0.16
 Nodes (13): SelectionLayer(), SelectionLayerProps, SelectionOverlayFrame, CORNER_HANDLES, cursorForHandle(), EDGE_HANDLES, HANDLE_CENTERS, HANDLE_LABELS (+5 more)
 
-### Community 93 - "useTheme"
+### Community 93 - "AppText.tsx"
 Cohesion: 0.06
-Nodes (74): GoogleCalendarScreen(), GoogleOauthCallbackScreen(), PlannedItem, SECTION_LABEL, WhatsAppGroupsScreen(), AppText(), AppTextProps, Badge() (+66 more)
+Nodes (63): GoogleCalendarScreen(), GoogleOauthCallbackScreen(), PlannedItem, SECTION_LABEL, useAuth(), AppText(), AppTextProps, Badge() (+55 more)
 
 ### Community 94 - "seed-qa-identity.mjs"
 Cohesion: 0.23
@@ -695,8 +689,8 @@ Cohesion: 0.09
 Nodes (35): computeFingerprint(), FingerprintInput, floorToMinute(), normalizeText(), EMPTY(), IngestorDeps, IngestSummary, MessageIngestor (+27 more)
 
 ### Community 98 - "ThemeProvider.tsx"
-Cohesion: 0.12
-Nodes (28): SpecimenScreen(), TabsLayout(), Divider(), Surface(), SurfaceFillName, SurfaceProps, ColorsSection(), RadiusElevationSection() (+20 more)
+Cohesion: 0.11
+Nodes (31): SpecimenScreen(), Divider(), Surface(), SurfaceFillName, SurfaceProps, EventDayGroup, WHATSAPP_MARK, EventAgenda() (+23 more)
 
 ### Community 99 - "ConfirmEmail.tsx"
 Cohesion: 0.28
@@ -744,7 +738,7 @@ Nodes (13): 7.0 Stack and plumbing (reused — nothing new is introduced), 7.10 
 
 ### Community 110 - "dependencies"
 Cohesion: 0.10
-Nodes (21): expo-blur, expo-constants, expo-crypto, expo-font, @expo-google-fonts/geist, expo-router, expo-secure-store, expo-web-browser (+13 more)
+Nodes (21): expo-blur, expo-build-properties, expo-crypto, expo-font, @expo-google-fonts/geist, expo-router, expo-secure-store, expo-web-browser (+13 more)
 
 ### Community 111 - "geminiChat.ts"
 Cohesion: 0.07
@@ -824,7 +818,7 @@ Nodes (8): 5.1 Matrix, 5.2 Generation/setup detail (Phase A scope), 5.3 Outline 
 
 ### Community 131 - "ask.tsx"
 Cohesion: 0.11
-Nodes (27): AskScreen(), EmptyState(), EmptyStateProps, ListRow(), ListRowProps, AccordionSection(), AccordionSectionProps, BottomSheetProps (+19 more)
+Nodes (27): AskScreen(), EmptyState(), EmptyStateProps, ListRow(), ListRowProps, AccordionSection(), AccordionSectionProps, BottomSheet() (+19 more)
 
 ### Community 132 - "jobs-runner.spec.ts"
 Cohesion: 0.25
@@ -943,28 +937,24 @@ Cohesion: 0.10
 Nodes (25): callValidated(), describeLocal(), documentKind(), EXTRACT_MESSAGES, run(), extractText(), pad(), WEEKDAY (+17 more)
 
 ### Community 201 - "components/motion/presets.ts"
-Cohesion: 0.05
-Nodes (55): clamp(), DeckViewer(), DeckViewerProps, isEditableTarget(), targetOwnsSpace(), PresentMode(), PresentModeProps, EDITOR_SHORTCUT_GROUPS (+47 more)
+Cohesion: 0.04
+Nodes (71): clamp(), DeckViewer(), DeckViewerProps, isEditableTarget(), targetOwnsSpace(), PresentMode(), PresentModeProps, EDITOR_SHORTCUT_GROUPS (+63 more)
 
 ### Community 202 - "whatsapp-bridge/package.json"
 Cohesion: 0.07
 Nodes (26): pino, tsx, dependencies, pino, @supabase/supabase-js, @whiskeysockets/baileys, description, devDependencies (+18 more)
 
-### Community 203 - "FormattedMessage.tsx"
-Cohesion: 0.27
-Nodes (10): Block(), CodeBlock(), FormattedMessage(), InlineSpans(), formatMessage(), FormattedBlock, InlineSpan, isBlockStarter() (+2 more)
-
 ### Community 204 - "motionIndex"
-Cohesion: 0.05
-Nodes (64): AssistantWorkspaceProps, ConversationBodyProps, ConversationSidebar(), ConversationSidebarProps, metadata, GuestCallout(), PrimaryWorkspaceCard(), CELLS (+56 more)
+Cohesion: 0.04
+Nodes (106): AssistantWorkspaceProps, ConversationBodyProps, ConversationSidebar(), ConversationSidebarProps, metadata, AIInsightCard(), AIInsightCardProps, DashboardInsight (+98 more)
 
 ### Community 205 - "integrations.ts"
-Cohesion: 0.11
-Nodes (32): appRedirect(), completeMobileConnect(), GET(), sameOriginRedirect(), configuredSiteOrigin(), getTrustedSiteOrigin(), hostnameOf(), LOOPBACK_HOSTNAMES (+24 more)
+Cohesion: 0.08
+Nodes (49): POST(), POST(), appRedirect(), completeMobileConnect(), GET(), sameOriginRedirect(), GoogleCalendarPanel(), configuredSiteOrigin() (+41 more)
 
 ### Community 206 - "more.tsx"
 Cohesion: 0.06
-Nodes (46): HomeScreen(), InfoRow(), initialsOf(), MoreScreen(), Stat(), THEME_LABELS, indexedFilesLabel(), statValue() (+38 more)
+Nodes (44): HomeScreen(), InfoRow(), initialsOf(), MoreScreen(), Stat(), THEME_LABELS, indexedFilesLabel(), statValue() (+36 more)
 
 ### Community 207 - "include"
 Cohesion: 0.11
@@ -1130,7 +1120,7 @@ Nodes (3): name, private, version
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Database` connect `taskValues.ts` to `groupSync.ts`, `presentationActions.ts`, `database.types.ts`, `session.ts`, `assistantActionLog.ts`, `OnboardingForm.tsx`, `integrations.ts`, `integrationValues.ts`, `schema-contract.ts`, `studyChat.ts`, `authenticateBearer`, `eventValues.ts`, `createClient`, `onboarding.ts`?**
+- **Why does `Database` connect `taskValues.ts` to `assistantActionLog.ts`, `WhatsAppGroupsCard.tsx`, `presentationActions.ts`, `database.types.ts`, `session.ts`, `AuthProvider.tsx`, `integrations.ts`, `integrationValues.ts`, `schema-contract.ts`, `studyChat.ts`, `authenticateBearer`, `eventValues.ts`, `createClient`, `onboarding.ts`?**
   _High betweenness centrality (0.060) - this node is a cross-community bridge._
 - **Why does `acquireWorkerLock()` connect `workerLock.ts` to `whatsapp-security.spec.ts`, `presentations-ui.spec.ts`, `integrationValues.ts`, `integrations.spec.ts`, `whatsapp-jobs.spec.ts`, `whatsapp-export.spec.ts`, `presentations-jobs.spec.ts`?**
   _High betweenness centrality (0.031) - this node is a cross-community bridge._
@@ -1138,9 +1128,9 @@ _Questions this graph is uniquely positioned to answer:_
   _High betweenness centrality (0.019) - this node is a cross-community bridge._
 - **What connects `name`, `private`, `db:reset` to the rest of the system?**
   _1963 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `constants.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.05405405405405406 - nodes in this community are weakly interconnected._
-- **Should `groupSync.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.06259426847662142 - nodes in this community are weakly interconnected._
+- **Should `assistantActionLog.ts` be split into smaller, more focused modules?**
+  _Cohesion score 0.06241519674355495 - nodes in this community are weakly interconnected._
+- **Should `WhatsAppGroupsCard.tsx` be split into smaller, more focused modules?**
+  _Cohesion score 0.05160662122687439 - nodes in this community are weakly interconnected._
 - **Should `OnboardingFlow.tsx` be split into smaller, more focused modules?**
   _Cohesion score 0.11585365853658537 - nodes in this community are weakly interconnected._
