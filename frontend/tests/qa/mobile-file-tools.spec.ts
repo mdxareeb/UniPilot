@@ -12,7 +12,7 @@
 import { test, expect } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
-import { strToU8, zipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
 import { authenticateBearer } from "../../lib/auth/apiAuth";
@@ -20,7 +20,12 @@ import {
   POST as ocrPost,
   createOcrPost,
 } from "../../app/api/mobile/tools/ocr/route";
+import { createConvertPost } from "../../app/api/mobile/tools/convert/route";
 import type { runDocumentOcr } from "../../lib/tools/documentOcr";
+import {
+  ConvertError,
+  type convertDocument,
+} from "../../lib/tools/documentConvert";
 
 const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 
@@ -413,10 +418,132 @@ test.describe("convert", () => {
     }
   });
 
-  test("rejects an unsupported file and an oversized payload", async ({
+  test("converts a text-layered PDF to TXT, Markdown and DOCX", async ({
     request,
   }) => {
-    const unsupported = await request.post("/api/mobile/tools/convert", {
+    const pdf = await tinyPdf("A searchable text-layer PDF.");
+    const cases = [
+      {
+        target: "txt",
+        type: "text/plain",
+        filename: "proof.txt",
+      },
+      {
+        target: "md",
+        type: "text/markdown",
+        filename: "proof.md",
+      },
+      {
+        target: "docx",
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename: "proof.docx",
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const response = await request.post("/api/mobile/tools/convert", {
+        headers: bearer(qa1Token),
+        multipart: {
+          targetFormat: item.target,
+          file: {
+            name: "proof.pdf",
+            mimeType: "application/pdf",
+            buffer: pdf,
+          },
+        },
+      });
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain(item.type);
+      expect(response.headers()["x-unipilot-filename"]).toBe(item.filename);
+      const body = await response.body();
+      if (item.target === "docx") {
+        expect(body.subarray(0, 2).toString("utf8")).toBe("PK");
+        const entries = unzipSync(new Uint8Array(body));
+        expect(entries["word/document.xml"]).toBeDefined();
+        expect(strFromU8(entries["word/document.xml"])).toContain(
+          "searchable text-layer PDF",
+        );
+      } else {
+        const text = body.toString("utf8");
+        expect(text).toContain("searchable text-layer PDF");
+        if (item.target === "md") expect(text).toContain("## Page 1");
+      }
+    }
+  });
+
+  test("converts text/data inputs to Markdown and DOCX", async ({ request }) => {
+    const markdown = await request.post("/api/mobile/tools/convert", {
+      headers: bearer(qa1Token),
+      multipart: {
+        targetFormat: "md",
+        file: {
+          name: "notes.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("Monitors use condition variables."),
+        },
+      },
+    });
+    expect(markdown.status()).toBe(200);
+    expect(markdown.headers()["content-type"]).toContain("text/markdown");
+    expect(await markdown.text()).toContain("condition variables");
+
+    const docx = await request.post("/api/mobile/tools/convert", {
+      headers: bearer(qa1Token),
+      multipart: {
+        targetFormat: "docx",
+        file: {
+          name: "notes.md",
+          mimeType: "text/markdown",
+          buffer: Buffer.from("# Notes\n\nMonitors use condition variables."),
+        },
+      },
+    });
+    expect(docx.status()).toBe(200);
+    const docxBody = await docx.body();
+    expect(docxBody.subarray(0, 2).toString("utf8")).toBe("PK");
+    expect(
+      strFromU8(unzipSync(new Uint8Array(docxBody))["word/document.xml"]),
+    ).toContain("Monitors use condition variables");
+
+    for (const file of [
+      {
+        name: "rows.csv",
+        mimeType: "text/csv",
+        buffer: Buffer.from("name,date\nMidterm,2026-12-12"),
+      },
+      {
+        name: "data.json",
+        mimeType: "application/json",
+        buffer: Buffer.from('{"exam":"2026-12-20"}'),
+      },
+    ]) {
+      const pdf = await request.post("/api/mobile/tools/convert", {
+        headers: bearer(qa1Token),
+        multipart: { file },
+      });
+      expect(pdf.status()).toBe(200);
+      const body = await pdf.body();
+      expect(body.subarray(0, 5).toString("utf8")).toBe("%PDF-");
+    }
+  });
+
+  test("rejects an unsupported target, unsupported input and empty text", async ({
+    request,
+  }) => {
+    const unsupportedTarget = await request.post("/api/mobile/tools/convert", {
+      headers: bearer(qa1Token),
+      multipart: {
+        targetFormat: "xlsx",
+        file: {
+          name: "notes.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("hello"),
+        },
+      },
+    });
+    expect(unsupportedTarget.status()).toBe(415);
+
+    const unsupportedInput = await request.post("/api/mobile/tools/convert", {
       headers: bearer(qa1Token),
       multipart: {
         file: {
@@ -426,8 +553,64 @@ test.describe("convert", () => {
         },
       },
     });
-    expect(unsupported.status()).toBe(400);
+    expect(unsupportedInput.status()).toBe(415);
 
+    const empty = await request.post("/api/mobile/tools/convert", {
+      headers: bearer(qa1Token),
+      multipart: {
+        file: {
+          name: "empty.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("   \n\n"),
+        },
+      },
+    });
+    expect(empty.status()).toBe(400);
+  });
+
+  test("maps provider and ledger failures to 502/503/429", async () => {
+    const form = () => {
+      const data = new FormData();
+      data.append(
+        "file",
+        new File([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d])], "scan.pdf", {
+          type: "application/pdf",
+        }),
+      );
+      data.append("targetFormat", "txt");
+      return data;
+    };
+    const invoke = async (convert: typeof convertDocument) =>
+      createConvertPost({ authenticate: authenticateBearer, convert })(
+        new Request("http://localhost/api/mobile/tools/convert", {
+          method: "POST",
+          headers: bearer(qa1Token),
+          body: form(),
+        }),
+      );
+
+    const unavailable = await invoke(async () => {
+      throw new ConvertError("provider_unavailable", "The AI OCR service is temporarily unavailable.");
+    });
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers.get("cache-control")).toBe("no-store");
+    await expect(unavailable.json()).resolves.toMatchObject({
+      retryable: true,
+    });
+
+    const rejected = await invoke(async () => {
+      throw new ConvertError("provider_rejected", "The AI OCR service rejected the request.");
+    });
+    expect(rejected.status).toBe(502);
+
+    const limited = await invoke(async () => {
+      throw new ConvertError("rate_limited", "OCR limit reached.", 60);
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+  });
+
+  test("rejects an oversized payload", async ({ request }) => {
     const oversized = await request.post("/api/mobile/tools/convert", {
       headers: bearer(qa1Token),
       multipart: {

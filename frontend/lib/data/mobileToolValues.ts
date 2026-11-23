@@ -14,7 +14,8 @@ export const MOBILE_TOOL_COPY = {
   OCR_TOO_LARGE: "Those page images are too large. Try a smaller set.",
   OCR_INVALID_TYPE: "OCR accepts JPEG/PNG page images or a PDF.",
   OCR_FAILED: "We couldn't make this PDF searchable. Try again.",
-  CONVERT_UNSUPPORTED: "Choose a DOCX, PPTX or TXT file.",
+  CONVERT_UNSUPPORTED:
+    "Choose a PDF, DOCX, PPTX, TXT, MD, CSV or JSON file.",
   CONVERT_TOO_LARGE: "That file is larger than the 10 MB conversion limit.",
   CONVERT_FAILED: "We couldn't convert that file. Try again.",
   CONVERT_EMPTY: "That file has no readable text to convert.",

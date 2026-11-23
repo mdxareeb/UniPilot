@@ -19,6 +19,7 @@ export type FileToolErrorKind =
   | "too_large"
   | "rate_limited"
   | "unavailable"
+  | "provider"
   | "network"
   | "server"
   | "parse";
@@ -189,6 +190,20 @@ export function createFileToolsApi(deps: {
         status,
       );
     }
+    if (status === 415) {
+      return new FileToolApiError(
+        "invalid",
+        serverError ?? FILE_TOOL_COPY.INVALID,
+        status,
+      );
+    }
+    if (status === 502) {
+      return new FileToolApiError(
+        "provider",
+        serverError ?? FILE_TOOL_COPY.UNAVAILABLE,
+        status,
+      );
+    }
     return new FileToolApiError("server", serverError ?? FILE_TOOL_COPY.SERVER, status);
   }
 
@@ -257,13 +272,22 @@ export function createFileToolsApi(deps: {
       uri: string;
       name: string;
       mimeType: string | null;
-    }): Promise<{ bytes: Uint8Array; base64: string; name: string }> {
+      targetFormat?: "pdf" | "txt" | "md" | "docx";
+    }): Promise<{
+      bytes: Uint8Array;
+      base64: string;
+      name: string;
+      mimeType: string;
+    }> {
       const form = new FormData();
       appendFile(form, "file", {
         uri: file.uri,
         name: file.name,
         type: file.mimeType ?? "application/octet-stream",
       });
+      if (file.targetFormat !== undefined) {
+        form.append("targetFormat", file.targetFormat);
+      }
       const response = await call("/api/mobile/tools/convert", {
         method: "POST",
         body: form,
@@ -282,6 +306,8 @@ export function createFileToolsApi(deps: {
         name:
           response.headers.get("X-Unipilot-Filename") ??
           file.name.replace(/\.[^.]+$/, "") + ".pdf",
+        mimeType:
+          response.headers.get("Content-Type") ?? "application/octet-stream",
       };
     },
   };
