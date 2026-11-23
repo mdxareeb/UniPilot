@@ -3,9 +3,11 @@
  *
  * One interface, one registry, env-only configuration — and an honest
  * "not configured" state that every caller can render without inventing a
- * reply. No provider client exists in this repo (no key, no SDK dependency),
- * so `providerStatus()` reports exactly what is missing and the turn pipeline
- * persists that honesty instead of an answer.
+ * reply. This registry stays empty (the web assistant's provider leg is
+ * blocked); Ask AI's mobile study chat has its own non-streaming Gemini client
+ * in `geminiChat.ts`, so `providerStatus()` still reports exactly what is
+ * missing and the web turn pipeline persists that honesty instead of an
+ * answer.
  *
  * When a provider lands: add its factory to `PROVIDER_REGISTRY`, implement
  * `chat`/`stream`/`embed`, and nothing else changes — the pipeline, the

@@ -10,7 +10,33 @@ export const SEARCH_QUERY_MIN_LENGTH = 2;
 export const SEARCH_QUERY_MAX_LENGTH = 200;
 export const SEARCH_LIMIT = 10;
 
-export type SearchMatchKind = "keyword" | "vector" | "hybrid";
+/** Ask AI's recency fallback is deliberately smaller than a normal search. */
+export const RECENT_FALLBACK_LIMIT = 8;
+
+export type SearchMatchKind = "keyword" | "vector" | "hybrid" | "recent";
+
+/**
+ * Broad summary questions ("summarise my latest notes") have no distinctive
+ * terms for full-text search, so the recency fallback must run even when FTS
+ * happens to match something generic. The heuristic is deliberately small and
+ * literal: it only recognises the ways a student asks for an overview, and it
+ * never upgrades an ordinary question into a summary request.
+ */
+const BROAD_SUMMARY_PATTERNS: readonly RegExp[] = [
+  /\b(?:summari[sz]e|summary|overview|outline|recap|review|tl;?dr|gist)\b/i,
+  /\bkey (?:points|ideas|takeaways|concepts)\b/i,
+  /\bmain (?:points|ideas|takeaways|concepts)\b/i,
+  /\b(?:latest|recent|newest)\s+(?:notes?|material|documents?|uploads?|files?|readings?)\b/i,
+  /\b(?:notes?|material|documents?|uploads?|files?|readings?)\b.{0,24}\b(?:latest|recent|newest)\b/i,
+  /\b(?:tell me about|what(?:'s| is) in)\s+(?:my|this|the)\s+(?:course|notes?|material|readings?|chapter|unit)\b/i,
+];
+
+/** True when the question asks for a broad overview rather than a lookup. */
+export function isBroadSummaryQuery(query: string): boolean {
+  const normalized = query.trim();
+  if (normalized === "") return false;
+  return BROAD_SUMMARY_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 export type SearchHit = {
   documentId: string;

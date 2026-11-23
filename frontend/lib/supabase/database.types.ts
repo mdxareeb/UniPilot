@@ -34,6 +34,92 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_chat_messages: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          role: string
+          session_id: string
+          sources: Json | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          role: string
+          session_id: string
+          sources?: Json | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          role?: string
+          session_id?: string
+          sources?: Json | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_chat_messages_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "ai_chat_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_chat_sessions: {
+        Row: {
+          created_at: string
+          id: string
+          scope_document_id: string | null
+          scope_subject_id: string | null
+          title: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          scope_document_id?: string | null
+          scope_subject_id?: string | null
+          title?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          scope_document_id?: string | null
+          scope_subject_id?: string | null
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_chat_sessions_scope_document_id_fkey"
+            columns: ["scope_document_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_chat_sessions_scope_subject_id_fkey"
+            columns: ["scope_subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assistant_actions: {
         Row: {
           conversation_id: string
@@ -1580,6 +1666,23 @@ export type Database = {
         Args: { p_retention_days?: number; p_user_id?: string }
         Returns: number
       }
+      recent_document_chunks: {
+        Args: {
+          p_document_id?: string
+          p_limit?: number
+          p_subject_id?: string
+        }
+        Returns: {
+          chunk_index: number
+          content: string
+          document_id: string
+          document_name: string
+          match_kind: string
+          page: number
+          score: number
+          snippet: string
+        }[]
+      }
       rotate_google_token_key: {
         Args: { p_new_key: string; p_old_key: string }
         Returns: undefined
@@ -1591,6 +1694,7 @@ export type Database = {
           p_limit?: number
           p_page?: number
           p_query: string
+          p_subject_id?: string
         }
         Returns: {
           chunk_index: number

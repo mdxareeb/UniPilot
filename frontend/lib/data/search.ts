@@ -10,15 +10,17 @@
  * every search is keyword-only by construction — never a fabricated vector or
  * a fake semantic result.
  *
- * The kwery contract mirrors the SQL: hits carry the owning document's id and
+ * The query contract mirrors the SQL: hits carry the owning document's id and
  * name plus the chunk's page and index (25.9), a snippet with `[[`/`]]`
  * markers around the matched terms, and the match kind.
  */
 import { createClient } from "@/lib/supabase/server";
 import {
+  RECENT_FALLBACK_LIMIT,
   SEARCH_LIMIT,
   SEARCH_QUERY_MAX_LENGTH,
   SEARCH_QUERY_MIN_LENGTH,
+  isBroadSummaryQuery,
   type SearchHit,
   type SemanticSearchStatus,
 } from "./searchValues";
@@ -68,7 +70,9 @@ function toHit(row: SearchRow): SearchHit {
     snippet: row.snippet,
     score: row.score,
     matchKind:
-      row.match_kind === "vector" || row.match_kind === "hybrid"
+      row.match_kind === "vector" ||
+      row.match_kind === "hybrid" ||
+      row.match_kind === "recent"
         ? row.match_kind
         : "keyword",
   };
@@ -76,16 +80,56 @@ function toHit(row: SearchRow): SearchHit {
   return hit;
 }
 
+type RecentRow = SearchRow;
+
+/** One bounded recency read; RLS is the authority, exactly as for FTS. */
+async function recentDocumentChunks(options: {
+  documentId?: string;
+  subjectId?: string;
+}): Promise<SearchHit[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("recent_document_chunks", {
+    p_limit: RECENT_FALLBACK_LIMIT,
+    p_document_id: options.documentId,
+    p_subject_id: options.subjectId,
+  });
+  if (error) throw new Error("Failed to read recent documents.");
+  return ((data ?? []) as RecentRow[]).map(toHit);
+}
+
+function dedupeHits(hits: readonly SearchHit[]): SearchHit[] {
+  const seen = new Set<string>();
+  const unique: SearchHit[] = [];
+  for (const hit of hits) {
+    const key = `${hit.documentId}:${hit.chunkIndex}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(hit);
+  }
+  return unique;
+}
+
 /**
  * 25.7/25.8/25.9 — keyword (and, when a provider exists, hybrid) search over
- * the caller's chunks. The query is validated here; the SQL clamps the limit
- * and enforces ownership through RLS.
+ * the caller's chunks.
+ *
+ * `subjectId`/`documentId` narrow both the FTS read and (when requested) the
+ * recency fallback. The fallback is opt-in because global search must stay
+ * literal: showing unrelated recent material for a no-match query would break
+ * its honest "no matches" state. Ask AI passes `fallback: "recent"`, which
+ * replaces a false empty context with up to 8 newest chunks (newest document
+ * first, in reading order) whenever FTS returns nothing or the question is a
+ * broad summary request. Fallback hits are labelled `matchKind: "recent"` so
+ * no caller can present them as term matches.
  */
 export async function searchDocumentChunks(options: {
   query: string;
   limit?: number;
   documentId?: string;
+  subjectId?: string;
   page?: number;
+  /** `"recent"` = Ask AI's bounded summary fallback; omitted = literal search. */
+  fallback?: "recent";
 }): Promise<SearchHit[]> {
   const query = options.query.trim();
   if (
@@ -95,18 +139,37 @@ export async function searchDocumentChunks(options: {
     return [];
   }
 
+  const limit = options.limit ?? SEARCH_LIMIT;
   const supabase = await createClient();
 
   const { data, error } = await supabase.rpc("search_document_chunks", {
     p_query: query,
-    p_limit: options.limit ?? SEARCH_LIMIT,
+    p_limit: limit,
     // Omitted keys fall back to the SQL defaults (NULL = no filter).
     p_document_id: options.documentId,
     p_page: options.page,
     // 25.6 is blocked without a provider: no fabricated vectors, keyword-only.
     p_embedding: undefined,
+    p_subject_id: options.subjectId,
   });
 
   if (error) throw new Error("Failed to search documents.");
-  return ((data ?? []) as SearchRow[]).map(toHit);
+  const hits = ((data ?? []) as SearchRow[]).map(toHit);
+
+  if (options.fallback !== "recent") return hits;
+
+  const broad = isBroadSummaryQuery(query);
+  if (hits.length > 0 && !broad) return hits;
+
+  const recent = await recentDocumentChunks({
+    documentId: options.documentId,
+    subjectId: options.subjectId,
+  });
+  if (recent.length === 0) return hits;
+
+  // A summary request leads with the newest material; a zero-hit lookup has
+  // no FTS rows to preserve.
+  return dedupeHits(
+    broad ? [...recent, ...hits] : [...hits, ...recent],
+  ).slice(0, limit);
 }

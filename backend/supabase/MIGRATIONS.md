@@ -156,6 +156,10 @@ The hosted project is production.
 | `20261122132220_gcal_event_provenance.sql` | `events.source` gains `google_calendar`; `events.google_event_id` + `tasks.google_event_id` (per-user partial unique); provenance triggers extended |
 | `20261122132221_integration_runs_sync_mode.sql` | `integration_runs.mode` gains `sync` (third input-check arm: neither storage path nor chat name) |
 | `20261122132245_gcal_sync_enqueue_rpc.sql` | `enqueue_gcal_sync(uuid)`: connected-row gate, one live job per user, ids-only `{ userId }` payload, service role only |
+| `20261123091224_study_chat.sql` | Ask AI: `ai_chat_sessions` (owner CRUD, one-subject/one-document scope + same-user guard) and `ai_chat_messages` (owner SELECT via parent, service-only writes, citation jsonb) |
+| `20261123091826_study_chat_search_subject.sql` | `search_document_chunks` gains the optional `p_subject_id` filter on both keyword and vector branches |
+| `20261123092242_study_chat_recent_fallback.sql` | `recent_document_chunks`: up to 8 newest chunks, newest document first, filtered by document/subject, `match_kind='recent'` |
+| `qa/study-chat-schema-check.sql` | Rolled-back SQL proof of the Ask AI contract (scope guard/CHECK, owner RLS, service-only messages, grants, subject-scoped search and recency) |
 | `qa/google-calendar-schema-check.sql` | Rolled-back SQL proof of the Google Calendar contract (RLS isolation, state table unreachable, calendar defaults, provenance/export-id locks, disconnect semantics) |
 | `qa/whatsapp-group-sync-ingest-check.sql` | Rolled-back SQL proof of the ingest RPCs (active-only, replay no-op, ids-only jobs, owner scoping, grants) |
 | `qa/whatsapp-group-sync-pairing-check.sql` | Rolled-back SQL proof of the pairing RPCs (phone sanitising and rejection, ciphertext at rest, code expiry, clear, grants) |

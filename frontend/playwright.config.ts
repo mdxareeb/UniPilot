@@ -276,6 +276,22 @@ export default defineConfig({
       },
     },
     {
+      // Ask AI's Phase 2 backend: the migration, Gemini client and the
+      // Bearer session/chat routes. It seeds its own scoped documents and
+      // sweeps them, so it runs after the documents chain and the assistant
+      // backend that own the same QA identities.
+      name: "qa-mobile-chat",
+      testMatch: /mobile-chat\.spec\.ts/,
+      workers: 1,
+      timeout: 120_000,
+      dependencies: [
+        "qa-auth-setup",
+        "qa-onboarding",
+        "qa-documents-search",
+        "qa-assistant-backend",
+      ],
+    },
+    {
       // Task 19.x — the assistant chat UI. C1 ships the pure frame
       // vocabulary/parser/reducer; later C tasks add the live panel cases.
       // It runs after the assistant backend pass whose contract it consumes
@@ -283,7 +299,7 @@ export default defineConfig({
       name: "qa-assistant-ui",
       testMatch: /assistant-ui\.spec\.ts/,
       timeout: 120_000,
-      dependencies: ["qa-assistant-backend"],
+      dependencies: ["qa-assistant-backend", "qa-mobile-chat"],
       use: {
         storageState: process.env.QA_STORAGE_STATE ?? ".playwright/qa-session.json",
       },
@@ -308,6 +324,7 @@ export default defineConfig({
         "qa-documents-hub",
         "qa-documents-search",
         "qa-assistant-backend",
+        "qa-mobile-chat",
       ],
     },
     {
@@ -460,6 +477,7 @@ export default defineConfig({
         "qa-documents-hub",
         "qa-documents-search",
         "qa-assistant-backend",
+        "qa-mobile-chat",
         "qa-assistant-ui",
         "qa-jobs-runner",
         "qa-whatsapp-security",

@@ -44,6 +44,8 @@ waits on explicit founder approval (§Hosted reconciliation runbook, Task 20.7).
 | `events` | Classes/exams/deadlines on a timeline, typed (22.6) and optionally linked to a course (22.x) | `user_id`, cascade |
 | `conversations` | Assistant conversation threads | `user_id`, cascade |
 | `messages` | Thread messages (`user`/`assistant`/`system`) | via `conversation_id` parent |
+| `ai_chat_sessions` | Ask AI mobile study threads: title + optional one-subject/one-document scope; owner CRUD | `user_id`, cascade |
+| `ai_chat_messages` | Server-written Ask AI turns (`user`/`assistant`) with `status` and citation jsonb | via `session_id` parent (cascade) |
 | `assistant_actions` | The 27.x action log: one row per proposed assistant action, its normalized payload, status and settled result | `user_id`, cascade; `conversation_id` cascade; `message_id` SET NULL |
 | `tool_runs` | One row per tool execution; per-run job states | `user_id`, cascade |
 | `notifications` | In-app notifications; `read_at` is the read marker | `user_id`, cascade |
@@ -76,6 +78,7 @@ documents  ──1:N── events.source_document_id  (SET NULL: provenance, not
 subjects   ──1:N── events.subject_id          (SET NULL: classification, not ownership; a trigger keeps the subject on the event's own user)
 conversations ──1:N── messages         (cascade)
 conversations ──1:N── assistant_actions (cascade; message_id SET NULL)
+ai_chat_sessions ──1:N── ai_chat_messages (cascade)
 assistant_actions ──1:N── tasks.source_action_id  (SET NULL: the 27.13 retry anchor)
 assistant_actions ──1:N── events.source_action_id (SET NULL: the 27.13 retry anchor)
 ```
@@ -107,7 +110,7 @@ and the 27.13 anchors `tasks.source_action_id`/`events.source_action_id`
 
 ## RLS policy pattern
 
-RLS is **enabled on all 19 tables**; every client-permitted operation has a
+RLS is **enabled on every public table**; every client-permitted operation has a
 written owner-only policy via `auth.uid()` — except `google_calendar_credentials`,
 which is deliberately deny-by-default (no policy, no grants, RPC-only).
 Operations only the server performs have no client policy (the service role
@@ -121,6 +124,8 @@ surface are server-only).
 | subjects, documents, tasks, events, conversations | owner | owner | owner | owner |
 | document_chunks | via parent | via parent | via parent | via parent |
 | messages | via parent | — (server-only writes, Task 26.4) | — (server-only writes) | — (server-only writes) |
+| ai_chat_sessions | owner | owner | owner | owner |
+| ai_chat_messages | via parent | — (server-only writes, Ask AI) | — (server-only writes) | — (server-only writes) |
 | assistant_actions | owner | — (server-only writes, Task 27.8) | — (server-only writes) | — (server-only writes) |
 | tool_runs | owner | owner | owner | — (run history is not erasable) |
 | notifications | owner | — (server writes) | owner (marks `read_at`) | owner (dismiss) |
@@ -132,7 +137,8 @@ surface are server-only).
 
 `grant select, insert, update, delete` is given to `authenticated` for every
 table; RLS is the filter. The exceptions: the four `integration_*` tables and
-`assistant_actions` grant SELECT only (their writes are service-side), and
+`assistant_actions` and `ai_chat_messages` grant SELECT only (their writes are
+service-side), and
 `google_calendar_credentials` grants nothing to any API role — `anon`,
 `authenticated` **and** `service_role` are all revoked, so only the definer
 RPCs reach it. `anon` is revoked outright — no table here is public.
@@ -242,7 +248,8 @@ no-fixtures failure.
 | Chunking (25.1) | `backend/worker/chunkText.mjs`: ~1200-character windows, 200-character overlap, ends preferring paragraph → sentence → word boundaries; deterministic |
 | Re-index (25.12) | the `document.reindex` job replaces a document's chunks (delete-then-insert, idempotent) and embeds them when a provider exists; the document's processing status is untouched |
 | Indexes (25.5) | HNSW `extensions.vector_cosine_ops` on `embedding`; GIN on `to_tsvector('english', content)` |
-| Retrieval (25.6–25.9) | `search_document_chunks(p_query, p_limit, p_document_id, p_page, p_embedding)`: keyword branch (`websearch_to_tsquery` + `ts_rank`), optional cosine vector branch, reciprocal-rank fusion (k = 60), `ts_headline` snippets with `[[…]]` markers; returns document id/name, page, chunk index, content, snippet, score, match kind; security invoker (RLS through the parent); execute granted to `authenticated` + `service_role` only (anon revoked explicitly) |
+| Retrieval (25.6–25.9) | `search_document_chunks(p_query, p_limit, p_document_id, p_page, p_embedding, p_subject_id)`: keyword branch (`websearch_to_tsquery` + `ts_rank`), optional cosine vector branch, reciprocal-rank fusion (k = 60), `ts_headline` snippets with `[[…]]` markers; optional subject filter on both branches; returns document id/name, page, chunk index, content, snippet, score, match kind; security invoker (RLS through the parent); execute granted to `authenticated` + `service_role` only (anon revoked explicitly) |
+| Recency fallback (Ask AI) | `recent_document_chunks(p_limit, p_document_id, p_subject_id)`: up to 8 newest chunks, newest document first and in chunk order, filtered by document/subject, `match_kind = 'recent'`; security invoker. `searchDocumentChunks({ fallback: "recent" })` uses it when FTS is empty or the question is a broad summary request; global search stays literal |
 | Provider (25.3/25.6) | **blocked**: no embedding provider or credential exists; `backend/worker/embed.mjs` and the data layer's `semanticSearchStatus()` state the exact dependency, `p_embedding` stays NULL, and search is keyword-only by construction |
 | References (25.9) | every hit carries the document id and page; 24.x's page units stamp `page` too, so references work before a re-index |
 | Benchmark (25.11) | `backend/worker/searchBenchmark.mjs` + `search-fixtures/`: real-query recall@k and MRR, exits non-zero with no fixtures; `[~]` until a human-checked set exists, and no accuracy numbers are recorded |
@@ -275,6 +282,33 @@ honesty and the timeout/retry policy, the injection guard, the context budget,
 the structured-action parser, real turns persisting conversation/messages/
 usage in order, server-write-only messages with owner isolation, RAG
 cross-user isolation through real turns, and the rate/spend guards.
+
+### Ask AI study chat (Phase 2)
+
+Two migrations: `20261123091224_study_chat.sql` (tables, RLS, the same-user
+scope guard) and `20261123091826_study_chat_search_subject.sql` +
+`20261123092242_study_chat_recent_fallback.sql` (retrieval).
+
+| Piece | Decision |
+| --- | --- |
+| Sessions | `ai_chat_sessions`: owner CRUD through the Bearer client (RLS). At most one scope: `scope_subject_id` XOR `scope_document_id`; a CHECK enforces mutual exclusion and `guard_ai_chat_scope` verifies the referenced subject/document belongs to `new.user_id` — the FK alone cannot prove ownership |
+| Messages | `ai_chat_messages`: reads via the parent session's owner policy; INSERT/UPDATE/DELETE revoked from `authenticated` and granted to `service_role` only, so clients cannot forge a role, status or citation |
+| Turn route | `POST /api/mobile/chat`: Bearer auth + onboarding gate; validates the session, persists the user turn, retrieves within the session scope, calls Gemini, persists the assistant turn and `{documentId, documentName, page?, chunkIndex, snippet}` citations |
+| Sessions API | `GET/POST /api/mobile/chat/sessions`, `GET/DELETE /api/mobile/chat/sessions/{id}`; foreign/missing ids are 404, a conflicting scope is 400, title 1–120 characters |
+| Gemini client | `frontend/lib/ai/geminiChat.ts`: `GEMINI_API_KEY` + `GEMINI_MODEL` only (no guessed model), key in `x-goog-api-key`, temperature 0.2, `maxOutputTokens` ≤ 4096, sanitized errors, 429/5xx retryable; provider bodies are never logged or returned |
+| Prompt | The shared `ASSISTANT_SYSTEM_PROMPT` + `buildChatMessages` (`<workspace_data>` boundary) and the 8-chunk / 2000-token context budget |
+| Honesty | Missing key/model → `configured: false` and a persisted unconfigured answer; no retrieved chunks → empty-retrieval answer, no paid call; provider failure → `failed` message + 503 (retryable) or 502 (rejected) |
+| Limits | Shared `checkAssistantLimits` (10 turns/minute, 200,000 tokens/month) and `usage_events` `assistant_turn`/`assistant_tokens` |
+| Health | `GET /api/mobile/health` → `{ ok, aiConfigured, supabase, serverTime }`, no secrets or model names |
+
+**Proof:** `frontend/tests/qa/mobile-chat.spec.ts`: mocked-fetch Gemini
+401/429/502 sanitization and bounded config; a real unconfigured turn
+persisting the honest answer into history; subject/document-filtered keyword
+search and recency ordering with QA1/QA2 RLS isolation; session CRUD with
+401/403/404/429 and the service-only message guard; the same-user scope trigger;
+503/502 route mapping; citation formatting; and the health payload. The schema
+layer is also proven by
+`backend/supabase/qa/study-chat-schema-check.sql` (rolled-back SQL).
 
 ### Assistant action engine (Task 27.x)
 
