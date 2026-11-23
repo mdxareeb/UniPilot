@@ -15,6 +15,56 @@ export const AI_SCOPE_LABELS: Record<AiScopeMode, string> = {
 };
 
 const AI_SCOPE_KEY = "unipilot.ai-scope-mode";
+const AI_LAST_SCOPE_KEY = "unipilot.ai-last-scope";
+
+/**
+ * The last concrete Ask AI scope, stored only so the `last` opening mode can
+ * resume it. Subject/document names are never stored — ids are resolved
+ * against the owner's current rows on the next launch, so a deleted course
+ * falls back to All Materials instead of showing a stale label.
+ */
+export type StoredAiScope =
+  | { kind: "subject"; id: string }
+  | { kind: "document"; id: string };
+
+export function isStoredAiScope(value: unknown): value is StoredAiScope {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { kind?: unknown; id?: unknown };
+  if (record.kind !== "subject" && record.kind !== "document") return false;
+  return typeof record.id === "string" && record.id.trim() !== "";
+}
+
+export function storedAiScopeFrom(value: unknown): StoredAiScope | null {
+  return isStoredAiScope(value) ? value : null;
+}
+
+/** The saved concrete scope, or `null` when absent/unreadable/junk. */
+export async function loadAiLastScope(): Promise<StoredAiScope | null> {
+  try {
+    const stored = await SecureStore.getItemAsync(AI_LAST_SCOPE_KEY);
+    if (stored === null) return null;
+    const parsed: unknown = JSON.parse(stored);
+    return storedAiScopeFrom(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the concrete scope; `null` clears it (All Materials). */
+export async function saveAiLastScope(
+  scope: StoredAiScope | null,
+): Promise<void> {
+  try {
+    if (scope === null) {
+      await SecureStore.deleteItemAsync(AI_LAST_SCOPE_KEY);
+      return;
+    }
+    await SecureStore.setItemAsync(AI_LAST_SCOPE_KEY, JSON.stringify(scope));
+  } catch {
+    /* the current session still uses the scope; it just won't survive a restart */
+  }
+}
+
 
 export function isAiScopeMode(value: unknown): value is AiScopeMode {
   return (

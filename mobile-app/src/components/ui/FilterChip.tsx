@@ -12,6 +12,8 @@ type FilterChipProps = {
   /** A subject dot or a count glyph. */
   leading?: React.ReactNode;
   accessibilityLabel?: string;
+  /** A busy screen can block the transition without hiding the current value. */
+  disabled?: boolean;
 };
 
 /** The horizontal filter control used by Tasks and the week strip reset. */
@@ -21,18 +23,20 @@ export function FilterChip({
   onPress,
   leading,
   accessibilityLabel,
+  disabled = false,
 }: FilterChipProps) {
   const theme = useTheme();
-  const { animatedStyle, onPressIn, onPressOut } = usePressScale(true);
+  const { animatedStyle, onPressIn, onPressOut } = usePressScale(!disabled);
 
   return (
-    <Animated.View style={animatedStyle}>
+    <Animated.View style={[animatedStyle, disabled ? { opacity: 0.55 } : null]}>
       <Pressable
         onPress={onPress}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
+        disabled={disabled}
         accessibilityRole="button"
-        accessibilityState={{ selected: active }}
+        accessibilityState={{ selected: active, disabled }}
         accessibilityLabel={accessibilityLabel ?? label}
         style={{
           minHeight: 44,
